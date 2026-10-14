@@ -19,7 +19,7 @@ HARBOR_AGENT_FUNCTION = REPO_ROOT / "examples/experimental/harbor/harbor_agent_f
 # upstream rename fails the image build instead of a rollout
 HARBOR_AGENT_FUNCTION_API = (
     "HARNESS_BINDINGS", "HarnessBinding", "_mini_swe_agent_env", "build_trial_config", "_trial_timeout_s",
-    "_ensure_provider_key", "_failed", "trial_result_to_metadata",
+    "_ensure_provider_key", "_failed", "trial_result_to_metadata", "_environment_config",
 )
 
 

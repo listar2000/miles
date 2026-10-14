@@ -22,12 +22,20 @@ mini-swe-agent-host
     the sandbox (``host_agent.HostMiniSweAgent``); no tunnel needed.
 
 Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
+
+Sandbox provider: ``HARBOR_ENV_TYPE`` (a Harbor ``EnvironmentType``, read by
+upstream) or ``HARBOR_ENV_IMPORT_PATH`` (an environment class Harbor loads by
+import path, for providers the pinned Harbor lacks, e.g.
+``miles_ext.harbor.sail:SailEnvironment``). Upstream's ``_environment_config``
+only knows the first, so this module replaces it on the loaded upstream
+module; with no import path set it delegates unchanged.
 Both mini-swe-agent harnesses use the same settings: mini.yaml templates,
 swebench.yaml shell env (cwd ``MSWEA_CWD`` or /testbed), ``HARBOR_AGENT_MAX_ITERATIONS``
 steps, ``MSWEA_EXEC_TIMEOUT`` seconds per command, sampling params from the rollout.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -87,6 +95,28 @@ def _host_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> d
 
 hf.HARNESS_BINDINGS[SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_sandbox_kwargs, env=hf._mini_swe_agent_env)
 hf.HARNESS_BINDINGS[HOST_HARNESS] = hf.HarnessBinding(kwargs=_host_kwargs, env=lambda url, key: {})
+
+_upstream_environment_config = hf._environment_config
+# what upstream's _environment_config reads that an import-path provider does not honor here
+_TYPE_ONLY_VARS = ("HARBOR_OVERRIDE_CPUS", "HARBOR_OVERRIDE_MEMORY_MB", "HARBOR_OVERRIDE_STORAGE_MB",
+                   "HARBOR_CPU_ENFORCEMENT_POLICY", "HARBOR_MEMORY_ENFORCEMENT_POLICY")
+
+
+def _environment_config():
+    """Upstream's environment config, or one for ``HARBOR_ENV_IMPORT_PATH`` (an environment Harbor loads by path)."""
+    import_path = os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()
+    if not import_path:
+        return _upstream_environment_config()
+    from harbor.models.trial.config import EnvironmentConfig
+
+    if set_vars := [v for v in _TYPE_ONLY_VARS if os.getenv(v, "").strip()]:
+        raise ValueError(f"{set_vars} are not applied with HARBOR_ENV_IMPORT_PATH; unset them")
+    kwargs = json.loads(os.getenv("HARBOR_ENV_KWARGS", "{}") or "{}")
+    return EnvironmentConfig(import_path=import_path, delete=True, kwargs=kwargs)
+
+
+# build_trial_config looks the function up in its module's globals at call time
+hf._environment_config = _environment_config
 
 _SESSION_URL = re.compile(r"^http://[^/:]+:(\d+)(/.*)$")
 

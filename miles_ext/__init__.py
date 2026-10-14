@@ -7,7 +7,8 @@ they are commits on the upstream files, listed in fork/README.md.
 
 harbor/   Miles agent function running one Harbor trial per sample, the two
           mini-swe-agent harnesses, the reward hook, and the session proxy
-          that lets in-sandbox agents reach the session servers
+          that lets in-sandbox agents reach the session servers; harbor/sail
+          is Harbor's Sail sandbox provider (vendored) for recipes on Sail
 recipes/  a run as data (YAML) -> Miles argv and Harbor env; model presets
 launch/   test launcher for Modal (not part of the platform API)
 stack.py  what the fork image is built from, and the image it produced

@@ -25,6 +25,10 @@ from miles_ext.recipes.presets import PRESETS
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
 HARNESS_HOST = "mini-swe-agent-host"  # mini-swe-agent loop in the rollout worker, commands via exec
 HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST)
+# Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
+# miles_ext (the pinned Harbor predates it), loaded by import path
+SANDBOX_PROVIDERS = ("modal", "sail")
+SAIL_IMPORT_PATH = "miles_ext.harbor.sail:SailEnvironment"
 
 GPUS_PER_NODE = 8
 SESSION_PORT, SESSION_WORKERS = 30000, 32  # session servers listen on 30000..30031
@@ -50,10 +54,14 @@ DEFAULTS: dict[str, Any] = {
         "cwd": None,  # None: mini-swe-agent's swebench.yaml (/testbed)
     },
     "sandbox": {
-        "provider": "modal",
+        "provider": "modal",  # or "sail"
+        # caps that hold even if the trainer dies: Modal terminates at either;
+        # Sail terminates at lifetime_secs and may sleep (stop billing) after idle_secs
         "lifetime_secs": 7200,
         "idle_secs": 900,
-        # request Modal's minimum, keep the task's cpus/memory as hard limits
+        # Modal only: request Modal's minimum, keep the task's cpus/memory as hard
+        # limits. Sail sizes are fixed shapes billed by observed usage, so the
+        # task's resources only pick the size.
         "resource_policy": "limit",
     },
     "algorithm": {
@@ -115,8 +123,11 @@ def validate(recipe: dict) -> None:
         raise ValueError(f"model.preset must be one of {sorted(PRESETS)}, got {preset!r}")
     if recipe["taskset"]["harness"] not in HARNESSES:
         raise ValueError(f"taskset.harness must be one of {HARNESSES}")
-    if recipe["sandbox"]["provider"] != "modal":
-        raise ValueError("only the modal sandbox provider exists in v1")
+    sandbox = recipe["sandbox"]
+    if sandbox["provider"] not in SANDBOX_PROVIDERS:
+        raise ValueError(f"sandbox.provider must be one of {SANDBOX_PROVIDERS}")
+    if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
+        raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
     if recipe["algorithm"]["mode"] not in ("fully_async", "sync"):
         raise ValueError("algorithm.mode must be fully_async or sync")
     cluster = recipe["cluster"]
@@ -164,7 +175,7 @@ def model_dir(recipe: dict) -> Path:
 
 
 def sandbox_app_name(run_id: str) -> str:
-    """Per-run Modal app for the task sandboxes, so cleanup touches only this run."""
+    """Per-run app (Modal or Sail) for the task sandboxes, so cleanup touches only this run."""
     return f"miles-fork-sbx-{run_id}"[:64]
 
 
@@ -172,16 +183,9 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     """What every Harbor trial reads (header of upstream's harbor_agent_function)."""
     agent, sandbox = recipe["agent"], recipe["sandbox"]
     env = {
-        "HARBOR_ENV_TYPE": sandbox["provider"],
-        # Harbor's Modal sandboxes otherwise live 24 h and outlive a killed trainer
-        "HARBOR_ENV_KWARGS": json.dumps({
-            "app_name": sandbox_app_name(run_id),
-            "sandbox_timeout_secs": int(sandbox["lifetime_secs"]),
-            "sandbox_idle_timeout_secs": int(sandbox["idle_secs"]),
-        }),
+        **_sandbox_env(sandbox, run_id),
         "HARBOR_TASKS_DIR": str(TASKS),
         "HARBOR_TRIALS_DIR": str(RESULTS / run_id / "trials"),
-        "MODAL_SANDBOX_V2": "1",
         "MILES_EXT_HARNESS": recipe["taskset"]["harness"],
         "AGENT_MODEL_NAME": "model",
         "AGENT_TIMEOUT": str(agent["timeout"]),
@@ -195,6 +199,30 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     }
     if agent["cwd"]:
         env["MSWEA_CWD"] = agent["cwd"]
+    return env
+
+
+def _sandbox_env(sandbox: dict, run_id: str) -> dict[str, str]:
+    """How Harbor creates this run's sandboxes; each run gets its own app, so cleanup touches only it."""
+    if sandbox["provider"] == "sail":
+        return {
+            "HARBOR_ENV_IMPORT_PATH": SAIL_IMPORT_PATH,
+            "HARBOR_ENV_KWARGS": json.dumps({
+                "app_name": sandbox_app_name(run_id),
+                "max_lifetime_secs": int(sandbox["lifetime_secs"]),
+                "idle_secs": int(sandbox["idle_secs"]),
+            }),
+        }
+    env = {
+        "HARBOR_ENV_TYPE": "modal",
+        # Harbor's Modal sandboxes otherwise live 24 h and outlive a killed trainer
+        "HARBOR_ENV_KWARGS": json.dumps({
+            "app_name": sandbox_app_name(run_id),
+            "sandbox_timeout_secs": int(sandbox["lifetime_secs"]),
+            "sandbox_idle_timeout_secs": int(sandbox["idle_secs"]),
+        }),
+        "MODAL_SANDBOX_V2": "1",
+    }
     if policy := sandbox["resource_policy"]:
         env["HARBOR_CPU_ENFORCEMENT_POLICY"] = policy
         env["HARBOR_MEMORY_ENFORCEMENT_POLICY"] = policy

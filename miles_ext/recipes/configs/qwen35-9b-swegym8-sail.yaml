@@ -1,0 +1,33 @@
+# The fork's 20-step validation recipe (qwen35-9b-swegym8-sandbox.yaml, W&B
+# mobiuslab/miles-swe-rl/ezq40tsy) with the task sandboxes on Sail instead of
+# Modal, for 10 steps: Qwen3.5-9B overfit on 8 SWE-Gym tasks, fully async GRPO
+# on one H200:8 node, mini-swe-agent inside the sandboxes. Needs SAIL_API_KEY
+# in the launcher's .env.
+name: q35-9b-swegym8-sail
+model:
+  preset: qwen3.5-9b
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 4
+taskset:
+  tasks_dir: $MILES_DATA/swegym-lite-sandbox
+  prompts: $MILES_DATA/prompts/train8_sandbox.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 50
+  exec_timeout: 60
+  timeout: 1800
+sandbox:
+  provider: sail
+algorithm:
+  mode: fully_async
+  num_rollout: 10
+  rollout_batch_size: 8
+  n_samples: 8
+  lr: 1.0e-6
+checkpoint:
+  save_interval: 10
+tracking:
+  wandb_project: miles-sail  # W&B 30cpjc0l (the first run, before this convention) is in miles-swe-rl
+  wandb_entity: mobiuslab

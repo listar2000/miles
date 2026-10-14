@@ -1,1 +1,11 @@
-[]
+[
+  {
+    "path": "miles_ext/harbor/sail/harbor_sail.py",
+    "source": "https://github.com/harbor-framework/harbor",
+    "commit": "e2f6db74cdaf12e0807fa2e592c5c08fa78c44ce",
+    "upstream_path": "src/harbor/environments/sail.py",
+    "blob": "750e9006382cdff2a7eb774dbc1338e54445d142",
+    "patch": "ext-003",
+    "remove_when": "the pinned harbor-miles-* branch has src/harbor/environments/sail.py"
+  }
+]

@@ -10,8 +10,8 @@ adds the run inputs (tasks, prompts) and the cluster wiring.
 
 Credentials come from the .env in ``MILES_DOTENV_DIR`` (default: cwd) as a
 Modal Secret. Names are this fork's own: app ``miles-fork``, volume
-``miles-fork-results``, queue ``miles-fork-completion``, sandbox app
-``miles-fork-sbx-<run_id>``.
+``miles-fork-results``, queue ``miles-fork-completion``, sandbox app (Modal or
+Sail, per the recipe's sandbox.provider) ``miles-fork-sbx-<run_id>``.
 """
 
 import contextlib
@@ -54,11 +54,7 @@ def _image_from_commit(commit: str) -> modal.Image:
     """What fork/docker/build.py publishes, built by Modal: base, the same deps install, our commit over /root/miles."""
     return (
         modal.Image.from_registry(stack.BASE_IMAGE)
-        .run_commands(
-            'uv pip install --python "$(command -v python)" '
-            f'"harbor[modal] @ git+{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}" '
-            f'"mini-swe-agent=={stack.MINI_SWE_AGENT_VERSION}"'
-        )
+        .run_commands(stack.DEPS_INSTALL)
         .run_commands(f"cd {stack.MILES_SRC} && git fetch --no-tags {stack.FORK_REPO} {commit} "
                       f"&& git checkout --force --detach {commit} && python fork/tools/ledger.py markers")
         .env({"PYTHONPATH": str(stack.MILES_SRC), "MILES_FORK_RELEASE": f"commit-{commit[:10]}",
@@ -97,9 +93,17 @@ def _wait_for_port(host: str, port: int, timeout: float):
             time.sleep(1)
 
 
-def _terminate_task_sandboxes(run_id: str):
+def _terminate_task_sandboxes(recipe: dict, run_id: str):
     """Episodes in flight when the trainer exits never reach Harbor's cleanup; the sandbox app is this run's alone."""
     name = R.sandbox_app_name(run_id)
+    if recipe["sandbox"]["provider"] == "sail":
+        try:
+            from miles_ext.harbor.sail import terminate_app_sailboxes
+
+            print(f"terminated {terminate_app_sailboxes(name)} Sailboxes in Sail app {name}", flush=True)
+        except Exception as e:
+            print(f"Sailbox cleanup ({name}): {type(e).__name__}: {e}", flush=True)
+        return
     try:
         sandbox_app = modal.App.lookup(name)
         sandboxes = list(modal.Sandbox.list(app_id=sandbox_app.app_id))
@@ -147,6 +151,13 @@ def check(recipe: dict, run_id: str):
         {"instance_id": sorted(os.listdir(R.TASKS))[0]}, "http://10.0.0.1:30003/sessions/abc/v1", {"temperature": 1.0}
     )
     print("trial config:", config.agent.import_path, config.agent.env.get("OPENAI_API_BASE"), config.task.path)
+    # the sandbox provider as a trial would meet it: class, credentials, resource policy
+    from harbor.environments.factory import EnvironmentFactory
+
+    env_cfg = config.environment
+    print("environment:", env_cfg.type, env_cfg.import_path, env_cfg.kwargs)
+    EnvironmentFactory.run_preflight(env_cfg.type, env_cfg.import_path)
+    EnvironmentFactory.validate_resource_policies(env_cfg)
     print("prompt rows:", len(R.PROMPTS.read_text().splitlines()), "tasks:", len(os.listdir(R.TASKS)))
     args = R.miles_args(recipe, run_id, resume=False)
     os.chdir(stack.MILES_SRC)
@@ -273,7 +284,7 @@ def train(recipe: dict, run_id: str):
         stack_ctx.close()
         results_volume.commit()
         if rank == 0:
-            _terminate_task_sandboxes(run_id)
+            _terminate_task_sandboxes(recipe, run_id)
             for _ in range(nodes - 1):
                 completion_queue.put(succeeded, partition=run_id)
 

@@ -98,8 +98,9 @@ fork/
   deps/harbor/          offline Harbor patches (task-set generation only; see Harbor)
 .claude/skills/miles-fork/  the workflow for agents changing this fork
 miles_ext/              extensions (top-level package next to miles/, on PYTHONPATH in the image)
-  stack.py              pins: base image digest, Harbor commit, mini-swe-agent; the published fork image
-  harbor/               agent function, in-sandbox and host-side mini-swe-agent, reward, session proxy
+  stack.py              pins: base image digest, Harbor commit, mini-swe-agent, Sail SDK; the published fork image
+  harbor/               agent function, in-sandbox and host-side mini-swe-agent, reward, session proxy;
+                        harbor/sail/: Harbor's Sail provider (vendored) and the fork's subclass
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
   platform/             reserved: platform-facing extensions (schema, validate, teardown, events)
@@ -121,13 +122,13 @@ upstream's release image (amd64, every layer untouched) plus two layers.
 | Layer | Contents | Made by |
 | --- | --- | --- |
 | upstream (117 layers) | CUDA, torch, SGLang, Megatron, compiled extensions, `/root/miles` at the upstream tag | radixark; mounted from `radixark/miles` on Docker Hub, never re-uploaded |
-| deps | Harbor at `HARBOR_COMMIT` and mini-swe-agent: exactly the files of the distributions `uv pip install` added or replaced (their `RECORD`s), whiteouts for the versions it removed | a Modal container of the base image runs the install |
+| deps | Harbor at `HARBOR_COMMIT`, mini-swe-agent and the Sail SDK (`stack.DEPS_INSTALL`): exactly the files of the distributions `uv pip install` added or replaced (their `RECORD`s), whiteouts for the versions it removed | a Modal container of the base image runs the install |
 | src | the released fork commit (`git archive`) over `/root/miles`, whiteouts for files the commit deletes | local `git` |
 
 The image env adds `PYTHONPATH=/root/miles` (so the top-level `miles_ext`
 imports; upstream's `setup.py` is not edited), `MILES_FORK_RELEASE` and
 `MILES_FORK_COMMIT`; OCI labels record the source commit, base digest and the
-Harbor and mini-swe-agent pins. `/root/miles/.git` still describes upstream's
+Harbor, mini-swe-agent and Sail SDK pins. `/root/miles/.git` still describes upstream's
 checkout, so read the commit from `MILES_FORK_COMMIT`, not `git rev-parse`.
 
 Why layers appended with `crane` instead of a Dockerfile: this machine has no
@@ -218,7 +219,8 @@ Harbor today because we carry no change to installed Harbor code:
 - our agents (`SandboxMiniSweAgent`, `HostMiniSweAgent`) are Harbor agents
   loaded by `import_path`; Harbor resolves environments the same way
   (`EnvironmentConfig.import_path`), so a new sandbox provider is an
-  extension in `miles_ext/`, not a Harbor change;
+  extension in `miles_ext/`, not a Harbor change (Sail is one: Harbor's own
+  provider, newer than our pin, carried verbatim; fork/patches/ext-003-harbor-sail.md);
 - the one Harbor patch we have (`deps/harbor/0001-…`) is in the SWE-Gym
   adapter, which generates task directories offline and is not part of the
   installed package.
