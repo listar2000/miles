@@ -41,7 +41,7 @@ from pathlib import Path
 
 import modal
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] if modal.is_local() else Path("/")
 CRANE_VERSION = "v0.20.2"
 CRANE_SHA256 = "c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"  # go-containerregistry_Linux_x86_64.tar.gz
 PLATFORM = "linux/amd64"
