@@ -4,6 +4,10 @@
 parsers are the ones Miles binds to that family
 (miles/utils/chat_template_utils/tito_tokenizer.py). Miles v0.1.2 does not apply
 them itself, so they are passed explicitly (RUN_LOG.md item 7).
+
+``megatron_model_type`` names the model's Megatron definition,
+``scripts/models/<megatron_model_type>.py`` (what Miles' ``load_model_args``
+reads); a recipe that sets ``model.backend: megatron`` needs it.
 """
 
 from dataclasses import dataclass, field
@@ -16,9 +20,10 @@ class Preset:
     tool_call_parser: str
     reasoning_parser: str
     backend: str = "fsdp"
+    megatron_model_type: str | None = None
     chat_template_kwargs: dict = field(default_factory=dict)
-    # cluster shapes this preset has been run on: (gpu type, nodes)
-    shapes: tuple[tuple[str, int], ...] = ()
+    # cluster shapes this preset has been run on: (gpu type, nodes, backend)
+    shapes: tuple[tuple[str, int, str], ...] = ()
 
     @property
     def dir_name(self) -> str:
@@ -33,7 +38,8 @@ PRESETS: dict[str, Preset] = {
         tool_call_parser="qwen3_coder",
         reasoning_parser="qwen3",
         chat_template_kwargs={"enable_thinking": False},
-        shapes=(("H200", 1),),
+        megatron_model_type="qwen3.5-9B",
+        shapes=(("H200", 1, "fsdp"),),
     ),
     "qwen3-8b": Preset(
         hf_repo="Qwen/Qwen3-8B",
@@ -41,6 +47,7 @@ PRESETS: dict[str, Preset] = {
         tool_call_parser="qwen25",
         reasoning_parser="qwen3",
         chat_template_kwargs={"enable_thinking": False},
-        shapes=(("H200", 1),),
+        megatron_model_type="qwen3-8B",
+        shapes=(("H200", 1, "fsdp"),),
     ),
 }

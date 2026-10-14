@@ -44,6 +44,15 @@ else:
     SHAPE = json.loads(os.environ[_SHAPE_ENV])
 
 HOURS = 3600
+# Upstream's launchers put the Megatron-LM checkout on PYTHONPATH (command_utils'
+# ray backend); its editable install exposes megatron.core but not every package
+# Megatron training imports (megatron.post_training), and the image's
+# PYTHONPATH=/root/miles would otherwise hide it
+MEGATRON_SRC = "/root/Megatron-LM"
+
+
+def _pythonpath() -> str:
+    return ":".join(p for p in (os.environ.get("PYTHONPATH"), MEGATRON_SRC) if p)
 
 app = modal.App("miles-fork")
 models_volume = modal.Volume.from_name("miles-swe-models", create_if_missing=True)
@@ -133,10 +142,16 @@ def check(recipe: dict, run_id: str):
 
     _check_shape(recipe)
     print(f"image commit {_image_commit()}, stack {os.environ.get('MILES_FORK_RELEASE')}")
-    os.environ.update(R.harbor_env(recipe, run_id))
+    os.environ.update({**R.harbor_env(recipe, run_id), **R.trainer_env(recipe)})
     os.environ["MILES_SESSION_PUBLIC_URL"] = "https://tunnel.invalid/token"
     subprocess.run([sys.executable, str(stack.MILES_SRC / "fork/tools/ledger.py"), "markers"],
                    cwd=stack.MILES_SRC, check=True)
+    os.environ["PYTHONPATH"] = _pythonpath()
+    if R.backend(recipe) == "megatron":
+        # what the trainer imports only when it builds the model, which parse_args never reaches
+        subprocess.run([sys.executable, "-c", "import megatron.training.training, megatron.post_training.checkpointing, "
+                        "miles_plugins.models.qwen3_5, miles_plugins.mbridge; print('megatron imports: ok')"],
+                       cwd=stack.MILES_SRC, check=True)
 
     # fix-003: the head-node lookup must work with no Ray dashboard at all
     subprocess.run(["ray", "start", "--head", "--include-dashboard=false", "--disable-usage-stats"], check=True,
@@ -174,6 +189,8 @@ def check(recipe: dict, run_id: str):
     keys = ["train_backend", "fully_async", "rollout_num_gpus", "actor_num_gpus_per_node", "global_batch_size",
             "num_rollout", "save_interval", "tito_model", "sglang_tool_call_parser", "wandb_team"]
     print({k: getattr(parsed, k, None) for k in keys})
+    if R.backend(recipe) == "megatron":
+        print("megatron layout:", R.megatron_parallel(recipe), "actor nodes x gpus:", R.trainer_layout(recipe))
     print("check: ok")
 
 
@@ -184,6 +201,7 @@ def check_cpu(recipe: dict, run_id: str):
     import traceback
 
     os.chdir(stack.MILES_SRC)
+    os.environ.update(R.trainer_env(recipe))
     sys.argv = [R.entrypoint(recipe), *R.miles_args(recipe, run_id, resume=False)]
     try:
         from miles.utils.arguments import parse_args
@@ -227,6 +245,8 @@ def train(recipe: dict, run_id: str):
     env = {
         **os.environ,
         **R.harbor_env(recipe, run_id),
+        **R.trainer_env(recipe),
+        "PYTHONPATH": _pythonpath(),
         "MASTER_ADDR": head_ip,
         "MILES_HOST_IP": node_ip,
         "RAY_ADDRESS": f"{head_ip}:6379",

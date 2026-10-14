@@ -1,0 +1,41 @@
+# The fork's Qwen3.5-9B SWE-Gym recipe (qwen35-9b-swegym8-sail.yaml) on the
+# Megatron trainer across two H200:8 nodes: 12 trainer GPUs (TP2 PP2 DP3; 8 on
+# the first node, 4 on the second) and 4 one-GPU SGLang engines, the same
+# rollout capacity as the one-node FSDP baseline. A smoke shape that puts
+# pipeline sends, gradient reductions and weight pushes across nodes; for a real
+# run give the rollouts most of the GPUs. Batch 8 x 6 = 48 so DP3 splits it
+# evenly. Sail task sandboxes (SAIL_API_KEY in the launcher's .env).
+name: q35-9b-swegym8-mg2n
+model:
+  preset: qwen3.5-9b
+  backend: megatron
+cluster:
+  gpu: H200
+  nodes: 2
+  train_gpus: 12
+  timeout_hours: 1
+parallel:
+  tp: 2
+  pp: 2
+  cp: 1
+taskset:
+  tasks_dir: $MILES_DATA/swegym-lite-sandbox
+  prompts: $MILES_DATA/prompts/train8_sandbox.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 50
+  exec_timeout: 60
+  timeout: 1800
+sandbox:
+  provider: sail
+algorithm:
+  mode: fully_async
+  num_rollout: 5
+  rollout_batch_size: 8
+  n_samples: 6
+  lr: 1.0e-6
+checkpoint:
+  save_interval: 3
+tracking:
+  wandb_project: miles-megatron
+  wandb_entity: mobiuslab

@@ -12,6 +12,7 @@ tasks at /inputs/tasks, the prompt file at /inputs/prompts.jsonl, weights at
 
 import copy
 import json
+import math
 import os
 import re
 import shlex
@@ -20,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from miles.utils.external_utils.model_args_utils import load_model_args
 from miles_ext.recipes.presets import PRESETS
 
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
@@ -41,7 +43,8 @@ PROMPTS = Path("/inputs/prompts.jsonl")
 
 DEFAULTS: dict[str, Any] = {
     "name": "",
-    "model": {"preset": None},
+    # backend None: the preset's (fsdp); "megatron" needs the preset's megatron_model_type
+    "model": {"preset": None, "backend": None},
     # cpu/memory are requests (Modal bills max(request, usage)); timeout caps a hung run
     "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6},
     "taskset": {"tasks_dir": None, "prompts": None, "harness": HARNESS_SANDBOX},
@@ -86,6 +89,9 @@ DEFAULTS: dict[str, Any] = {
         "max_tokens_per_gpu": 32768,
     },
     "checkpoint": {"save_interval": 10},
+    # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
+    # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated)
+    "parallel": {"tp": 1, "pp": 1, "cp": 1},
     # W&B: one project per campaign, named by the recipe (fork/README.md, "W&B projects")
     "tracking": {"wandb_project": None, "wandb_entity": "mobiuslab", "tags": []},
     "extra_args": [],
@@ -139,6 +145,7 @@ def validate(recipe: dict) -> None:
     cluster = recipe["cluster"]
     if recipe["algorithm"]["mode"] == "fully_async" and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE:
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
+    _validate_trainer(recipe)
     if not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]:
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
     project = recipe["tracking"]["wandb_project"]
@@ -146,6 +153,75 @@ def validate(recipe: dict) -> None:
         raise ValueError(f"tracking.wandb_project must name the campaign as miles-<campaign>, got {project!r}")
     if project in ARCHIVED_PROJECTS or project == SMOKE_PROJECT:
         raise ValueError(f"tracking.wandb_project {project!r} is reserved (archive or smoke runs)")
+
+
+BACKENDS = ("fsdp", "megatron")
+
+
+def backend(recipe: dict) -> str:
+    return recipe["model"]["backend"] or PRESETS[recipe["model"]["preset"]].backend
+
+
+def trainer_gpus(recipe: dict) -> int:
+    cluster = recipe["cluster"]
+    if recipe["algorithm"]["mode"] == "fully_async":
+        return int(cluster["train_gpus"])
+    return int(cluster["nodes"]) * GPUS_PER_NODE
+
+
+def trainer_layout(recipe: dict) -> tuple[int, int]:
+    """(--actor-num-nodes, --actor-num-gpus-per-node). Miles hands the trainer the
+    first GPUs in (node IP, GPU id) order, so a trainer of more than 8 GPUs spans
+    nodes: 12 GPUs on two nodes are 8 on the first and 4 on the second, declared
+    as 2 x 6 (Miles only uses the product to size the placement group)."""
+    gpus = trainer_gpus(recipe)
+    nodes = math.ceil(gpus / GPUS_PER_NODE)
+    return nodes, gpus // nodes
+
+
+def megatron_parallel(recipe: dict) -> dict[str, int]:
+    """tp, pp, cp from the recipe, and dp: the trainer GPUs they leave."""
+    par = {k: int(v) for k, v in recipe["parallel"].items()}
+    return {**par, "dp": trainer_gpus(recipe) // (par["tp"] * par["pp"] * par["cp"])}
+
+
+def _model_dims(model_type: str) -> dict[str, int]:
+    tokens = shlex.split(load_model_args(model_type))
+    flags = ("--num-layers", "--num-attention-heads", "--num-query-groups")
+    return {f: int(tokens[tokens.index(f) + 1]) for f in flags if f in tokens}
+
+
+def _validate_trainer(recipe: dict) -> None:
+    """Layout errors a Megatron run would otherwise hit minutes into a cluster start."""
+    name = backend(recipe)
+    if name not in BACKENDS:
+        raise ValueError(f"model.backend must be one of {BACKENDS}, got {name!r}")
+    nodes, per_node = trainer_layout(recipe)
+    if nodes * per_node != trainer_gpus(recipe):
+        raise ValueError(f"{trainer_gpus(recipe)} trainer GPUs do not split evenly over {nodes} nodes")
+    if name != "megatron":
+        if recipe["parallel"] != DEFAULTS["parallel"]:
+            raise ValueError("parallel.* applies to model.backend: megatron only")
+        return
+    model_type = PRESETS[recipe["model"]["preset"]].megatron_model_type
+    if not model_type:
+        raise ValueError(f"preset {recipe['model']['preset']!r} has no megatron_model_type")
+    par, dims = megatron_parallel(recipe), _model_dims(model_type)
+    tp, pp, cp, dp = par["tp"], par["pp"], par["cp"], par["dp"]
+    samples = int(recipe["algorithm"]["rollout_batch_size"]) * int(recipe["algorithm"]["n_samples"])
+    checks = [
+        (dp >= 1 and tp * pp * cp * dp == trainer_gpus(recipe),
+         f"tp*pp*cp = {tp * pp * cp} must divide the {trainer_gpus(recipe)} trainer GPUs"),
+        (GPUS_PER_NODE % tp == 0, f"tp {tp} must divide {GPUS_PER_NODE} so TP groups stay inside a node"),
+        # Miles splits each step's samples into equal parts per DP rank
+        (samples % dp == 0, f"rollout_batch_size * n_samples = {samples} must divide by dp {dp}"),
+        (dims.get("--num-attention-heads", tp) % tp == 0, f"tp {tp} must divide the attention heads"),
+        (dims.get("--num-query-groups", tp) % tp == 0, f"tp {tp} must divide the KV groups"),
+        (dims.get("--num-layers", pp) % pp == 0, f"pp {pp} must divide the {dims.get('--num-layers')} layers"),
+    ]
+    for ok, message in checks:
+        if not ok:
+            raise ValueError(f"parallel: {message}")
 
 
 SMOKE_PROJECT = "miles-smoke"
@@ -254,6 +330,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     total_gpus = int(cluster["nodes"]) * GPUS_PER_NODE
     ckpt_dir = RESULTS / run_id / "checkpoints"
     mem_fraction = algo["sglang_mem_fraction"] or (0.85 if fully_async else 0.7)
+    actor_nodes, actor_gpus_per_node = trainer_layout(recipe)
     beta1, beta2 = algo["adam_betas"]
     if fully_async:
         # Rollout engines keep generating while the trainer steps: one batch of
@@ -261,7 +338,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         # requests frozen in place across the push, groups more than
         # max_weight_staleness versions old dropped. TIS corrects the rest.
         placement = f"""
-        --actor-num-nodes 1 --actor-num-gpus-per-node {cluster["train_gpus"]}
+        --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
         --rollout-num-gpus {total_gpus - int(cluster["train_gpus"])} --num-gpus-per-node {GPUS_PER_NODE}
         --fully-async --update-weights-interval 1 --pause-generation-mode in_place
         --async-max-concurrent-samples {batch * n}
@@ -274,7 +351,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     tracking = recipe["tracking"]
     args = shlex.split(
         f"""
-        --train-backend {preset.backend}
+        --train-backend {backend(recipe)}
         --hf-checkpoint {model_dir(recipe)}
         --save {ckpt_dir} --save-interval {recipe["checkpoint"]["save_interval"]}
         {f"--load {ckpt_dir}" if resume else ""}
@@ -306,7 +383,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --sglang-mem-fraction-static {mem_fraction}
         --sglang-decode-log-interval 1000
         --update-weight-buffer-size 536870912
-        --gradient-checkpointing --attn-implementation flash_attention_2
+        {_backend_args(recipe)}
         --use-dynamic-batch-size --max-tokens-per-gpu {algo["max_tokens_per_gpu"]}
         {placement}
 
@@ -318,6 +395,37 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
     args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"})]
     return args + [str(a) for a in recipe["extra_args"]]
+
+
+def trainer_env(recipe: dict) -> dict[str, str]:
+    """Env the Miles driver and trainer workers need before Miles starts (Ray workers
+    inherit the raylet's env). Megatron's argument validation requires
+    CUDA_DEVICE_MAX_CONNECTIONS=1 for TP or CP, in every process that parses args."""
+    return {"CUDA_DEVICE_MAX_CONNECTIONS": "1"} if backend(recipe) == "megatron" else {}
+
+
+def _backend_args(recipe: dict) -> str:
+    if backend(recipe) != "megatron":
+        return "--gradient-checkpointing --attn-implementation flash_attention_2"
+    # A fresh run loads from --ref-load when --load holds no Megatron checkpoint
+    # (megatron_config.py); pointed at the HF weights, mbridge converts them on
+    # load, so no torch_dist conversion. With kl_coef 0 no reference model is built.
+    # The LR schedule's length is num_rollout x batch; on resume Megatron asserts it
+    # matches the checkpoint's, so a run extended past its first num_rollout could
+    # not resume. --override-opt_param-scheduler: this launch's schedule wins over
+    # the checkpoint's (the recipes use a constant LR, so nothing else changes).
+    par = megatron_parallel(recipe)
+    return f"""
+        {load_model_args(PRESETS[recipe["model"]["preset"]].megatron_model_type)}
+        --ref-load {model_dir(recipe)}
+        --tensor-model-parallel-size {par["tp"]} {"--sequence-parallel" if par["tp"] > 1 else ""}
+        --pipeline-model-parallel-size {par["pp"]} --context-parallel-size {par["cp"]}
+        --recompute-granularity full --recompute-method uniform --recompute-num-layers 1
+        --attention-backend flash --attention-softmax-in-fp32 --accumulate-allreduce-grads-in-fp32
+        --attention-dropout 0.0 --hidden-dropout 0.0
+        --log-probs-chunk-size 4096
+        --override-opt_param-scheduler
+        """
 
 
 def entrypoint(recipe: dict) -> str:
