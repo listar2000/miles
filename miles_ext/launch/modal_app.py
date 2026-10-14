@@ -33,8 +33,11 @@ DEFAULT_RECIPE = "miles_ext/recipes/configs/qwen35-9b-swegym8-sandbox.yaml"
 if modal.is_local():
     RECIPE = R.load(os.environ.get("MILES_RECIPE") or DEFAULT_RECIPE)
     SHAPE = R.shape(RECIPE)
-    if not stack.FORK_IMAGE:
-        raise RuntimeError("miles_ext/stack.py: FORK_IMAGE is empty; build and push the image first")
+    # MILES_FORK_COMMIT=<sha>: build the same image on Modal from that pushed fork
+    # commit instead of pulling FORK_IMAGE (when no registry push is possible)
+    FROM_COMMIT = os.environ.get("MILES_FORK_COMMIT", "")
+    if not stack.FORK_IMAGE and not FROM_COMMIT:
+        raise RuntimeError("miles_ext/stack.py: FORK_IMAGE is empty; publish it or set MILES_FORK_COMMIT")
 else:
     RECIPE = None
     SHAPE = json.loads(os.environ[_SHAPE_ENV])
@@ -47,12 +50,30 @@ results_volume = modal.Volume.from_name("miles-fork-results", create_if_missing=
 secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
 completion_queue = modal.Queue.from_name("miles-fork-completion", create_if_missing=True)
 
-image = (
-    modal.Image.from_registry(stack.FORK_IMAGE or "scratch")
-    .entrypoint([])
-    .env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
-          _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True)})
-)
+def _image_from_commit(commit: str) -> modal.Image:
+    """What fork/docker/build.py publishes, built by Modal: base, the same deps install, our commit over /root/miles."""
+    return (
+        modal.Image.from_registry(stack.BASE_IMAGE)
+        .run_commands(
+            'uv pip install --python "$(command -v python)" '
+            f'"harbor[modal] @ git+{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}" '
+            f'"mini-swe-agent=={stack.MINI_SWE_AGENT_VERSION}"'
+        )
+        .run_commands(f"cd {stack.MILES_SRC} && git fetch --no-tags {stack.FORK_REPO} {commit} "
+                      f"&& git checkout --force --detach {commit} && python fork/tools/ledger.py markers")
+        .env({"PYTHONPATH": str(stack.MILES_SRC), "MILES_FORK_RELEASE": f"commit-{commit[:10]}",
+              "MILES_FORK_COMMIT": commit})
+    )
+
+
+if RECIPE is None:
+    image = modal.Image.debian_slim()  # placeholder: inside the container the function's own image is used
+elif FROM_COMMIT:
+    image = _image_from_commit(FROM_COMMIT)
+else:
+    image = modal.Image.from_registry(stack.FORK_IMAGE)
+image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
+                                  _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True)})
 if RECIPE is not None:
     image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS)).add_local_file(
         RECIPE["taskset"]["prompts"], str(R.PROMPTS)
@@ -212,7 +233,7 @@ def train(recipe: dict, run_id: str):
         args = R.miles_args(recipe, run_id, resume)
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / f"recipe-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
-            json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": stack.FORK_IMAGE, "commit": _image_commit(),
+            json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": stack.FORK_IMAGE or None, "commit": _image_commit(),
                         "resume": resume, "recipe": recipe, "argv": args}, indent=1)
         )
         if R.needs_tunnel(recipe):
@@ -270,7 +291,7 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
                     _overrides(num_rollout, rollout_batch_size, n_samples, save_interval))
     run_id = run_id or f"{recipe['name']}-{time.strftime('%Y%m%d-%H%M%S')}"
     algo = recipe["algorithm"]
-    print(f"run_id={run_id} image={stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
+    print(f"run_id={run_id} image={stack.FORK_IMAGE or 'built from ' + FROM_COMMIT[:10]} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "
           f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE}")
     if check_only:

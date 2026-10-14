@@ -138,6 +138,17 @@ def src_layer(commit: str, path: Path):
     return len(deleted)
 
 
+def build_deps_layer(name: str, dest: Path):
+    with modal.enable_output(), app.run():
+        summary = deps_layer.remote(base_dists.remote(), name)
+    print(f"deps layer: +{summary['added']} -{summary['removed']} "
+          f"({summary['files']} files, {summary['whiteouts']} whiteouts)", flush=True)
+    with dest.open("wb") as f:
+        for chunk in volume.read_file(name):
+            f.write(chunk)
+    volume.remove_file(name)
+
+
 def crane_binary(workdir: Path) -> Path:
     tgz = workdir / "crane.tgz"
     url = (f"https://github.com/google/go-containerregistry/releases/download/{CRANE_VERSION}/"
@@ -155,6 +166,7 @@ def main():
     ap.add_argument("--commit", default="HEAD", help="fork commit to release (must be on the fork remote)")
     ap.add_argument("--release", default=stack.FORK_RELEASE, help="image tag, fork-<upstream tag>-r<N>")
     ap.add_argument("--repo", default=None, help="Docker Hub repository (default: $DOCKERHUB_USERNAME/miles)")
+    ap.add_argument("--workdir", default=None, help="keep layer tarballs here (a retry with the same pins reuses the deps layer)")
     args = ap.parse_args()
 
     user, token = os.environ.get("DOCKERHUB_USERNAME"), os.environ.get("DOCKERHUB_TOKEN")
@@ -167,28 +179,28 @@ def main():
     t0 = time.monotonic()
 
     with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
+        work = Path(args.workdir or tmp)
+        work.mkdir(parents=True, exist_ok=True)
         crane = crane_binary(work)
         env = {**os.environ, "DOCKER_CONFIG": str(work / "docker")}  # login lives only in this temp dir
 
         def run_crane(*cargs: str, stdin: str | None = None) -> str:
-            return subprocess.run([str(crane), *cargs], env=env, input=stdin, check=True, capture_output=True,
-                                  text=True).stdout.strip()
+            proc = subprocess.run([str(crane), *cargs], env=env, input=stdin, capture_output=True, text=True)
+            if proc.returncode:
+                raise SystemExit(f"crane {cargs[0]} failed:\n{proc.stderr.strip()}")
+            return proc.stdout.strip()
 
         base_ref = BASE_IMAGE.split("@")[0]
         base_amd64 = f"{base_ref.split(':')[0]}@{run_crane('digest', '--platform', PLATFORM, BASE_IMAGE)}"
         print(f"release {args.release}: commit {commit[:10]} on {base_amd64}", flush=True)
 
         deps_name = f"deps-{args.release}-{commit[:10]}.tar.gz"
-        with modal.enable_output(), app.run():
-            summary = deps_layer.remote(base_dists.remote(), deps_name)
-        print(f"deps layer: +{summary['added']} -{summary['removed']} "
-              f"({summary['files']} files, {summary['whiteouts']} whiteouts)", flush=True)
-        deps_tar = work / "deps.tar.gz"
-        with deps_tar.open("wb") as f:
-            for chunk in volume.read_file(deps_name):
-                f.write(chunk)
-        volume.remove_file(deps_name)
+        pins = hashlib.sha256((BASE_IMAGE + DEPS_INSTALL).encode()).hexdigest()[:12]
+        deps_tar = work / f"deps-{pins}.tar.gz"
+        if deps_tar.exists():  # --workdir from an earlier attempt with the same base and pins
+            print("deps layer: reusing", deps_tar)
+        else:
+            build_deps_layer(deps_name, deps_tar)
         src_tar = work / "src.tar.gz"
         n_deleted = src_layer(commit, src_tar)
         print(f"src layer: {commit[:10]} over /root/miles ({n_deleted} whiteouts); "
