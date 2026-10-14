@@ -52,13 +52,7 @@ if modal.is_local():
     from miles_ext import stack
 
     BASE_IMAGE = stack.BASE_IMAGE
-    DEPS_INSTALL = (
-        # uv: the Harbor branch has a uv-workspace dependency; --python: the
-        # image's interpreter is the /opt/sglang venv, not /usr
-        'uv pip install --python "$(command -v python)" '
-        f'"harbor[modal] @ git+{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}" '
-        f'"mini-swe-agent=={stack.MINI_SWE_AGENT_VERSION}"'
-    )
+    DEPS_INSTALL = stack.DEPS_INSTALL
 else:
     BASE_IMAGE = DEPS_INSTALL = "unused-in-container"
 
@@ -216,6 +210,7 @@ def main():
             "org.opencontainers.image.base.digest": base_amd64.split("@")[1],
             "miles.fork.harbor": f"{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}",
             "miles.fork.mini-swe-agent": stack.MINI_SWE_AGENT_VERSION,
+            "miles.fork.sail": stack.SAIL_SDK_VERSION,
         }
         envs = {"PYTHONPATH": str(stack.MILES_SRC), "MILES_FORK_RELEASE": args.release, "MILES_FORK_COMMIT": commit}
         mutate = ["mutate", base_amd64, "--append", str(deps_tar), "--append", str(src_tar), "-t", target]

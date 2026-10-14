@@ -21,6 +21,18 @@ BASE_IMAGE = "radixark/miles:v0.1.2@sha256:c81d8ba7b91571aac8e0bb2be372c6a9664e1
 HARBOR_REPO = "https://github.com/harbor-framework/harbor"
 HARBOR_COMMIT = "917b3c1be7cf6553a7a9fe25de8adb6f8e639287"
 MINI_SWE_AGENT_VERSION = "2.4.6"
+# Sail SDK for the vendored Sail provider (miles_ext/harbor/sail), pinned
+# exactly: the vendored file imports SDK internals (sail._core_client, sail.image)
+SAIL_SDK_VERSION = "0.13.0"
+
+# The deps layer: one install line for fork/docker/build.py and the launcher's
+# build-from-commit image. uv: the Harbor branch has a uv-workspace
+# dependency; --python: the image's interpreter is the /opt/sglang venv, not /usr
+DEPS_INSTALL = (
+    'uv pip install --python "$(command -v python)" '
+    f'"harbor[modal] @ git+{HARBOR_REPO}@{HARBOR_COMMIT}" '
+    f'"mini-swe-agent=={MINI_SWE_AGENT_VERSION}" "sail=={SAIL_SDK_VERSION}"'
+)
 
 FORK_REPO = "https://github.com/listar2000/miles"
 MILES_SRC = Path("/root/miles")
