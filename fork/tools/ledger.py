@@ -12,7 +12,7 @@ so the history is the record and nothing has to be kept in sync by hand.
     python fork/tools/ledger.py markers           # file-only check (no git history; used in the image)
 
 ``check`` enforces the layout rules:
-  1. outside the fork's own paths (fork/, miles_ext/, FORK.md) the only files
+  1. outside the fork's own paths (OWN_PATHS) the only files
      that differ from the base tag are the ones fixes and hooks declare in ``Touches:``;
   2. every declared file carries a ``[fork <id>]`` marker for each commit touching it;
   3. every fork commit has exactly one ``Fork-*`` trailer; fixes and hooks touch
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OWN_PATHS = ("fork/", "miles_ext/", "FORK.md")
+OWN_PATHS = ("fork/", "miles_ext/", "FORK.md", ".claude/skills/miles-fork/")
 KINDS = ("Fix", "Hook", "Infra", "Ext")
 UPSTREAM_KINDS = ("Fix", "Hook")  # the only kinds allowed to edit upstream files
 MARKER = re.compile(r"\[fork ((?:fix|hook)-\d{3})\]")
