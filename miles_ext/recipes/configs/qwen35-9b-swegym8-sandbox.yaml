@@ -1,0 +1,31 @@
+# Run 1 (overfit8-async-v1, W&B mobiuslab/miles-swe-rl/4moqw3ti) with mini-swe-agent
+# inside the task sandboxes: Qwen3.5-9B overfit on 8 SWE-Gym tasks, fully async
+# GRPO on one H200:8 node (4 GPUs FSDP trainer, 4 GPUs SGLang), 64 episodes per step.
+name: q35-9b-swegym8-sbx
+model:
+  preset: qwen3.5-9b
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 4
+taskset:
+  # the 8 tasks with pass rates strictly between 0 and 1 (RUN_LOG item 16),
+  # images with mini-swe-agent preinstalled (make_sandbox_tasks.py)
+  tasks_dir: $MILES_DATA/swegym-lite-sandbox
+  prompts: $MILES_DATA/prompts/train8_sandbox.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 50
+  exec_timeout: 60
+  timeout: 1800
+algorithm:
+  mode: fully_async
+  num_rollout: 20
+  rollout_batch_size: 8
+  n_samples: 8
+  lr: 1.0e-6
+checkpoint:
+  save_interval: 10
+tracking:
+  wandb_project: miles-swe-rl
+  wandb_entity: mobiuslab

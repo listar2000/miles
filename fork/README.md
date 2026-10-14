@@ -64,6 +64,7 @@ miles_ext/              extensions (top-level package next to miles/, on PYTHONP
   harbor/               agent function, in-sandbox and host-side mini-swe-agent, reward, session proxy
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
+  platform/             reserved: platform-facing extensions (schema, validate, teardown, events)
 ```
 
 `miles_ext` is not added to upstream's `setup.py` (that would be a touch point
