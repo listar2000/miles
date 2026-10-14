@@ -149,9 +149,17 @@ def load(actor: Any) -> dict[str, Any] | None:
         optimizer_state = OptimizerState(actor.model, actor.optimizer)
         optim_state_dict = {"optim_state": optimizer_state}
         try:
+            # [fork fix-002] Params that never got a gradient (Qwen3.5's vision tower in
+            # text-only RL) have no Adam state in the saved checkpoint, while the freshly
+            # built optimizer has zero-initialized state for every param; keep those zeros.
+            # (CheckpointException is a BaseException, so a strict load would escape the
+            # except below and kill the trainer.)
             dcp.load(
-                state_dict=optim_state_dict, checkpoint_id=str(optimizer_dir), process_group=_cpu_group()
-            )  # [fork fix-001]
+                state_dict=optim_state_dict,
+                checkpoint_id=str(optimizer_dir),
+                process_group=_cpu_group(),  # [fork fix-001]
+                planner=dcp.DefaultLoadPlanner(allow_partial_load=True),  # [fork fix-002]
+            )
             logger.info(f"[FSDP] Loaded optimizer from {optimizer_dir}")
         except Exception as e:
             logger.warning(f"[FSDP] Failed to load optimizer from {optimizer_dir}: {e}")
