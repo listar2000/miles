@@ -18,11 +18,15 @@ so the history is the record and nothing has to be kept in sync by hand.
   3. every fork commit has exactly one ``Fork-*`` trailer; fixes and hooks touch
      only upstream files, infra and extensions only the fork's own paths;
   4. fixes and hooks come before infra and extensions, so a sync meets every
-     possible conflict first and the rest replays cleanly.
+     possible conflict first and the rest replays cleanly;
+  5. every file in fork/vendored.json (third-party code copied verbatim) still
+     has the git blob of its upstream source (also checked by ``markers``).
 """
 
 import argparse
 import ast
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -110,8 +114,26 @@ def markers_in(path: Path) -> set[str]:
         return set()
 
 
-def cmd_check(base: str) -> int:
+def vendored_problems() -> list[str]:
+    """Vendored files must stay byte-identical to their source: a git blob hash, no git needed."""
+    manifest = ROOT / "fork/vendored.json"
     problems = []
+    for entry in json.loads(manifest.read_text()) if manifest.exists() else []:
+        path = ROOT / entry["path"]
+        try:
+            data = path.read_bytes()
+        except OSError:
+            problems.append(f"{entry['path']}: listed in fork/vendored.json but missing")
+            continue
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        if blob != entry["blob"]:
+            problems.append(f"{entry['path']}: blob {blob[:10]} is not {entry['upstream_path']}@{entry['commit'][:10]} "
+                            f"({entry['blob'][:10]}); vendored files are never edited, adapt in a subclass")
+    return problems
+
+
+def cmd_check(base: str) -> int:
+    problems = vendored_problems()
     series = commits(base)
     declared: dict[str, set[str]] = {}
     seen_own = False
@@ -169,7 +191,10 @@ def cmd_markers() -> int:
     if not found:
         print("no fork markers found: is this the fork's source tree?")
         return 1
-    return 0
+    problems = vendored_problems()
+    for p in problems:
+        print("  FAIL", p)
+    return 1 if problems else 0
 
 
 def main():
