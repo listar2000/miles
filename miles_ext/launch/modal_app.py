@@ -11,7 +11,8 @@ adds the run inputs (tasks, prompts) and the cluster wiring.
 Credentials come from the .env in ``MILES_DOTENV_DIR`` (default: cwd) as a
 Modal Secret. Names are this fork's own: app ``miles-fork``, volume
 ``miles-fork-results``, queue ``miles-fork-completion``, sandbox app (Modal or
-Sail, per the recipe's sandbox.provider) ``miles-fork-sbx-<run_id>``.
+Sail, per the recipe's sandbox.provider) ``<sandbox.app_prefix><run_id>``,
+default ``miles-fork-sbx-<run_id>``.
 """
 
 import contextlib
@@ -100,7 +101,7 @@ def _wait_for_port(host: str, port: int, timeout: float):
 
 def _terminate_task_sandboxes(recipe: dict, run_id: str):
     """Episodes in flight when the trainer exits never reach Harbor's cleanup; the sandbox app is this run's alone."""
-    name = R.sandbox_app_name(run_id)
+    name = R.sandbox_app_name(recipe, run_id)
     if recipe["sandbox"]["provider"] == "sail":
         try:
             from miles_ext.harbor.sail import terminate_app_sailboxes

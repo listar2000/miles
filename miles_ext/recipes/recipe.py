@@ -63,6 +63,9 @@ DEFAULTS: dict[str, Any] = {
         # limits. Sail sizes are fixed shapes billed by observed usage, so the
         # task's resources only pick the size.
         "resource_policy": "limit",
+        # sandbox app = app_prefix + run_id; callers that scope cleanup by name
+        # (the platform's mdev-/mrl- prefixes) set their own prefix
+        "app_prefix": "miles-fork-sbx-",
     },
     "algorithm": {
         "mode": "fully_async",  # or "sync" (colocated)
@@ -126,6 +129,9 @@ def validate(recipe: dict) -> None:
     sandbox = recipe["sandbox"]
     if sandbox["provider"] not in SANDBOX_PROVIDERS:
         raise ValueError(f"sandbox.provider must be one of {SANDBOX_PROVIDERS}")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*-", sandbox["app_prefix"] or ""):
+        raise ValueError(f"sandbox.app_prefix must be lowercase letters, digits and '-', ending in '-', "
+                         f"got {sandbox['app_prefix']!r}")
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
     if recipe["algorithm"]["mode"] not in ("fully_async", "sync"):
@@ -174,16 +180,25 @@ def model_dir(recipe: dict) -> Path:
     return MODELS / PRESETS[recipe["model"]["preset"]].dir_name
 
 
-def sandbox_app_name(run_id: str) -> str:
-    """Per-run app (Modal or Sail) for the task sandboxes, so cleanup touches only this run."""
-    return f"miles-fork-sbx-{run_id}"[:64]
+APP_NAME_MAX = 64  # Modal's limit on app names
+
+
+def sandbox_app_name(recipe: dict, run_id: str) -> str:
+    """Per-run app (Modal or Sail) for the task sandboxes, so cleanup touches only this run.
+
+    Never truncated: a cut name could collide with another run's, and cleanup
+    and reconcilers match on it."""
+    name = recipe["sandbox"]["app_prefix"] + run_id
+    if len(name) > APP_NAME_MAX:
+        raise ValueError(f"sandbox app name {name!r} is longer than {APP_NAME_MAX}; shorten the run id or prefix")
+    return name
 
 
 def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     """What every Harbor trial reads (header of upstream's harbor_agent_function)."""
     agent, sandbox = recipe["agent"], recipe["sandbox"]
     env = {
-        **_sandbox_env(sandbox, run_id),
+        **_sandbox_env(recipe, run_id),
         "HARBOR_TASKS_DIR": str(TASKS),
         "HARBOR_TRIALS_DIR": str(RESULTS / run_id / "trials"),
         "MILES_EXT_HARNESS": recipe["taskset"]["harness"],
@@ -202,13 +217,14 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     return env
 
 
-def _sandbox_env(sandbox: dict, run_id: str) -> dict[str, str]:
+def _sandbox_env(recipe: dict, run_id: str) -> dict[str, str]:
     """How Harbor creates this run's sandboxes; each run gets its own app, so cleanup touches only it."""
+    sandbox = recipe["sandbox"]
     if sandbox["provider"] == "sail":
         return {
             "HARBOR_ENV_IMPORT_PATH": SAIL_IMPORT_PATH,
             "HARBOR_ENV_KWARGS": json.dumps({
-                "app_name": sandbox_app_name(run_id),
+                "app_name": sandbox_app_name(recipe, run_id),
                 "max_lifetime_secs": int(sandbox["lifetime_secs"]),
                 "idle_secs": int(sandbox["idle_secs"]),
             }),
@@ -217,7 +233,7 @@ def _sandbox_env(sandbox: dict, run_id: str) -> dict[str, str]:
         "HARBOR_ENV_TYPE": "modal",
         # Harbor's Modal sandboxes otherwise live 24 h and outlive a killed trainer
         "HARBOR_ENV_KWARGS": json.dumps({
-            "app_name": sandbox_app_name(run_id),
+            "app_name": sandbox_app_name(recipe, run_id),
             "sandbox_timeout_secs": int(sandbox["lifetime_secs"]),
             "sandbox_idle_timeout_secs": int(sandbox["idle_secs"]),
         }),
