@@ -14,6 +14,7 @@ Prints the pushed image reference with its digest; put it in
 """
 
 import argparse
+import base64
 import os
 import subprocess
 import sys
@@ -87,9 +88,8 @@ def main():
     )
     t0 = time.monotonic()
     try:
-        run(sb, "mkdir -p /ctx")
-        with sb.open("/ctx/Dockerfile", "w") as f:
-            f.write((ROOT / "fork/docker/Dockerfile").read_text())
+        dockerfile = base64.b64encode((ROOT / "fork/docker/Dockerfile").read_bytes()).decode()
+        run(sb, f"mkdir -p /ctx && echo {dockerfile} | base64 -d > /ctx/Dockerfile")
         run(sb, DOCKER_SETUP)
         flags = " ".join(f"--build-arg {k}='{v}'" for k, v in build_args.items())
         run(sb, f"docker build --network host --progress plain {flags} -t {image} /ctx 2>&1")

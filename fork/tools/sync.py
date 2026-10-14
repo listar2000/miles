@@ -66,7 +66,11 @@ def bump_stack(old: str, new: str) -> str:
     path = ROOT / "miles_ext/stack.py"
     s = path.read_text()
     repo = re.search(r'BASE_IMAGE = "([^:]+):', s).group(1)
-    digest = docker_hub_digest(repo, new)
+    try:
+        digest = docker_hub_digest(repo, new)
+    except Exception as e:  # upstream publishes the image some time after the tag
+        print(f"warning: no {repo}:{new} image on Docker Hub yet ({e}); BASE_IMAGE left unpinned")
+        digest = "sha256:UNPUBLISHED"
     s = s.replace(f'UPSTREAM_TAG = "{old}"', f'UPSTREAM_TAG = "{new}"')
     s = re.sub(r'BASE_IMAGE = "[^"]+"', f'BASE_IMAGE = "{repo}:{new}@{digest}"', s)
     s = re.sub(r'FORK_RELEASE = "[^"]+"', f'FORK_RELEASE = "fork-{new}-r1"', s)
