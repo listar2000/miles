@@ -1,0 +1,13 @@
+diff --git a/adapters/swegym/utils.py b/adapters/swegym/utils.py
+index 9061aa7..04600a3 100644
+--- a/adapters/swegym/utils.py
++++ b/adapters/swegym/utils.py
+@@ -87,7 +87,7 @@ def get_test_commands(
+     )
+ 
+     # If we have FAIL_TO_PASS or PASS_TO_PASS tests, use those for precise targeting
+-    test_command = repo_specs.get("test_cmd", "pytest")
++    test_command = repo_specs.get("test_cmd", "pytest -rA")
+     if fail_to_pass or pass_to_pass:
+         # When we have specific tests to run, use node IDs directly
+         # For mypy-style commands ending with -k, remove the -k flag
