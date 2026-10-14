@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import timedelta  # [fork fix-001]
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,27 @@ from torch.distributed.checkpoint.stateful import Stateful
 from miles.backends.training_utils.checkpoint.tracker import CHECKPOINT_TRACKER_FILENAME
 
 logger = logging.getLogger(__name__)
+
+
+# [fork fix-001] begin: DCP planning collectives over gloo (see fork/README.md)
+_CPU_GROUP = None
+
+
+def _cpu_group():
+    """Gloo group for DCP's planning collectives.
+
+    In colocated runs SGLang holds most GPU memory when the checkpoint is
+    written, and NCCL's lazily allocated scatter (P2P) buffers fail with
+    "unhandled cuda error". The state dict is offloaded to CPU, so gloo is enough.
+    """
+    global _CPU_GROUP
+    if _CPU_GROUP is None:
+        # a full checkpoint (fp32 model + Adam) to a network volume can outlast the 30 min default
+        _CPU_GROUP = dist.new_group(backend="gloo", timeout=timedelta(hours=2))
+    return _CPU_GROUP
+
+
+# [fork fix-001] end
 
 
 class ModelState(Stateful):
@@ -115,7 +137,7 @@ def load(actor: Any) -> dict[str, Any] | None:
     state_dict = {"model_state": model_state}
 
     try:
-        dcp.load(state_dict=state_dict, checkpoint_id=str(model_dir))
+        dcp.load(state_dict=state_dict, checkpoint_id=str(model_dir), process_group=_cpu_group())  # [fork fix-001]
         logger.info(f"[FSDP] Loaded model from {model_dir}")
     except Exception as e:
         logger.error(f"[FSDP] Failed to load model from {model_dir}: {e}")
@@ -127,7 +149,9 @@ def load(actor: Any) -> dict[str, Any] | None:
         optimizer_state = OptimizerState(actor.model, actor.optimizer)
         optim_state_dict = {"optim_state": optimizer_state}
         try:
-            dcp.load(state_dict=optim_state_dict, checkpoint_id=str(optimizer_dir))
+            dcp.load(
+                state_dict=optim_state_dict, checkpoint_id=str(optimizer_dir), process_group=_cpu_group()
+            )  # [fork fix-001]
             logger.info(f"[FSDP] Loaded optimizer from {optimizer_dir}")
         except Exception as e:
             logger.warning(f"[FSDP] Failed to load optimizer from {optimizer_dir}: {e}")
@@ -140,7 +164,9 @@ def load(actor: Any) -> dict[str, Any] | None:
         lr_scheduler_state = LRSchedulerState(actor.lr_scheduler)
         lr_scheduler_state_dict = {"lr_scheduler_state": lr_scheduler_state}
         try:
-            dcp.load(state_dict=lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir))
+            dcp.load(
+                state_dict=lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir), process_group=_cpu_group()
+            )  # [fork fix-001]
             logger.info(f"[FSDP] Loaded LR scheduler from {lr_scheduler_dir}")
         except Exception as e:
             logger.warning(f"[FSDP] Failed to load LR scheduler from {lr_scheduler_dir}: {e}")
@@ -214,20 +240,22 @@ def save(actor: Any, iteration: int) -> None:
     # Save model weights
     model_state = ModelState(actor.model)
     state_dict = {"model_state": model_state}
-    dcp.save(state_dict, checkpoint_id=str(model_dir))
+    dcp.save(state_dict, checkpoint_id=str(model_dir), process_group=_cpu_group())  # [fork fix-001]
 
     # Save optimizer state (skip if --no-save-optim is set)
     save_optimizer_state = not getattr(actor.args, "no_save_optim", False)
     if save_optimizer_state and hasattr(actor, "optimizer") and actor.optimizer is not None:
         optimizer_state = OptimizerState(actor.model, actor.optimizer)
         optim_state_dict = {"optim_state": optimizer_state}
-        dcp.save(optim_state_dict, checkpoint_id=str(optimizer_dir))
+        dcp.save(optim_state_dict, checkpoint_id=str(optimizer_dir), process_group=_cpu_group())  # [fork fix-001]
 
     # Save LR scheduler state (skip if --no-save-optim is set)
     if save_optimizer_state and hasattr(actor, "lr_scheduler") and actor.lr_scheduler is not None:
         lr_scheduler_state = LRSchedulerState(actor.lr_scheduler)
         lr_scheduler_state_dict = {"lr_scheduler_state": lr_scheduler_state}
-        dcp.save(lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir))
+        dcp.save(
+            lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir), process_group=_cpu_group()
+        )  # [fork fix-001]
 
     if dist.get_rank() == 0:
         rng_state = {"torch": torch.get_rng_state()}
