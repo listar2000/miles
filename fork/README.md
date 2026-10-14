@@ -55,8 +55,7 @@ extension commits; `python fork/tools/ledger.py markdown` prints the table.
 FORK.md                 pointer to this file
 fork/
   README.md             this rulebook
-  docker/Dockerfile     the fork image: upstream release image + our commit over /root/miles
-  docker/build_on_modal.py  docker build + push inside a Modal Sandbox (no local daemon, no CI secrets)
+  docker/build.py       publish the fork image: upstream image + deps layer + our source layer
   tools/ledger.py       list / audit the series (touch points, markers, trailers, order)
   tools/sync.py         rebase onto a newer upstream tag + stack bump
   deps/harbor/          patches to Harbor we carry without forking it (see Harbor)
@@ -77,18 +76,35 @@ brings the new version and API drift fails at import, not silently.
 
 ## The image
 
-`fork/docker/Dockerfile`: `FROM` upstream's release image by digest, install
-Harbor and mini-swe-agent at their pins, then `git fetch` + `checkout` the
-released fork commit over `/root/miles` (the base image's own clone of
-upstream). Compiled pieces (CUDA kernels, SGLang, Megatron, the int4
-extension) are upstream's, untouched. The build fails if the fix markers are
-missing or `miles_ext` cannot load the upstream agent function.
+`fork/docker/build.py` publishes `docker.io/<user>/miles:fork-<tag>-r<N>`:
+upstream's release image (amd64, every layer untouched) plus two layers.
+
+| Layer | Contents | Made by |
+| --- | --- | --- |
+| upstream (117 layers) | CUDA, torch, SGLang, Megatron, compiled extensions, `/root/miles` at the upstream tag | radixark; mounted from `radixark/miles` on Docker Hub, never re-uploaded |
+| deps | Harbor at `HARBOR_COMMIT` and mini-swe-agent: exactly the files of the distributions `uv pip install` added or replaced (their `RECORD`s), whiteouts for the versions it removed | a Modal container of the base image runs the install |
+| src | the released fork commit (`git archive`) over `/root/miles`, whiteouts for files the commit deletes | local `git` |
+
+The image env adds `PYTHONPATH=/root/miles` (so the top-level `miles_ext`
+imports; upstream's `setup.py` is not edited), `MILES_FORK_RELEASE` and
+`MILES_FORK_COMMIT`; OCI labels record the source commit, base digest and the
+Harbor and mini-swe-agent pins. `/root/miles/.git` still describes upstream's
+checkout, so read the commit from `MILES_FORK_COMMIT`, not `git rev-parse`.
+
+Why layers appended with `crane` instead of a Dockerfile: this machine has no
+Docker daemon, CI with registry secrets was not an option, and Docker inside a
+Modal Sandbox could not mount the 117-layer base (overlay mount "invalid
+argument"; small images worked). Appending also keeps every upstream layer
+byte-identical and shared, so hosts that already cached upstream's image
+(Modal does) pull only the two new layers. With a normal Docker host the
+equivalent Dockerfile is `FROM` the base, `RUN` the install line in
+`build.py`, `COPY` the tree over `/root/miles`, and the same `ENV`.
 
 ```bash
 set -a; . <launch folder>/.env; set +a           # DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
-git push origin fork/v0.1.2                       # the build fetches the commit from GitHub
-python fork/docker/build_on_modal.py              # prints FORK_IMAGE = "docker.io/...@sha256:..."
-# put that in miles_ext/stack.py, commit ("Fork-Infra: release-..."), tag fork-v0.1.2-rN, push
+git push origin fork/v0.1.2                       # the released commit must be on GitHub
+python fork/docker/build.py                       # prints FORK_IMAGE = "docker.io/...@sha256:..."
+# put that in miles_ext/stack.py, commit (Fork-Infra: release-...), tag fork-v0.1.2-rN, push
 ```
 
 ## Sync (moving to a newer upstream release)
