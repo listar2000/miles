@@ -15,6 +15,12 @@ import miles
 
 REPO_ROOT = Path(miles.__file__).resolve().parents[1]
 HARBOR_AGENT_FUNCTION = REPO_ROOT / "examples/experimental/harbor/harbor_agent_function.py"
+# what miles_ext.harbor.agent_function uses from it; checked at load, so an
+# upstream rename fails the image build instead of a rollout
+HARBOR_AGENT_FUNCTION_API = (
+    "HARNESS_BINDINGS", "HarnessBinding", "_mini_swe_agent_env", "build_trial_config", "_trial_timeout_s",
+    "_ensure_provider_key", "_failed", "trial_result_to_metadata",
+)
 
 
 @cache
@@ -29,4 +35,7 @@ def harbor_agent_function():
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
+    missing = [n for n in HARBOR_AGENT_FUNCTION_API if not hasattr(module, n)]
+    if missing:
+        raise ImportError(f"{HARBOR_AGENT_FUNCTION} no longer defines {missing}; adapt miles_ext.harbor.agent_function")
     return module
