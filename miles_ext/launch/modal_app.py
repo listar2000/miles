@@ -50,6 +50,11 @@ results_volume = modal.Volume.from_name("miles-fork-results", create_if_missing=
 secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
 completion_queue = modal.Queue.from_name("miles-fork-completion", create_if_missing=True)
 
+def _image_ref() -> str | None:
+    """The registry image this container runs, or None when Modal built it from a commit."""
+    return None if os.environ.get("MILES_FORK_RELEASE", "").startswith("commit-") else (stack.FORK_IMAGE or None)
+
+
 def _image_from_commit(commit: str) -> modal.Image:
     """What fork/docker/build.py publishes, built by Modal: base, the same deps install, our commit over /root/miles."""
     return (
@@ -247,7 +252,7 @@ def train(recipe: dict, run_id: str):
         args = R.miles_args(recipe, run_id, resume)
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / f"recipe-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
-            json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": stack.FORK_IMAGE or None, "commit": _image_commit(),
+            json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit(),
                         "resume": resume, "recipe": recipe, "argv": args}, indent=1)
         )
         if R.needs_tunnel(recipe):
@@ -305,7 +310,7 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
                     _overrides(num_rollout, rollout_batch_size, n_samples, save_interval))
     run_id = run_id or f"{recipe['name']}-{time.strftime('%Y%m%d-%H%M%S')}"
     algo = recipe["algorithm"]
-    print(f"run_id={run_id} image={stack.FORK_IMAGE or 'built from ' + FROM_COMMIT[:10]} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
+    print(f"run_id={run_id} image={'built from ' + FROM_COMMIT[:10] if FROM_COMMIT else stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "
           f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE} "
           f"wandb={recipe['tracking']['wandb_entity']}/{R.wandb_project(recipe, run_id)}")
