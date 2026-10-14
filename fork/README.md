@@ -170,6 +170,28 @@ modal run -m miles_ext.launch.modal_app --run-id <id> --check-only   # dry check
 - Without a registry push the launcher can build the same image on Modal from
   a pushed commit (`MILES_FORK_COMMIT=<sha>`); use it for testing, not releases.
 
+## W&B projects
+
+Runs go to the `mobiuslab` entity, **one project per campaign**: a set of runs
+with one purpose, compared with each other (e.g. `miles-fork-validation` for
+release checks, `miles-sail` for the Sail sandbox rounds, `miles-dsv41` for
+DeepSeek-V4.1). A different purpose, model family or sandbox provider means a
+new project.
+
+- The recipe names it: `tracking.wandb_project: miles-<campaign>`. There is no
+  default; `recipe.load` rejects a recipe without one, so nothing lands in a
+  project by accident.
+- Smoke and debug runs go to `miles-smoke`: give them a run id starting with
+  `smoke-` or `debug-` and the launcher switches the project (recipes cannot
+  name `miles-smoke` themselves).
+- `miles-swe-rl` holds everything from before this rule. It is an archive:
+  no new runs, and nothing in it is moved or deleted without the owner's OK.
+- The W&B group and run name are the launcher's run id (`<recipe>-<yyyymmdd-hhmmss>`
+  unless you pass `--run-id`); the run id is also what resumes a run.
+- Tags are set for every run: `recipe:`, `model:`, `sandbox:`, `harness:`,
+  `fork:<release>` and `commit:<sha>`, plus any in `tracking.tags`. Filter by
+  these instead of encoding them in run names.
+
 ## Sync (moving to a newer upstream release)
 
 ```bash

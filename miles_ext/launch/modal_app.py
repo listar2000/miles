@@ -215,6 +215,9 @@ def train(recipe: dict, run_id: str):
         "RAY_ADDRESS": f"{head_ip}:6379",
         # no RAY_API_SERVER_ADDRESS: the fork's head-node lookup reads the GCS (fix-003)
         "WANDB_RUN_GROUP": run_id,
+        # wandb.init reads tags from here; Miles does not pass any
+        "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"fork:{os.environ.get('MILES_FORK_RELEASE')}",
+                                                       f"commit:{_image_commit()[:10]}"]),
     }
     start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
     succeeded = False
@@ -293,7 +296,8 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
     algo = recipe["algorithm"]
     print(f"run_id={run_id} image={stack.FORK_IMAGE or 'built from ' + FROM_COMMIT[:10]} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "
-          f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE}")
+          f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE} "
+          f"wandb={recipe['tracking']['wandb_entity']}/{R.wandb_project(recipe, run_id)}")
     if check_only:
         check.remote(recipe, run_id)
         print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")

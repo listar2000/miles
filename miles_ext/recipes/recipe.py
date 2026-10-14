@@ -13,6 +13,7 @@ tasks at /inputs/tasks, the prompt file at /inputs/prompts.jsonl, weights at
 import copy
 import json
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,8 @@ DEFAULTS: dict[str, Any] = {
         "max_tokens_per_gpu": 32768,
     },
     "checkpoint": {"save_interval": 10},
-    "tracking": {"wandb_project": "miles-swe-rl", "wandb_entity": "mobiuslab"},
+    # W&B: one project per campaign, named by the recipe (fork/README.md, "W&B projects")
+    "tracking": {"wandb_project": None, "wandb_entity": "mobiuslab", "tags": []},
     "extra_args": [],
 }
 
@@ -122,6 +124,27 @@ def validate(recipe: dict) -> None:
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
     if not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]:
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
+    project = recipe["tracking"]["wandb_project"]
+    if not project or not re.fullmatch(r"miles-[a-z0-9][a-z0-9-]*", project):
+        raise ValueError(f"tracking.wandb_project must name the campaign as miles-<campaign>, got {project!r}")
+    if project in ARCHIVED_PROJECTS or project == SMOKE_PROJECT:
+        raise ValueError(f"tracking.wandb_project {project!r} is reserved (archive or smoke runs)")
+
+
+SMOKE_PROJECT = "miles-smoke"
+SMOKE_PREFIXES = ("smoke-", "debug-")  # run ids that log to SMOKE_PROJECT instead of the recipe's project
+ARCHIVED_PROJECTS = ("miles-swe-rl",)  # history from before this convention; no new runs
+
+
+def wandb_project(recipe: dict, run_id: str) -> str:
+    return SMOKE_PROJECT if run_id.startswith(SMOKE_PREFIXES) else recipe["tracking"]["wandb_project"]
+
+
+def wandb_tags(recipe: dict) -> list[str]:
+    """Tags every run carries; the launcher adds the fork release and commit."""
+    return [f"recipe:{recipe['name']}", f"model:{recipe['model']['preset']}",
+            f"sandbox:{recipe['sandbox']['provider']}", f"harness:{recipe['taskset']['harness']}",
+            *recipe["tracking"]["tags"]]
 
 
 SHAPE_KEYS = ("gpu", "nodes", "cpu", "memory_gib", "timeout_hours")
@@ -243,7 +266,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --use-dynamic-batch-size --max-tokens-per-gpu {algo["max_tokens_per_gpu"]}
         {placement}
 
-        --use-wandb --wandb-project {tracking["wandb_project"]} --wandb-group {run_id}
+        --use-wandb --wandb-project {wandb_project(recipe, run_id)} --wandb-group {run_id}
         {f"--wandb-team {tracking['wandb_entity']}" if tracking["wandb_entity"] else ""}
         """
     )

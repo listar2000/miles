@@ -148,6 +148,14 @@ A change to training code also needs a short run (a two-step smoke with
 `--save-interval 1`, then the same run id again to test resume). A change to a
 recipe or harness needs that recipe's run.
 
+## W&B projects
+
+Every recipe sets `tracking.wandb_project: miles-<campaign>` (entity
+`mobiuslab`); a new purpose, model family or sandbox provider gets a new
+project. Use run ids starting with `smoke-` or `debug-` for smoke and debug
+runs: they go to `miles-smoke`. Never log to `miles-swe-rl` (archive). Details:
+`fork/README.md` "W&B projects".
+
 ## Syncing to a new upstream release
 
 ```bash

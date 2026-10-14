@@ -27,5 +27,5 @@ algorithm:
 checkpoint:
   save_interval: 10
 tracking:
-  wandb_project: miles-swe-rl
+  wandb_project: miles-fork-validation
   wandb_entity: mobiuslab
