@@ -60,8 +60,8 @@ if RECIPE is not None:
 
 
 def _image_commit() -> str:
-    return subprocess.run(["git", "-C", str(stack.MILES_SRC), "rev-parse", "HEAD"], capture_output=True,
-                          text=True).stdout.strip()
+    # set by fork/docker/build.py; /root/miles/.git still describes the upstream checkout under our layer
+    return os.environ.get("MILES_FORK_COMMIT", "unknown")
 
 
 def _wait_for_port(host: str, port: int, timeout: float):
@@ -137,6 +137,26 @@ def check(recipe: dict, run_id: str):
             "num_rollout", "save_interval", "tito_model", "sglang_tool_call_parser", "wandb_team"]
     print({k: getattr(parsed, k, None) for k in keys})
     print("check: ok")
+
+
+@app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume}, cpu=4, memory=16384, timeout=900)
+def check_cpu(recipe: dict, run_id: str):
+    """Can Miles' argument validation run without a GPU? (the platform wants to validate specs cheaply)"""
+    import sys
+    import traceback
+
+    os.chdir(stack.MILES_SRC)
+    sys.argv = [R.entrypoint(recipe), *R.miles_args(recipe, run_id, resume=False)]
+    try:
+        from miles.utils.arguments import parse_args
+
+        parsed = parse_args()
+        print("parse_args without a GPU: ok", {k: getattr(parsed, k, None) for k in ("train_backend", "fully_async")})
+        return True
+    except BaseException:
+        print("parse_args without a GPU failed:")
+        traceback.print_exc()
+        return False
 
 
 @app.function(
@@ -255,5 +275,6 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
           f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE}")
     if check_only:
         check.remote(recipe, run_id)
+        print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")
         return
     print(f"done: {train.spawn(recipe, run_id).get()}")
