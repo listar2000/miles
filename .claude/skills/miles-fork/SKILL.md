@@ -24,8 +24,11 @@ python fork/tools/ledger.py check    # must say "ledger check: ok" before and af
 cat fork/patches/README.md           # the changes that have pages
 ```
 
-Work on a branch off `fork/<tag>` and land it as a fast-forward. Never merge
-upstream into a fork branch; never commit to `main` (a mirror of upstream).
+Work on a branch `fork/<tag>-<topic>` off `fork/<tag>`, land it as a
+fast-forward, then delete the work branch. Never merge upstream into a fork
+branch, and never push upstream branches or tags here (the allowed refs are in
+`fork/README.md` "Branches and releases"). If `upstream` is not a remote yet:
+`git remote add upstream https://github.com/radixark/miles`.
 
 ## Pick the kind of change
 

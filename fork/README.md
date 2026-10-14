@@ -8,11 +8,20 @@ Agents: `.claude/skills/miles-fork/SKILL.md` is the step-by-step workflow.
 
 ## Branches and releases
 
+This repository is standalone, not a GitHub fork: it holds only our refs, and
+upstream is reached as a git remote (`git remote add upstream
+https://github.com/radixark/miles`). Only these refs may exist here:
+
 | Ref | What |
 | --- | --- |
-| `main` | upstream's `main`, untouched (a mirror; never commit here) |
-| `fork/<upstream tag>` | a release line: that upstream tag plus our series, e.g. `fork/v0.1.2` |
+| `fork/<upstream tag>` | a release line: that upstream tag plus our series, e.g. `fork/v0.1.2`; the newest is the default branch |
+| `fork/<upstream tag>-<topic>` | a work branch off a release line; deleted once it lands (fast-forward) |
 | tag `fork-<upstream tag>-r<N>` | a released commit; the Docker Hub image has the same tag |
+| tag `<upstream tag>` | the upstream tag a release line is based on, e.g. `v0.1.2` (same object as upstream's) |
+| tag `archive/<name>` | history we replaced but keep reachable, e.g. `archive/fork-v0.1.2-dev` |
+
+No upstream branches (not even `main`) and no other upstream tags: fetch those
+from `upstream` when needed, never push them here.
 
 Upstream is never merged into a release line. Moving to a newer upstream
 release creates a new line by rebasing the series (see Sync). Release tags
