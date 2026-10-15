@@ -66,7 +66,7 @@ Two smaller decisions:
 | `miles_ext/harbor/sail/__init__.py` | `SailEnvironment(harbor_sail.SailEnvironment)`: `type()` returns `"sail"`, the caps (an override of `_create_sailbox` that adds only `**caps` to the create call), and `terminate_app_sailboxes(app)` |
 | `miles_ext/harbor/agent_function.py`, `upstream.py` | the `HARBOR_ENV_IMPORT_PATH` environment config |
 | `miles_ext/recipes/recipe.py` | `sandbox.provider` is `modal` or `sail`. For Sail it sets `HARBOR_ENV_IMPORT_PATH` and kwargs `{app_name, max_lifetime_secs, idle_secs}`, and sends no resource policy (Sail sizes are fixed and billed by observed usage; a `limit` policy would fail every trial) |
-| `miles_ext/launch/modal_app.py` | at exit, terminates every Sailbox in the run's app `miles-fork-sbx-<run_id>`, sleeping ones included; the dry check runs the provider's preflight and resource-policy validation |
+| `miles_ext/launch/modal_app.py` | at exit, terminates every Sailbox in the run's app `miles-mobius-<run_id>` (`miles-fork-sbx-<run_id>` before ext-005's rename), sleeping ones included; the dry check runs the provider's preflight and resource-policy validation |
 | `miles_ext/stack.py`, `fork/docker/build.py` | one deps install line for both image paths, now with `sail==0.13.0`. The pin is exact because the vendored file imports SDK internals (`sail._core_client`, `sail.image`) |
 
 **Image.** This needs a new deps layer. `fork-v0.1.2-r1` has no Sail SDK, so

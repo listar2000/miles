@@ -41,6 +41,9 @@ RESULTS = Path("/results")
 TASKS = Path("/inputs/tasks")
 PROMPTS = Path("/inputs/prompts.jsonl")
 
+DEFAULT_APP_PREFIX = "miles-mobius-"  # sandbox app = <prefix><run_id>
+LEGACY_APP_PREFIXES = ("miles-fork-sbx-",)  # default before 2026-10-15; cleanup still looks there
+
 DEFAULTS: dict[str, Any] = {
     "name": "",
     # backend None: the preset's (fsdp); "megatron" needs the preset's megatron_model_type
@@ -68,7 +71,7 @@ DEFAULTS: dict[str, Any] = {
         "resource_policy": "limit",
         # sandbox app = app_prefix + run_id; callers that scope cleanup by name
         # (the platform's mdev-/mrl- prefixes) set their own prefix
-        "app_prefix": "miles-fork-sbx-",
+        "app_prefix": DEFAULT_APP_PREFIX,
     },
     "algorithm": {
         "mode": "fully_async",  # or "sync" (colocated)
@@ -268,6 +271,15 @@ def sandbox_app_name(recipe: dict, run_id: str) -> str:
     if len(name) > APP_NAME_MAX:
         raise ValueError(f"sandbox app name {name!r} is longer than {APP_NAME_MAX}; shorten the run id or prefix")
     return name
+
+
+def sandbox_app_names_for_cleanup(recipe: dict, run_id: str) -> list[str]:
+    """The run's sandbox app plus the names earlier fork versions gave the same run id,
+    so a run started before a rename and resumed after it still leaves nothing behind."""
+    names = [sandbox_app_name(recipe, run_id)]
+    if recipe["sandbox"]["app_prefix"] == DEFAULT_APP_PREFIX:
+        names += [p + run_id for p in LEGACY_APP_PREFIXES if len(p + run_id) <= APP_NAME_MAX]
+    return names
 
 
 def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
