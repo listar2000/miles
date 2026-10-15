@@ -157,13 +157,13 @@ def test_retention_local(tmp_path):
     run = tmp_path / "run1"
     for sub, steps in (("checkpoints", (10, 20)), ("hf", (10, 20))):
         for s in steps:
-            (run / sub / C.iter_dir(s)).mkdir(parents=True)
+            (run / sub / C.iter_dir(s) / "model").mkdir(parents=True)
     (run / "checkpoints" / "latest_checkpointed_iteration.txt").write_text("20")
     (run / "checkpoints" / "rollout").mkdir()
     (run / "trials").mkdir()
     C.apply_retention_local(run, keep=1, keep_final_full=False, final=True)
     left = sorted(str(p.relative_to(run)) for p in run.rglob("*") if p.is_dir())
-    assert left == ["checkpoints", "checkpoints/rollout", "hf", "hf/iter_0000020", "trials"]
+    assert left == ["checkpoints", "checkpoints/rollout", "hf", "hf/iter_0000020", "hf/iter_0000020/model", "trials"]
 
 
 def test_delete_refuses_resume_point(monkeypatch):

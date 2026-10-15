@@ -1,4 +1,4 @@
-# ext-006: platform API (miles_ext.platform): validate, teardown, per-run secret, weights cache, checkpoints
+# ext-006: platform API (miles_ext.platform): validate, launch, observe, teardown, per-run secret, weights cache, checkpoints
 
 ## Why
 The platform (Line 2, "Platform–Trainer Interface",
@@ -6,7 +6,7 @@ https://claude.ai/artifact/CiiRmYMbbAsM7Kv8KGMXi6) supervises runs it does not
 understand: every Miles and Harbor detail stays in the fork, behind a few calls
 that take a `target` (where the run's resources live). This page covers the
 design's fork requirements R2, R4, R7, R8 and R9, plus a minimal R1 (schema).
-R3 (`launch`), R5/R6 (`observe`, supervisor, exit record) come in r4.
+r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
 
 ## Decision
 - **Target** (`target.py`): `modal_environment`, `app_name` (GPU app),
@@ -59,6 +59,29 @@ R3 (`launch`), R5/R6 (`observe`, supervisor, exit record) come in r4.
   secret (a platform caller) it leaves checkpoints to the caller, which runs
   `finalize_hf` and then its own retention with its pinned steps
   (`MILES_FINAL_RETENTION=1/0` overrides; r4 fix of two r3 bugs found by the platform).
+- **R3 launch** (`launch.py`): `launch(recipe, run_id, target, *, segment_seconds,
+  lease_seconds, inputs, from_commit, final_retention)` spawns one detached segment and
+  returns `{launched, complete, app_id, call_id, names, timeout}`. Modal binds a
+  clustered function's shape at definition, so launch runs the test launcher module in
+  a child interpreter with the configuration in `MILES_EXT_LAUNCH`; the caller reads no
+  env. It returns without spawning when the run is already complete.
+- **Completion** (`progress.py`): from `latest_checkpointed_iteration.txt` and
+  `num_rollout` alone. FSDP names a save after the next rollout (`iter_{id+1}`),
+  Megatron after the completed one, so `next_rollout_id` is per backend. The trainer
+  also checks it on every rank before Ray starts, so a relaunch of a finished run costs
+  a container start (r5 fix: a Stage 3 run relaunched once after its final save,
+  because the platform's timer killed the container before that save was committed).
+- **R5 supervisor** (`supervisor.py`, rank 0): runs Miles as a child; commits the
+  results volume after every save; touches `--save-trigger-sentinel` before the
+  segment deadline (counted from container start) or lease expiry, waits for Miles to
+  remove it (save written), stops Miles and exits cleanly; stops Miles on SIGTERM;
+  heartbeat with step and Miles metrics (from `{save}/events/*.jsonl`) to the Dict
+  `<ns>progress` key `run:<run_id>`; lease at `lease:<run_id>` (`renew_lease`).
+  Worker nodes commit every 2 min so their shards reach the volume. `observe`
+  reads it back with completion and checkpoints.
+- **R6 exit record**: `<run>/exit.json`, `<run>/exits.jsonl` and Dict `exit:<run_id>`,
+  reason `success|segment_end|lease_expired|stopped|oom|nccl_timeout|error`, with
+  `retryable`, `complete` and the output tail on failure. Teardown deletes the Dict keys.
 - **R1 (minimal)** (`schema.py`): JSON Schema derived from `recipe.DEFAULTS`,
   defaults, presets, reserved flags, namespaces. The full spec model is r4.
 
@@ -94,4 +117,4 @@ Live checks on the dev environment are in the r3 release note.
 
 ## Remove when
 Not an upstream gap: this is our platform's API. It changes with the platform
-(r4: launch, observe, supervisor, exit record).
+(r5: launch, observe, supervisor, exit record).

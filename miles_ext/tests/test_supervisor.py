@@ -178,3 +178,33 @@ def test_trainer_short_circuits_on_every_rank():
     body = src[src.index("def train("):]
     assert body.index("P.is_complete(") < body.index("if rank != 0:")
     assert '"--save-trigger-sentinel", SENTINEL' in body
+
+
+def test_event_tail_follows_a_replaced_file(tmp_path):
+    """On resume Miles swaps in the events snapshot from the loaded save; new events still count."""
+    def line(step, ts):
+        return json.dumps({"type": "metric", "timestamp": ts, "metrics": {"rollout/step": step, "train/loss": step}})
+    ev = tmp_path / "events"
+    ev.mkdir()
+    f = ev / "rollout_executor.jsonl"
+    f.write_text("\n".join(line(i, "2026-10-15T04:00:00Z") for i in range(5)) + "\n")
+    tail = SUP._EventTail(ev, since=time.time() - 60)
+    tail.poll()
+    assert tail.step is None  # earlier segments: skipped
+    f.unlink()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    f.write_text(line(1, "2026-10-15T04:00:00Z") + "\n" + line(2, now) + "\n")  # shorter, new inode
+    tail.poll()
+    assert tail.step == 2 and tail.metrics["train/loss"] == 2
+
+
+def test_event_snapshot_dir_is_not_a_save(tmp_path):
+    C = importlib.import_module("miles_ext.platform.checkpoints")
+    run = tmp_path / "run1"
+    (run / "checkpoints" / "iter_0000000" / "debug_events").mkdir(parents=True)  # FSDP: rollout 0's snapshot
+    for step in (1, 2):
+        (run / "checkpoints" / f"iter_{step:07d}" / "model").mkdir(parents=True)
+    (run / "checkpoints" / "latest_checkpointed_iteration.txt").write_text("2")
+    dropped = C.apply_retention_local(run, keep=1, keep_final_full=True, final=False)
+    assert [(d["kind"], d["step"]) for d in dropped] == [("full", 1)]
+    assert (run / "checkpoints" / "iter_0000000").exists()

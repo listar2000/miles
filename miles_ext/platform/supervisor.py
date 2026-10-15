@@ -77,21 +77,16 @@ def trigger_at(deadline: float | None, lease_expires: float | None, step_secs: f
     return end - min(margin, MAX_MARGIN_FRACTION * max(0.0, end - started))
 
 
-def _size(path: Path) -> int:
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
 class _EventTail:
-    """Reads new lines from Miles' event files on each poll (they are appended, never rewritten
-    while Miles runs). Only files on this container's mount are seen: on a multi-node run an
-    actor on another node shows up when that node commits."""
+    """Reads new lines from Miles' event files on each poll. Miles appends to them, but on a
+    resume it replaces the events directory with the snapshot taken at the save it loads
+    (event_logger/checkpoint.py), so a file is followed by inode and read again from the start
+    when it changes; events from before ``since`` (earlier segments) are skipped. Only files on
+    this container's mount are seen: on a multi-node run an actor on another node shows up
+    when that node commits."""
 
-    def __init__(self, events_dir: Path):
-        # start at the current end: earlier segments' events are already reported
-        self.dir, self.offsets = events_dir, {n: _size(events_dir / n) for n in _EVENT_FILES}
+    def __init__(self, events_dir: Path, since: float = 0.0):
+        self.dir, self.since, self.offsets, self.inodes = events_dir, since, {}, {}
         self.metrics: dict = {}
         self.step: int | None = None
         self.step_ends: list[float] = []
@@ -101,6 +96,9 @@ class _EventTail:
         for name in _EVENT_FILES:
             path = self.dir / name
             try:
+                st = path.stat()
+                if self.inodes.get(name) != st.st_ino or st.st_size < self.offsets.get(name, 0):
+                    self.inodes[name], self.offsets[name] = st.st_ino, 0
                 with path.open("rb") as f:
                     f.seek(self.offsets.get(name, 0))
                     data = f.read()
@@ -115,7 +113,10 @@ class _EventTail:
     def _event(self, line: bytes):
         try:
             e = json.loads(line)
-        except ValueError:
+            ts = datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+        except (ValueError, KeyError, AttributeError):
+            return
+        if ts < self.since:
             return
         if e.get("type") == "metric":
             m = e.get("metrics") or {}
@@ -125,10 +126,6 @@ class _EventTail:
             if isinstance(m.get("rollout/step"), int):
                 self.step = max(self.step or 0, m["rollout/step"])
         elif e.get("type") == "train_group_step_end":
-            try:
-                ts = datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
-            except (KeyError, ValueError):
-                return
             self.step_ends.append(ts)
 
     def step_secs(self, since: float) -> float | None:
@@ -146,8 +143,8 @@ class Supervisor:
         self.segment, self.deadline, self.commit, self.image = segment, deadline, commit, image
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)
-        self.events = _EventTail(self.run_dir / "checkpoints" / "events")
         self.started = time.time()
+        self.events = _EventTail(self.run_dir / "checkpoints" / "events", since=self.started)
         self.phase = "starting"
         self.sigterm = threading.Event()
         self.save_requested: tuple[float, str] | None = None  # (when, why)

@@ -23,6 +23,9 @@ from miles_ext.recipes import recipe as R
 
 KINDS = {"full": "checkpoints", "hf": "hf"}
 ITER_RE = r"iter_(\d{7})"
+# Miles' rollout executor snapshots its event log into <save>/iter_{rollout_id}/debug_events at
+# each save; FSDP names its save iter_{rollout_id + 1}, so an FSDP run has dirs holding only that
+NOT_A_SAVE = {"debug_events"}
 
 
 def iter_dir(step: int) -> str:
@@ -65,6 +68,8 @@ def list_checkpoints(run_id: str, target: Target | dict | None, *, sizes: bool =
             m = re.fullmatch(ITER_RE, e.path.rstrip("/").split("/")[-1])
             if m:
                 path = checkpoint_path(run_id, int(m.group(1)), kind)
+                if not {c.path.rstrip("/").rsplit("/", 1)[-1] for c in volume.listdir(path)} - NOT_A_SAVE:
+                    continue
                 out.append({"step": int(m.group(1)), "kind": kind, "path": path,
                             "bytes": _bytes(volume, path) if sizes else None})
     return sorted(out, key=lambda c: (c["kind"], -c["step"]))
@@ -146,7 +151,7 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
     saves = []
     for kind, sub in KINDS.items():
         for d in sorted((run_dir / sub).glob("iter_*")) if (run_dir / sub).is_dir() else []:
-            if d.is_dir() and (m := re.fullmatch(ITER_RE, d.name)):
+            if d.is_dir() and (m := re.fullmatch(ITER_RE, d.name)) and {c.name for c in d.iterdir()} - NOT_A_SAVE:
                 saves.append({"step": int(m.group(1)), "kind": kind, "path": str(d)})
     latest_file = run_dir / "checkpoints" / "latest_checkpointed_iteration.txt"
     try:
