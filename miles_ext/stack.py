@@ -39,5 +39,5 @@ MILES_SRC = Path("/root/miles")
 
 # Published fork image (fork/docker/build.py prints the digest after a push). Release tags are fork-<upstream tag>-r<N>, so they never match
 # upstream's release-docker trigger (v[0-9]+.*).
-FORK_RELEASE = "fork-v0.1.2-r2"
-FORK_IMAGE = "docker.io/starlimobius/miles:fork-v0.1.2-r2@sha256:0105b9872baaa4cc2cedb76a74142604bb25249361f319df40221da5c650aad7"  # built from 7193e172d7
+FORK_RELEASE = "fork-v0.1.2-r3"
+FORK_IMAGE = "docker.io/starlimobius/miles:fork-v0.1.2-r3@sha256:bfc8411c0a77cdc371f59b6d9cd9de90446053a27f231447ecdefbcef6c193d4"  # built from 851c8bc358
