@@ -460,6 +460,16 @@ def test_async_bounds_follow_miles():
     assert errs[0]["path"] == "async.max_concurrent_samples"
 
 
+@pytest.mark.parametrize("name", sorted(p.name for p in (ROOT / "miles_ext/recipes/configs").glob("*.yaml")))
+@pytest.mark.parametrize("pause", R.PAUSE_GENERATION)
+def test_v1_session_server_keeps_one_radix_cache(name, pause):
+    # Miles' namespaced radix cache (its default for fully async in_place) asserts
+    # --use-session-server v2; the recipes run v1, so parse_args failed without the opt-out
+    argv = _argv(_recipe(name, **{"async": {"pause_generation": pause}}))
+    after = argv[argv.index("--use-session-server") + 1]
+    assert after.startswith("--") and "--no-namespaced-radix-cache" in argv
+
+
 def test_field_errors_report_every_field():
     errs = V.instant_errors(_recipe(algorithm={"lr": "1e-6", "num_rollout": 0}), "run1", DEV)
     assert {e["path"] for e in errs} == {"algorithm.lr", "algorithm.num_rollout"}

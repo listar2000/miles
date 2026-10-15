@@ -519,6 +519,10 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         # trajectories in flight, weights pushed after every step, in-flight
         # requests frozen in place across the push, groups more than
         # max_weight_staleness versions old dropped. TIS corrects the rest.
+        # Miles defaults in_place to a radix cache namespaced per rollout call,
+        # which needs --use-session-server v2; on v1 the argv passes
+        # --no-namespaced-radix-cache and keeps one shared cache, as before
+        # upstream af4413b74.
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
         --rollout-num-gpus {total_gpus - int(cluster["train_gpus"])} --num-gpus-per-node {GPUS_PER_NODE}
@@ -564,6 +568,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted
         --tito-model {preset.tito_model}
         --use-session-server --session-server-port {SESSION_PORT} --session-server-workers {SESSION_WORKERS}
+        --no-namespaced-radix-cache
         --pin-rollout-manager-to-head
 
         --rollout-num-gpus-per-engine 1
