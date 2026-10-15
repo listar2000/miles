@@ -20,6 +20,7 @@ https://github.com/radixark/miles`). Only these refs may exist here:
 | `<topic>` | a work branch off `main`; lands on `main` by fast-forward, then is deleted |
 | tag `stable-YYYY-MM-DD` | a stable version: annotated, on the commit whose tree is in the image; the image has the same tag. A second one on the same day is `stable-YYYY-MM-DD.2` |
 | tag `<upstream tag>` | an upstream release we merged, e.g. `v0.1.2` (same object as upstream's) |
+| (no ref) | an untagged upstream commit we merged between releases is named only by `stack.UPSTREAM_BASE` |
 | `fork/v0.1.2`, tags `fork-v0.1.2-r1..r6`, `archive/*` | the old release line and its releases, frozen: no new commits or tags, never moved or deleted |
 
 No upstream branches and no other upstream tags: fetch those from `upstream`
@@ -62,7 +63,7 @@ Rules for **fixes and hooks** (enforced by `ledger.py check`):
 - Trailers: `Touches:` (the upstream files), `Evidence:` (the failure it fixes),
   `Upstream-Status:` (not filed / PR link / merged in vX), `Remove-When:`.
 - No ordering rule: with merges there is no replay order, so a fix lands
-  on `main` like any other commit (but see "Not yet in the tools").
+  on `main` like any other commit.
 
 Rules for **extensions**: new files under `miles_ext/` only, plugged in
 through Miles' own extension points (`--custom-generate-function-path`,
@@ -71,7 +72,7 @@ Harbor's `import_path` for agents and environments. If an extension needs a
 hook that does not exist, add a Hook commit with the smallest possible change
 rather than editing upstream code from the extension's commit.
 
-`python fork/tools/ledger.py markdown` prints our commits since the base tag as a table.
+`python fork/tools/ledger.py markdown` prints our commits since the upstream base as a table.
 
 ## Patch pages
 
@@ -258,7 +259,7 @@ new project.
   above is for hand-launched runs.
 - Tags are set for every run: `recipe:`, `model:`, `sandbox:`, `harness:`,
   `miles-mobius:<trainer>` (`latest`, `stable-YYYY-MM-DD`, or the image's version
-  when launched by hand), `upstream:<tag>` and `commit:<sha10>`, plus any in
+  when launched by hand), `upstream:<tag>` (`<tag>+<sha10>` when `main` is past the tag) and `commit:<sha10>`, plus any in
   `tracking.tags` (the platform adds `env:` and `project:`). Runs before
   2026-10-15 carry `fork:<release>` instead of `miles-mobius:` and `upstream:`.
   Filter by these instead of encoding them in run names.
@@ -272,11 +273,23 @@ commit callers pinned, and `main` cannot be force-pushed.
 git fetch upstream --tags
 python fork/tools/sync.py v0.1.3 --dry-run   # which fixes and hooks may conflict; upstream diff of REVIEW_PATHS
 git checkout -b sync-v0.1.3 main
-git merge --no-commit v0.1.3                 # conflicts can only be in files fixes and hooks touch
-# set UPSTREAM_TAG and BASE_IMAGE (the new tag's image digest) in miles_ext/stack.py, then:
-git commit --trailer "Fork-Infra: sync-v0.1.3"   # the merge commit carries the resolution and the stack bump
+git merge --no-commit v0.1.3                # conflicts only where fixes and hooks touch
+git commit -m "sync: merge upstream v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
+# in miles_ext/stack.py: UPSTREAM_TAG and UPSTREAM_BASE = "v0.1.3", BASE_IMAGE = the tag's image by digest
+git commit -am "stack: base image for v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
 python fork/tools/ledger.py check
 ```
+
+**Between releases.** Prefer release tags; take upstream `main` only when a
+change we need is there, and then only a commit that a published upstream
+image was built from (today the `radixark/miles:dev` builds; the commit is in
+the image's `/root/miles/.git`), so code and image match. The merge carries
+`Fork-Infra: sync-<sha9>`; `UPSTREAM_BASE` becomes that commit and
+`BASE_IMAGE` that image by digest, while `UPSTREAM_TAG` stays the newest
+merged release tag. The ledger and the image's whiteouts diff against
+`UPSTREAM_BASE`; image labels and W&B tags show `UPSTREAM_LABEL`
+(`v0.1.2+af4413b74f`). The 2026-10-15 merge of upstream `af4413b74` is the
+example (`sync-af4413b74`).
 
 Only `--dry-run` of `sync.py` fits this flow; without it the tool still runs
 the old rebase onto a new `fork/<tag>` branch (see "Not yet in the tools").
@@ -295,17 +308,13 @@ that upstream now ships), read the `REVIEW_PATHS` diff for API drift in what
 
 RFC 0001 changes some tools as well as these rules. Until those changes land:
 
-- `ledger.py check` still enforces "fixes and hooks come first" and fails on
-  a fix or hook after an infra or ext commit. On `main` that means the first
-  new fix fails the check; drop that rule from `ledger.py` before landing one,
-  never reorder `main`.
-- `ledger.py` reads its base from `stack.UPSTREAM_TAG`, so a sync merge must
-  bump it in the same merge commit.
 - When a sync drops a fix because upstream fixed the bug, the old fix commit
   still declares its file in `Touches:` and `check` will ask for its marker;
   `ledger.py` has to learn to skip fixes a sync retired.
 - `sync.py` without `--dry-run` rebases and rewrites `FORK_RELEASE` and
-  `FORK_IMAGE`; do the merge by hand as above.
+  `FORK_IMAGE`; do the merge by hand as above. Its `--dry-run` still compares
+  against `UPSTREAM_TAG`, so after a between-releases sync it also lists
+  upstream changes `main` already has.
 - `stack.FORK_RELEASE` and `stack.FORK_IMAGE` still name r6 and stay
   frozen: they are what the platform runs until it resolves versions, and
   `validate`'s deep check, `finalize_hf` and the weights download still use

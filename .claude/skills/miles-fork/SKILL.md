@@ -66,11 +66,8 @@ separate Hook commit; never edit upstream code from an Ext commit.
    Remove-When: <the upstream condition that makes it unnecessary>
    ```
 
-4. There is no ordering rule any more (merges have no replay order), but
-   `ledger.py check` still enforces the old "fixes and hooks first" rule
-   until the tool catches up (`fork/README.md` "Not yet in the tools"). If it
-   fails only on that, change `ledger.py` in its own Infra commit first;
-   never reorder or rewrite `main`.
+4. There is no ordering rule (merges have no replay order): the commit lands
+   on `main` like any other. Never reorder or rewrite `main`.
 5. File it upstream when you can: every fix upstream accepts is one the next
    sync drops.
 
@@ -137,7 +134,7 @@ choice someone may revisit. Optional for a small, obvious fix.
 ## Check before pushing
 
 ```bash
-python fork/tools/ledger.py check      # kinds, trailers, markers, order, touch points, vendored blobs
+python fork/tools/ledger.py check      # kinds, trailers, markers, touch points, vendored blobs
 git log --format='%h %s%n%(trailers:only)' <base>..HEAD | head -40   # eyeball the trailers
 ```
 
@@ -170,11 +167,17 @@ Merge, never rebase. Details: `fork/README.md` "Sync".
 git fetch upstream --tags
 python fork/tools/sync.py v0.1.3 --dry-run   # which fixes and hooks may conflict; upstream diff of what miles_ext uses
 git checkout -b sync-v0.1.3 main
-git merge --no-commit v0.1.3
-# resolve conflicts; set UPSTREAM_TAG and BASE_IMAGE in miles_ext/stack.py
-git commit --trailer "Fork-Infra: sync-v0.1.3"
+git merge --no-commit v0.1.3                # resolve conflicts, then:
+git commit -m "sync: merge upstream v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
+# in miles_ext/stack.py set UPSTREAM_TAG, UPSTREAM_BASE and BASE_IMAGE (by digest)
+git commit -am "stack: base image for v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
 python fork/tools/ledger.py check
 ```
+
+Between releases, merge an upstream `main` commit only when we need a change
+there, and only one a published upstream image was built from
+(`radixark/miles:dev`): trailer `sync-<sha9>`, `UPSTREAM_BASE` = that commit,
+`BASE_IMAGE` = that image, `UPSTREAM_TAG` unchanged.
 
 Don't run `sync.py` without `--dry-run`: it still does the old rebase onto a
 `fork/<tag>` branch. On a conflict (only in files fixes and hooks touch), read

@@ -2,8 +2,8 @@
 
 Status: accepted 2026-10-15; steps 1-3 of Order done (Actions off, `main` default, `stable-2026-10-15`).
 Folded into the rulebook (`fork/README.md`) and skill
-(`.claude/skills/miles-fork/SKILL.md`) on 2026-10-15; the ledger and sync tool
-changes are still open (rulebook, "Not yet in the tools"). Nothing here deletes or moves a tag or an
+(`.claude/skills/miles-fork/SKILL.md`) on 2026-10-15; the ledger rewrite is
+done, the sync tool change is still open (rulebook, "Not yet in the tools"). Nothing here deletes or moves a tag or an
 image, and the platform keeps running r6 (`stack.FORK_IMAGE`) until it opts in.
 
 ## What is decided
