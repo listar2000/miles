@@ -235,6 +235,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     import ray
 
     from miles_ext.platform import progress as P
+    from miles_ext.platform import shards
     from miles_ext.platform.supervisor import SENTINEL, Supervisor, write_exit_record
     from miles_ext.platform.validate import _inputs
 
@@ -297,10 +298,13 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     stack_ctx = contextlib.ExitStack()
     try:
         if rank != 0:
-            # this node's checkpoint shards (Megatron) reach the volume only when it commits
+            # this node's checkpoint shards (Megatron) reach the volume only when it commits:
+            # on rank 0's request before it commits a new tracker, and on a timer
             stop = threading.Event()
             stack_ctx.callback(stop.set)
-            threading.Thread(target=_commit_every, args=(stop, WORKER_COMMIT_SECS), daemon=True).start()
+            threading.Thread(target=shards.worker_commits, daemon=True, args=(
+                run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
+                kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
             _wait_for_port(head_ip, 6379, timeout=600)
             subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
             if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
@@ -316,8 +320,10 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
                         "resume": resume, "segment": segment, "deadline": deadline, "recipe": recipe,
                         "argv": args}, indent=1)
         )
+        commit = shards.head_commit(run_id, nodes, P.progress_dict(TARGET), completion_queue, results_volume.commit,
+                                    key=P.keys(run_id)["commit"])
         supervisor = Supervisor(run_id, recipe, run_dir, progress_dict=P.progress_dict(TARGET), segment=segment,
-                                deadline=deadline, commit=results_volume.commit, image=_image_info(),
+                                deadline=deadline, commit=commit, image=_image_info(),
                                 backend=backend, call_id=modal.current_function_call_id())
         supervisor.heartbeat()
         if R.needs_tunnel(recipe):
@@ -338,6 +344,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         # a segment whose workers died before reading leaves items behind; workers read only after
         # the head's port opens, so clearing here, before the head starts, is safe
         completion_queue.clear(partition=run_id)
+        completion_queue.clear(partition=shards.ack_partition(run_id))
         subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600
@@ -377,14 +384,6 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
             _terminate_task_sandboxes(recipe, run_id)
             for _ in range(nodes - 1):
                 completion_queue.put(succeeded, partition=run_id)
-
-
-def _commit_every(stop, secs: float):
-    while not stop.wait(secs):
-        try:
-            results_volume.commit()
-        except Exception as e:
-            print(f"periodic commit: {type(e).__name__}: {e}", flush=True)
 
 
 def _overrides(num_rollout: int, rollout_batch_size: int, n_samples: int, save_interval: int) -> dict:

@@ -11,12 +11,15 @@ which the existing recipes use; ``list_weights`` reports those as ``legacy``).
 
 Concurrent prepares of one key take a lock in the Modal Dict
 ``<weights_volume>-locks``: the first writes the snapshot, the others wait for
-its ``.ready``. A lock older than ``LOCK_STALE_SECS`` is taken over.
+its ``.ready``. The holder refreshes the lock every ``LOCK_REFRESH_SECS`` while its
+download runs, so a lock not refreshed for ``LOCK_STALE_SECS`` belongs to a prepare
+that died and is taken over.
 """
 
 import io
 import json
 import re
+import threading
 import time
 import uuid
 
@@ -27,7 +30,8 @@ from miles_ext.recipes import recipe as R
 
 KEY_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*--[A-Za-z0-9][A-Za-z0-9._-]*/[0-9a-f]{40}"
 READY = ".ready"
-LOCK_STALE_SECS = 2 * 3600
+LOCK_REFRESH_SECS = 5 * 60
+LOCK_STALE_SECS = 30 * 60
 
 
 def weights_key(hf_repo: str, revision: str) -> str:
@@ -95,6 +99,8 @@ def prepare_weights(hf_repo: str, revision: str | None, target: Target | dict | 
         if marker := _ready(volume, key):
             return {"key": key, "path": str(R.MODELS / key), "ready": True, "bytes": marker.get("bytes"),
                     "prepared": False}
+    stop = threading.Event()
+    threading.Thread(target=_refresh_lock, args=(locks, key, owner, stop), daemon=True).start()
     try:
         from miles_ext.platform import functions
 
@@ -107,8 +113,21 @@ def prepare_weights(hf_repo: str, revision: str | None, target: Target | dict | 
             batch.put_file(io.BytesIO(json.dumps(marker).encode()), f"{key}/{READY}")
         return {"key": key, "path": str(R.MODELS / key), "ready": True, "bytes": result["bytes"], "prepared": True}
     finally:
+        stop.set()
         if (locks.get(key) or {}).get("owner") == owner:
             locks.pop(key)
+
+
+def _refresh_lock(locks: modal.Dict, key: str, owner: str, stop: threading.Event,
+                  every: float = LOCK_REFRESH_SECS) -> None:
+    """Keep ``ts`` fresh while this owner holds the lock (a download may outlast ``LOCK_STALE_SECS``)."""
+    while not stop.wait(every):
+        try:
+            if (locks.get(key) or {}).get("owner") != owner:
+                return
+            locks[key] = {"owner": owner, "ts": time.time()}
+        except Exception:  # a missed refresh only shortens the margin; the next one retries
+            pass
 
 
 def list_weights(target: Target | dict | None) -> list[dict]:

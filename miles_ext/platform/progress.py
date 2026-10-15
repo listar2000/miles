@@ -7,7 +7,8 @@ Two places hold it, so a reader never depends on the trainer being alive:
   id, then rank 0's heartbeat replaces it every ``HEARTBEAT_SECS``),
   ``active:<run_id>`` (the live segment's call id: at most one segment per run),
   ``lease:<run_id>`` (written by the caller, see ``renew_lease``) and
-  ``exit:<run_id>`` (the exit record); teardown deletes all of them;
+  ``exit:<run_id>`` (the exit record) and ``commit:<run_id>`` (multi-node commit
+  requests, see ``shards``); teardown deletes all of them;
 - the results volume: ``<run_id>/exit.json`` (the newest exit record) and
   ``<run_id>/exits.jsonl`` (one line per segment), next to the checkpoints.
 
@@ -64,7 +65,7 @@ def keys(run_id: str) -> dict:
     if not re.fullmatch(R.RUN_ID_RE, run_id or ""):
         raise ValueError(f"run id {run_id!r}")
     return {"run": f"run:{run_id}", "active": f"active:{run_id}", "lease": f"lease:{run_id}",
-            "exit": f"exit:{run_id}"}
+            "exit": f"exit:{run_id}", "commit": f"commit:{run_id}"}
 
 
 def progress_dict(target: Target, create: bool = True) -> modal.Dict:
@@ -82,6 +83,19 @@ def renew_lease(run_id: str, target: Target | dict | None, ttl_seconds: float) -
     lease = {"expires_at": time.time() + float(ttl_seconds), "renewed_at": time.time()}
     progress_dict(target)[keys(run_id)["lease"]] = lease
     return lease
+
+
+def call_running(call_id: str | None) -> bool:
+    """Whether a Modal function call (a segment) is still running."""
+    if not call_id:
+        return False
+    try:
+        modal.FunctionCall.from_id(call_id).get(timeout=0)
+    except TimeoutError:
+        return True
+    except Exception:  # finished with an error, cancelled, or unknown
+        return False
+    return False
 
 
 def delete_keys(run_id: str, target: Target) -> list[str]:

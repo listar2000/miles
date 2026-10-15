@@ -69,7 +69,7 @@ def test_resource_names_dev():
     assert names["gpu_app"] == "mdev-run1" and names["gpu_app_per_run"]
     assert names["secret"] == "mdev-secret-run1"
     assert names["progress_dict"] == "mdev-progress"
-    assert names["progress_keys"] == ["active:run1", "exit:run1", "lease:run1", "run:run1"]
+    assert names["progress_keys"] == ["active:run1", "commit:run1", "exit:run1", "lease:run1", "run:run1"]
     assert not T.resource_names(_recipe(), "run1", None)["gpu_app_per_run"]  # shared miles-fork: by call id only
 
 
@@ -93,15 +93,44 @@ def test_teardown_is_idempotent(monkeypatch):
     monkeypatch.setattr(T, "_stop_app", lambda ident, env: stopped.append((ident, env)) or "ap-1")
     monkeypatch.setattr(T, "run_secret_exists", lambda run_id, target: secret["exists"])
     monkeypatch.setattr(T, "delete_run_secret", lambda run_id, target: secret.update(exists=False))
-    progress = {"run:run1": {}, "lease:run1": {}, "run:run2": {}}
+    progress = {"run:run1": {}, "lease:run1": {}, "active:run1": {"call_id": "fc-live"}, "run:run2": {}}
+    monkeypatch.setattr(T, "progress_dict", lambda target: progress)
     monkeypatch.setattr(T, "delete_keys", lambda run_id, target: [
-        k for k in (f"run:{run_id}", f"lease:{run_id}", f"exit:{run_id}") if progress.pop(k, None) is not None])
+        k for k in (f"run:{run_id}", f"lease:{run_id}", f"active:{run_id}") if progress.pop(k, None) is not None])
+    cancelled, running, app_state = [], {"fc-live"}, {"mdev-run1": "APP_STATE_DEPLOYED"}
+
+    class Call:
+        def __init__(self, call_id):
+            self.call_id = call_id
+
+        def cancel(self, terminate_containers):
+            cancelled.append(self.call_id)
+
+    monkeypatch.setattr(T.modal.FunctionCall, "from_id", Call)
+    monkeypatch.setattr(T, "call_running", lambda call_id: call_id in running)
+    monkeypatch.setattr(T, "_app_live", lambda ident, env: app_state.get(ident))
     first = T.teardown("run1", _recipe(), DEV)
+    assert cancelled == ["fc-live"]  # from active:run1, though the caller passed no call id
     assert "progress:run:run1" in first["released"] and progress == {"run:run2": {}}
-    assert first["remaining"] == [] and "sandboxes:miles-mobius-run1:3" in first["released"]
+    assert "sandboxes:miles-mobius-run1:3" in first["released"]
+    assert first["remaining"] == ["call:fc-live", "app:mdev-run1:APP_STATE_DEPLOYED"]  # not stopped yet
     assert stopped == [("mdev-run1", "miles-dev")]
-    second = T.teardown("run1", _recipe(), DEV)
+    running.clear(), app_state.clear()
+    second = T.teardown("run1", _recipe(), DEV, call_id="fc-live")
     assert second["remaining"] == [] and not any(r.startswith(("sandboxes", "secret")) for r in second["released"])
+
+
+def test_modal_internals_teardown_uses_exist():
+    """teardown stops apps through Modal internals (the SDK has no public app stop): an SDK
+    upgrade that moves them fails here, not in a run's teardown."""
+    from modal._utils.async_utils import synchronizer
+    from modal.cli.app import resolve_app_identifier
+    from modal.client import _Client
+    from modal_proto import api_pb2
+
+    assert callable(resolve_app_identifier) and hasattr(_Client, "from_env") and synchronizer
+    assert api_pb2.AppStopRequest and api_pb2.APP_STOP_SOURCE_CLI is not None
+    assert {api_pb2.APP_STATE_STOPPED, api_pb2.APP_STATE_STOPPING} and api_pb2.AppState.Name(api_pb2.APP_STATE_STOPPED)
 
 
 def test_unknown_provider_has_no_adapter():
@@ -200,6 +229,23 @@ def test_delete_weights_refuses_locked(monkeypatch):
     monkeypatch.setattr(W, "_locks", lambda target: {f"Qwen--Qwen3.5-9B/{SHA}": {"owner": "x"}})
     with pytest.raises(RuntimeError, match="being prepared"):
         W.delete_weights(f"Qwen--Qwen3.5-9B/{SHA}", DEV)
+
+
+def test_weights_lock_refresh_keeps_owner_fresh():
+    import threading
+    import time
+
+    locks = {"k": {"owner": "me", "ts": 0}}
+    stop = threading.Event()
+    t = threading.Thread(target=W._refresh_lock, args=(locks, "k", "me", stop, 0.05))
+    t.start()
+    time.sleep(0.2)
+    stop.set()
+    t.join(1)
+    assert time.time() - locks["k"]["ts"] < 1
+    locks["k"] = {"owner": "other", "ts": 0}  # taken over: the old owner stops writing
+    W._refresh_lock(locks, "k", "me", threading.Event(), 0.01)
+    assert locks["k"] == {"owner": "other", "ts": 0}
 
 
 def test_model_dir_follows_revision():

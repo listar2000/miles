@@ -18,7 +18,7 @@ Guards (the Modal workspace and the Sail org are shared with other teams):
 
 import modal
 
-from miles_ext.platform.progress import delete_keys, progress_dict_name
+from miles_ext.platform.progress import call_running, delete_keys, progress_dict, progress_dict_name
 from miles_ext.platform.progress import keys as progress_keys
 from miles_ext.platform.secrets import delete_run_secret, run_secret_exists
 from miles_ext.platform.target import Target, gpu_app_is_per_run, run_secret_name
@@ -108,19 +108,36 @@ def resource_names(recipe: dict, run_id: str, target: Target | dict | None) -> d
     }
 
 
-def _stop_gpu(run_id: str, target: Target, call_id: str | None, app_id: str | None) -> list[str]:
+def _gpu_idents(run_id: str, target: Target, app_id: str | None) -> list[str]:
+    """The app by id (from launch) and, when the name is this run's alone, by exact name too:
+    a launch interrupted before it reported its ids still leaves the per-run app findable."""
+    idents = [app_id] if app_id else []
+    if gpu_app_is_per_run(run_id, target):
+        idents.append(target.app_name)
+    return idents
+
+
+def _stop_gpu(run_id: str, target: Target, call_ids: list[str], app_id: str | None) -> list[str]:
     released = []
-    if call_id:
+    for call_id in call_ids:
         try:
             modal.FunctionCall.from_id(call_id).cancel(terminate_containers=True)
             released.append(f"call:{call_id}")
         except modal.exception.NotFoundError:
             pass
-    # the app itself: by id (from launch) or, when the name is this run's alone, by exact name
-    ident = app_id or (target.app_name if gpu_app_is_per_run(run_id, target) else None)
-    if ident and (stopped := _stop_app(ident, target.modal_environment)):
-        released.append(f"app:{target.app_name}:{stopped}")
+    for ident in _gpu_idents(run_id, target, app_id):
+        if stopped := _stop_app(ident, target.modal_environment):
+            released.append(f"app:{target.app_name}:{stopped}")
     return released
+
+
+def _gpu_remaining(run_id: str, target: Target, call_ids: list[str], app_id: str | None) -> list[str]:
+    """What still runs after a stop: cancelling is asynchronous, so a call or app can take a while."""
+    remaining = [f"call:{c}" for c in call_ids if call_running(c)]
+    for ident in _gpu_idents(run_id, target, app_id):
+        if state := _app_live(ident, target.modal_environment):
+            remaining.append(f"app:{ident}:{state}")
+    return remaining
 
 
 async def _stop_app_async(ident: str, environment: str | None) -> str | None:
@@ -148,13 +165,42 @@ def _stop_app(ident: str, environment: str | None) -> str | None:
     return synchronizer.create_blocking(_stop_app_async)(ident, environment)
 
 
+async def _app_live_async(ident: str, environment: str | None) -> str | None:
+    from modal.cli.app import resolve_app_identifier
+    from modal.client import _Client
+    from modal_proto import api_pb2
+
+    client = await _Client.from_env()
+    try:
+        _, env, lifecycle = await resolve_app_identifier(ident, environment, client)
+    except modal.exception.NotFoundError:
+        return None
+    if env and environment and env != environment:
+        return None  # not ours to report (or stop)
+    if lifecycle.app_state in (api_pb2.APP_STATE_STOPPED, api_pb2.APP_STATE_STOPPING):
+        return None
+    return api_pb2.AppState.Name(lifecycle.app_state)
+
+
+def _app_live(ident: str, environment: str | None) -> str | None:
+    """The app's state name while it is not stopped (or stopping), else None."""
+    from modal._utils.async_utils import synchronizer
+
+    return synchronizer.create_blocking(_app_live_async)(ident, environment)
+
+
 def teardown(run_id: str, recipe: dict, target: Target | dict | None, call_id: str | None = None,
              app_id: str | None = None) -> dict:
-    """Idempotent. ``call_id`` and ``app_id`` are what launch returned (either may be None)."""
+    """Idempotent. ``call_id`` and ``app_id`` are what launch returned (either may be None);
+    the live segment's call id in ``active:<run_id>`` is cancelled too, so a launch whose
+    caller never saw the ids is still found. ``remaining`` lists GPU calls and apps that
+    have not stopped yet, sandboxes and the secret."""
     target = Target.of(target)
     names = resource_names(recipe, run_id, target)
+    active = (progress_dict(target).get(progress_keys(run_id)["active"]) or {}).get("call_id")
+    call_ids = list(dict.fromkeys(c for c in (call_id, active) if c))
     released: list[str] = []
-    released += _stop_gpu(run_id, target, call_id, app_id)
+    released += _stop_gpu(run_id, target, call_ids, app_id)
     adapter = sandbox_adapter(names["sandbox_provider"], target.modal_environment)
     for app in names["sandbox_apps"]:
         if n := adapter.terminate(app):
@@ -163,7 +209,8 @@ def teardown(run_id: str, recipe: dict, target: Target | dict | None, call_id: s
         delete_run_secret(run_id, target)
         released.append(f"secret:{names['secret']}")
     released += [f"progress:{key}" for key in delete_keys(run_id, target)]
-    remaining = [f"sandboxes:{app}:{n}" for app in names["sandbox_apps"] if (n := adapter.live(app))]
+    remaining = _gpu_remaining(run_id, target, call_ids, app_id)
+    remaining += [f"sandboxes:{app}:{n}" for app in names["sandbox_apps"] if (n := adapter.live(app))]
     if run_secret_exists(run_id, target):
         remaining.append(f"secret:{names['secret']}")
     return {"released": released, "remaining": remaining, "names": names}

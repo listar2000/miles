@@ -96,20 +96,6 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
     return out
 
 
-def _call_running(call_id: str | None) -> bool:
-    if not call_id:
-        return False
-    import modal
-
-    try:
-        modal.FunctionCall.from_id(call_id).get(timeout=0)
-    except TimeoutError:
-        return True
-    except Exception:  # finished with an error, cancelled, or unknown
-        return False
-    return False
-
-
 def _claim(run_id: str, target: Target) -> bool:
     """Take ``active:<run_id>``; raise if a segment of this run is live or being launched."""
     d, key = P.progress_dict(target), P.keys(run_id)["active"]
@@ -117,7 +103,7 @@ def _claim(run_id: str, target: Target) -> bool:
         if d.put(key, {"call_id": None, "ts": time.time()}, skip_if_exists=True):
             return True
         held = d.get(key) or {}
-        if held.get("call_id") and _call_running(held["call_id"]):
+        if held.get("call_id") and P.call_running(held["call_id"]):
             raise RuntimeError(f"{run_id}: segment {held['call_id']} is still running (teardown it first)")
         if not held.get("call_id") and time.time() - held.get("ts", 0) < SPAWN_TIMEOUT_SECS:
             raise RuntimeError(f"{run_id}: another launch of this run is in progress")
