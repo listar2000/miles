@@ -440,7 +440,7 @@ def sandbox_app_names_for_cleanup(recipe: dict, run_id: str) -> list[str]:
 
 def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     """What every Harbor trial reads (header of upstream's harbor_agent_function)."""
-    agent, sandbox = recipe["agent"], recipe["sandbox"]
+    agent = recipe["agent"]
     env = {
         **_sandbox_env(recipe, run_id),
         "HARBOR_TASKS_DIR": str(TASKS),

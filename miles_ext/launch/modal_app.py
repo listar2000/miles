@@ -1,8 +1,10 @@
-"""Test launcher: run a recipe on Modal with the published fork image, unchanged.
+"""The trainer function (one segment of a run on a Modal cluster), and a CLI to run it.
 
-Not part of the platform API; it exists to validate a fork release. The image
-already holds Miles (our branch), Harbor and mini-swe-agent; this module only
-adds the run inputs (tasks, prompts) and the cluster wiring.
+``miles_ext.platform.launch`` runs every platform segment through ``train`` here;
+the CLI below runs a recipe by hand to validate a fork release. The image already
+holds Miles (our branch), Harbor and mini-swe-agent; this module only adds the
+run inputs (tasks, prompts) and the cluster wiring. ``train`` splits into rank 0
+(``_head``: Ray head, Miles under the supervisor) and the other ranks (``_worker``).
 
     export MILES_DATA=<dir with the task sets>  MILES_RECIPE=miles_ext/recipes/configs/<name>.yaml
     modal run -m miles_ext.launch.modal_app --run-id <id> --check-only    # dry check in the image
@@ -224,19 +226,12 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     spent waiting for GPUs is not lost), after which rank 0 saves and exits; the function
     timeout stays the hard bound (miles_ext.platform.launch sets both). Returns the exit record
     on rank 0."""
-    import secrets as secrets_lib
-
-    import ray
-
     from miles_ext.platform import progress as P
-    from miles_ext.platform import shards
-    from miles_ext.platform.supervisor import SENTINEL, Supervisor, write_exit_record
     from miles_ext.platform.validate import _inputs
 
     opts = opts or {}
     deadline = time.time() + float(opts["segment_seconds"]) if opts.get("segment_seconds") else None
     _check_shape(recipe)
-    nodes = SHAPE["nodes"]
     run_dir = R.RESULTS / run_id
     backend = R.backend(recipe)
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -253,26 +248,41 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     # rank returns before Ray starts, so it costs a container start, not a cluster start
     if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):
         print(f"{run_id} is already complete (checkpoint {read_tracker(run_dir)}); nothing to train", flush=True)
-        if rank != 0:
-            return None
-        record = {"run_id": run_id, "call_id": modal.current_function_call_id(), "reason": "success",
-                  "retryable": False, "returncode": None,
-                  "segment": None, "started_at": time.time(), "ended_at": time.time(), "step": None,
-                  "tracker": read_tracker(run_dir), "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
-                  "next_rollout_id": P.next_rollout_id(backend, read_tracker(run_dir)), "metrics": {},
-                  "image": _image_info(), "note": "already complete at launch", "tail": []}
-        write_exit_record(run_dir, record)
-        results_volume.commit()
-        with contextlib.suppress(Exception):
-            d, keys = P.progress_dict(TARGET), P.keys(run_id)
-            d[keys["exit"]] = record
-            d[keys["run"]] = {"run_id": run_id, "call_id": record["call_id"], "phase": "ended",
-                              "heartbeat_at": time.time()}
-            d.pop(keys["active"], None)
-        return record
+        return _complete_at_launch(recipe, run_id, run_dir, backend) if rank == 0 else None
+    env = _ray_env(recipe, run_id, head_ip, node_ip)
+    start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
+    if rank != 0:
+        return _worker(run_id, rank, head_ip, env, start)
+    return _head(recipe, run_id, run_dir, backend, deadline, head_ip, env, start)
+
+
+def _complete_at_launch(recipe: dict, run_id: str, run_dir, backend: str) -> dict:
+    """Rank 0 of a segment launched after the run completed: an exit record, no training."""
+    from miles_ext.platform import progress as P
+    from miles_ext.platform.supervisor import write_exit_record
+
+    tracker = read_tracker(run_dir)
+    record = {"run_id": run_id, "call_id": modal.current_function_call_id(), "reason": "success",
+              "retryable": False, "returncode": None,
+              "segment": None, "started_at": time.time(), "ended_at": time.time(), "step": None,
+              "tracker": tracker, "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
+              "next_rollout_id": P.next_rollout_id(backend, tracker), "metrics": {},
+              "image": _image_info(), "note": "already complete at launch", "tail": []}
+    write_exit_record(run_dir, record)
+    results_volume.commit()
+    with contextlib.suppress(Exception):
+        d, keys = P.progress_dict(TARGET), P.keys(run_id)
+        d[keys["exit"]] = record
+        d[keys["run"]] = {"run_id": run_id, "call_id": record["call_id"], "phase": "ended",
+                          "heartbeat_at": time.time()}
+        d.pop(keys["active"], None)
+    return record
+
+
+def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
     # Ray workers inherit the raylet's environment, so everything rollout workers
     # read (Harbor, the tunnel URL) is in env before `ray start`
-    env = {
+    return {
         **os.environ,
         **R.harbor_env(recipe, run_id),
         **R.trainer_env(recipe),
@@ -286,25 +296,45 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"fork:{os.environ.get('MILES_FORK_RELEASE')}",
                                                        f"commit:{_image_commit()[:10]}"]),
     }
-    start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
+
+
+def _worker(run_id: str, rank: int, head_ip: str, env: dict, start: list[str]) -> None:
+    """A worker node: join rank 0's Ray cluster and wait for its result. This node's checkpoint
+    shards (Megatron) reach the volume only when it commits: on rank 0's request before it
+    commits a new tracker (``shards``), on a timer, and on exit."""
+    from miles_ext.platform import progress as P
+    from miles_ext.platform import shards
+
+    stop = threading.Event()
+    threading.Thread(target=shards.worker_commits, daemon=True, args=(
+        run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
+        kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
+    try:
+        _wait_for_port(head_ip, 6379, timeout=600)
+        subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
+        if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
+            raise RuntimeError("Miles training failed on the head node; see the App logs")
+    finally:
+        stop.set()
+        results_volume.commit()
+
+
+def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | None, head_ip: str, env: dict,
+          start: list[str]) -> dict:
+    """Rank 0: start the Ray head, run Miles under the supervisor, release the workers."""
+    import secrets as secrets_lib
+
+    import ray
+
+    from miles_ext.platform import progress as P
+    from miles_ext.platform import shards
+    from miles_ext.platform.supervisor import SENTINEL, Supervisor
+
+    nodes = SHAPE["nodes"]
     succeeded = False
     record = supervisor = None
     stack_ctx = contextlib.ExitStack()
     try:
-        if rank != 0:
-            # this node's checkpoint shards (Megatron) reach the volume only when it commits:
-            # on rank 0's request before it commits a new tracker, and on a timer
-            stop = threading.Event()
-            stack_ctx.callback(stop.set)
-            threading.Thread(target=shards.worker_commits, daemon=True, args=(
-                run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
-                kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
-            _wait_for_port(head_ip, 6379, timeout=600)
-            subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
-            if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
-                raise RuntimeError("Miles training failed on the head node; see the App logs")
-            return None
-
         resume = read_tracker(run_dir) is not None
         args = R.miles_args(recipe, run_id, resume) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -367,17 +397,16 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
             print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
         return record
     except BaseException as e:
-        if rank == 0 and record is None and supervisor is not None:  # failed before or around Miles: still leave a record
+        if record is None and supervisor is not None:  # failed before or around Miles: still leave a record
             with contextlib.suppress(Exception):
                 supervisor.finish("error", None, note=f"launcher: {type(e).__name__}: {e}"[:2000])
         raise
     finally:
         stack_ctx.close()
         results_volume.commit()
-        if rank == 0:
-            _terminate_task_sandboxes(recipe, run_id)
-            for _ in range(nodes - 1):
-                completion_queue.put(succeeded, partition=run_id)
+        _terminate_task_sandboxes(recipe, run_id)
+        for _ in range(nodes - 1):
+            completion_queue.put(succeeded, partition=run_id)
 
 
 def _overrides(num_rollout: int, rollout_batch_size: int, n_samples: int, save_interval: int) -> dict:
