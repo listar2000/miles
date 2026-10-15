@@ -1,0 +1,180 @@
+"""R5/R6 without Modal or GPUs: completion from the checkpoint tracker, the deadline save
+against a fake Miles process, exit reasons, and launch's early return.
+
+    python -m pytest miles_ext/tests/test_supervisor.py
+"""
+
+import importlib
+import json
+import sys
+import textwrap
+import time
+
+import pytest
+
+P, SUP, L = (importlib.import_module(f"miles_ext.platform.{m}") for m in ("progress", "supervisor", "launch"))
+from miles_ext.platform.target import Target
+from miles_ext.recipes import recipe as R
+
+from miles_ext.tests.test_platform import DEV, _recipe
+
+
+# completion
+
+@pytest.mark.parametrize("backend,tracker,num_rollout,complete", [
+    # the two finished dev runs: FSDP 3c969ce5 (12 rollouts, tracker 12), Megatron 67d526e9 (4 rollouts, tracker 3)
+    ("fsdp", 12, 12, True), ("fsdp", 11, 12, False), ("megatron", 3, 4, True), ("megatron", 2, 4, False),
+    ("fsdp", None, 1, False), ("megatron", None, 1, False)])
+def test_completion_per_backend(backend, tracker, num_rollout, complete):
+    assert P.is_complete(backend, tracker, num_rollout) is complete
+
+
+def test_next_rollout_id():
+    assert P.next_rollout_id("fsdp", 12) == 12 and P.next_rollout_id("megatron", 3) == 4
+    assert P.next_rollout_id("fsdp", None) == 0
+    with pytest.raises(ValueError):
+        P.next_rollout_id("deepspeed", 1)
+
+
+def test_progress_names():
+    assert P.progress_dict_name(Target.of(DEV)) == "mdev-progress"
+    assert P.progress_dict_name(Target.of(None)) == "miles-progress"
+    with pytest.raises(ValueError):
+        P.keys("../x")
+
+
+# deadline margin
+
+def test_trigger_at():
+    t0 = 1000.0
+    assert SUP.trigger_at(None, None, 60, 60, t0) is None
+    # measured: save 60 s + step 120 s before the deadline
+    assert SUP.trigger_at(t0 + 3600, None, 120, 60, t0) == t0 + 3600 - 180
+    # the lease ends first
+    assert SUP.trigger_at(t0 + 3600, t0 + 1800, 120, 60, t0) == t0 + 1800 - 180
+    # a short segment: the margin is capped at a quarter of it, so it still trains
+    assert SUP.trigger_at(t0 + 600, None, None, None, t0) == t0 + 600 - 150
+
+
+@pytest.mark.parametrize("code,tail,reason", [
+    (0, [], "success"), (1, ["torch.OutOfMemoryError: CUDA out of memory."], "oom"),
+    (1, ["[Rank 3] Watchdog caught collective operation timeout: WorkNCCL"], "nccl_timeout"),
+    (1, ["ValueError: bad"], "error")])
+def test_classify(code, tail, reason):
+    assert SUP.classify(code, tail) == reason
+
+
+# the supervisor around a fake Miles
+
+FAKE_MILES = textwrap.dedent('''
+    import json, os, sys, time
+    run_dir, start, num_rollout, sentinel, step_secs = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], float(sys.argv[5])
+    ev = os.path.join(run_dir, "checkpoints", "events")
+    os.makedirs(ev, exist_ok=True)
+    def emit(name, e):
+        e["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".%06dZ" % (time.time() % 1 * 1e6)
+        with open(os.path.join(ev, name), "a") as f:
+            f.write(json.dumps(e) + "\\n")
+    for rollout_id in range(start, num_rollout):
+        time.sleep(step_secs)
+        emit("rollout_executor.jsonl", {"type": "metric", "metrics": {"rollout/step": rollout_id, "rollout/raw_reward_unfiltered": 0.5}})
+        emit("trainer_controller_actor.jsonl", {"type": "train_group_step_end", "rollout_id": rollout_id})
+        if os.path.exists(sentinel) or rollout_id == num_rollout - 1:  # FSDP: iter_{rollout_id + 1}
+            os.makedirs(os.path.join(run_dir, "checkpoints", "iter_%07d" % (rollout_id + 1)), exist_ok=True)
+            with open(os.path.join(run_dir, "checkpoints", "latest_checkpointed_iteration.txt"), "w") as f:
+                f.write(str(rollout_id + 1))
+            if os.path.exists(sentinel):
+                os.remove(sentinel)
+        print("step", rollout_id, flush=True)
+    print("done", flush=True)
+''')
+
+
+def _supervisor(tmp_path, monkeypatch, num_rollout, segment_secs, sentinel):
+    monkeypatch.setattr(SUP, "POLL_SECS", 0.05)
+    monkeypatch.setattr(P, "HEARTBEAT_SECS", 0.1)
+    monkeypatch.setattr(SUP, "SENTINEL", str(sentinel))
+    recipe = _recipe()
+    recipe["model"]["backend"] = "fsdp"
+    recipe["algorithm"]["num_rollout"] = num_rollout
+    store, commits = {}, []
+    sup = SUP.Supervisor("run1", recipe, tmp_path / "run1", progress_dict=store, segment=0,
+                         deadline=time.time() + segment_secs if segment_secs else None,
+                         commit=lambda: commits.append(time.time()), image={"release": "test"}, backend="fsdp")
+    return sup, store, commits
+
+
+def _fake(tmp_path, sentinel, start, num_rollout, step_secs=0.3):
+    script = tmp_path / "fake_miles.py"
+    script.write_text(FAKE_MILES)
+    return [sys.executable, str(script), str(tmp_path / "run1"), str(start), str(num_rollout), str(sentinel), str(step_secs)]
+
+
+def test_deadline_save_stops_and_records(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, store, commits = _supervisor(tmp_path, monkeypatch, num_rollout=50, segment_secs=2.0, sentinel=sentinel)
+    record = sup.run(_fake(tmp_path, sentinel, 0, 50), cwd=str(tmp_path), env={})
+    assert record["reason"] == "segment_end" and record["retryable"] and not record["complete"]
+    assert 0 < record["tracker"] < 50 and record["next_rollout_id"] == record["tracker"]
+    assert commits, "the save was not committed"
+    on_disk = json.loads((tmp_path / "run1" / P.EXIT_FILE).read_text())
+    assert on_disk["reason"] == "segment_end" and store["exit:run1"]["reason"] == "segment_end"
+    assert store["run:run1"]["phase"] == "ended" and store["run:run1"]["metrics"]["rollout/raw_reward_unfiltered"] == 0.5
+    assert len((tmp_path / "run1" / P.EXITS_LOG).read_text().splitlines()) == 1
+
+
+def test_run_to_the_end(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, store, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    record = sup.run(_fake(tmp_path, sentinel, 0, 3, step_secs=0.1), cwd=str(tmp_path), env={})
+    assert record["reason"] == "success" and record["complete"] and record["tracker"] == 3
+
+
+def test_lease_expiry_saves_and_stops(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, store, _ = _supervisor(tmp_path, monkeypatch, num_rollout=50, segment_secs=None, sentinel=sentinel)
+    store["lease:run1"] = {"expires_at": time.time() + 1.0}
+    record = sup.run(_fake(tmp_path, sentinel, 0, 50), cwd=str(tmp_path), env={})
+    assert record["reason"] == "lease_expired" and record["retryable"]
+
+
+def test_sigterm_stops(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, store, _ = _supervisor(tmp_path, monkeypatch, num_rollout=50, segment_secs=None, sentinel=sentinel)
+    import threading
+    threading.Timer(0.5, sup.sigterm.set).start()
+    record = sup.run(_fake(tmp_path, sentinel, 0, 50), cwd=str(tmp_path), env={})
+    assert record["reason"] == "stopped" and not record["retryable"]
+
+
+def test_failure_keeps_the_tail(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, _, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    cmd = [sys.executable, "-c", "print('torch.OutOfMemoryError: CUDA out of memory.'); raise SystemExit(1)"]
+    record = sup.run(cmd, cwd=str(tmp_path), env={})
+    assert record["reason"] == "oom" and any("out of memory" in line for line in record["tail"])
+
+
+# launch
+
+def test_launch_returns_early_when_complete(monkeypatch):
+    monkeypatch.setattr(P, "completion", lambda run_id, target, recipe: {
+        "complete": True, "next_rollout_id": 20, "num_rollout": 20, "tracker": 20})
+    monkeypatch.setattr(L.subprocess, "run", lambda *a, **k: pytest.fail("spawned a finished run"))
+    out = L.launch(_recipe(), "run1", DEV, segment_seconds=3600)
+    assert out["complete"] and not out["launched"] and out["call_id"] is None
+    assert out["names"]["secret"] == "mdev-secret-run1"
+
+
+def test_segment_timeout():
+    assert L.segment_timeout(3600, 24) == 3600 + L.GRACE_SECS
+    assert L.segment_timeout(None, 6) == 6 * 3600
+    assert L.segment_timeout(30 * 3600, 24) == 24 * 3600
+
+
+def test_trainer_short_circuits_on_every_rank():
+    """The completion check sits before the rank split, so workers never wait for a Ray head."""
+    src = (importlib.import_module("miles_ext.tests.test_platform").ROOT / "miles_ext/launch/modal_app.py").read_text()
+    body = src[src.index("def train("):]
+    assert body.index("P.is_complete(") < body.index("if rank != 0:")
+    assert '"--save-trigger-sentinel", SENTINEL' in body

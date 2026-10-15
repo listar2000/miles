@@ -18,6 +18,8 @@ Guards (the Modal workspace and the Sail org are shared with other teams):
 
 import modal
 
+from miles_ext.platform.progress import delete_keys, progress_dict_name
+from miles_ext.platform.progress import keys as progress_keys
 from miles_ext.platform.secrets import delete_run_secret, run_secret_exists
 from miles_ext.platform.target import Target, gpu_app_is_per_run, run_secret_name
 from miles_ext.recipes import recipe as R
@@ -101,6 +103,8 @@ def resource_names(recipe: dict, run_id: str, target: Target | dict | None) -> d
         "results_volume": target.results_volume,
         "results_dir": f"{run_id}/",
         "weights_volume": target.weights_volume,
+        "progress_dict": progress_dict_name(target),
+        "progress_keys": sorted(progress_keys(run_id).values()),
     }
 
 
@@ -158,6 +162,7 @@ def teardown(run_id: str, recipe: dict, target: Target | dict | None, call_id: s
     if run_secret_exists(run_id, target):
         delete_run_secret(run_id, target)
         released.append(f"secret:{names['secret']}")
+    released += [f"progress:{key}" for key in delete_keys(run_id, target)]
     remaining = [f"sandboxes:{app}:{n}" for app in names["sandbox_apps"] if (n := adapter.live(app))]
     if run_secret_exists(run_id, target):
         remaining.append(f"secret:{names['secret']}")

@@ -21,6 +21,11 @@ queue ``miles-fork-completion``, sandbox app (Modal or
 Sail, per the recipe's sandbox.provider) ``<sandbox.app_prefix><run_id>``,
 default ``miles-mobius-<run_id>`` (``miles-fork-sbx-<run_id>`` before 2026-10-15;
 exit cleanup checks both).
+
+``miles_ext.platform.launch`` runs this module in a child process with the whole
+configuration in ``MILES_EXT_LAUNCH`` (recipe, run id, target), because Modal binds
+the cluster shape when the function is defined; nothing here reads that variable
+unless it is set.
 """
 
 import contextlib
@@ -29,6 +34,7 @@ import os
 import resource
 import socket
 import subprocess
+import threading
 import time
 
 import modal
@@ -41,14 +47,17 @@ from miles_ext.platform.teardown import sandbox_adapter
 from miles_ext.recipes import recipe as R
 
 _SHAPE_ENV = "MILES_EXT_SHAPE"
+_LAUNCH_ENV = "MILES_EXT_LAUNCH"  # set by miles_ext.platform.launch only
+_INPUTS_ENV = "MILES_EXT_INPUTS"  # "volume": the taskset is at <results>/<run_id>/inputs, not in the image
 DEFAULT_RECIPE = "miles_ext/recipes/configs/qwen35-9b-swegym8-sandbox.yaml"
+LAUNCH = json.loads(os.environ[_LAUNCH_ENV]) if modal.is_local() and os.environ.get(_LAUNCH_ENV) else None
 
 if modal.is_local():
-    RECIPE = R.load(os.environ.get("MILES_RECIPE") or DEFAULT_RECIPE)
+    RECIPE = LAUNCH["recipe"] if LAUNCH else R.load(os.environ.get("MILES_RECIPE") or DEFAULT_RECIPE)
     SHAPE = R.shape(RECIPE)
     # MILES_FORK_COMMIT=<sha>: build the same image on Modal from that pushed fork
     # commit instead of pulling FORK_IMAGE (when no registry push is possible)
-    FROM_COMMIT = os.environ.get("MILES_FORK_COMMIT", "")
+    FROM_COMMIT = (LAUNCH or {}).get("from_commit") or os.environ.get("MILES_FORK_COMMIT", "")
     if not stack.FORK_IMAGE and not FROM_COMMIT:
         raise RuntimeError("miles_ext/stack.py: FORK_IMAGE is empty; publish it or set MILES_FORK_COMMIT")
 else:
@@ -68,7 +77,9 @@ def _pythonpath() -> str:
 
 # the target's names; inside a container they come back through the image env (_TARGET_ENV)
 _TARGET_ENV = "MILES_EXT_TARGET"
-if modal.is_local():
+if LAUNCH:
+    TARGET = Target.of(LAUNCH["target"])
+elif modal.is_local():
     TARGET = Target.of({k: v for k, v in {
         "app_name": os.environ.get("MILES_APP_NAME"),
         "results_volume": os.environ.get("MILES_RESULTS_VOLUME"),
@@ -83,7 +94,9 @@ else:
 # with its pinned steps, so the launcher leaves the checkpoints alone.
 # MILES_FINAL_RETENTION=1/0 overrides.
 _RETENTION_ENV = "MILES_FINAL_RETENTION"
-if modal.is_local():
+if LAUNCH:
+    FINAL_RETENTION = bool(LAUNCH.get("final_retention"))
+elif modal.is_local():
     FINAL_RETENTION = os.environ.get(_RETENTION_ENV, "0" if TARGET.secret_name else "1") == "1"
 else:
     FINAL_RETENTION = os.environ.get(_RETENTION_ENV) == "1"
@@ -96,6 +109,7 @@ if TARGET.secret_name:
 else:
     secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
 completion_queue = modal.Queue.from_name("miles-fork-completion", create_if_missing=True)
+WORKER_COMMIT_SECS = 120
 
 def _image_ref() -> str | None:
     """The registry image this container runs, or None when Modal built it from a commit."""
@@ -110,7 +124,10 @@ image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
                                   _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True),
                                   _RETENTION_ENV: "1" if FINAL_RETENTION else "0"})
-if RECIPE is not None:
+INPUTS_ON_VOLUME = ((LAUNCH or {}).get("inputs") == "volume") if modal.is_local() else \
+    os.environ.get(_INPUTS_ENV) == "volume"
+image = image.env({_INPUTS_ENV: "volume" if INPUTS_ON_VOLUME else "image"})
+if RECIPE is not None and not INPUTS_ON_VOLUME:
     image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS)).add_local_file(
         RECIPE["taskset"]["prompts"], str(R.PROMPTS)
     )
@@ -186,6 +203,17 @@ def check_cpu(recipe: dict, run_id: str):
         return False
 
 
+def _tracker(run_dir) -> int | None:
+    try:
+        return int((run_dir / "checkpoints" / "latest_checkpointed_iteration.txt").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _image_info() -> dict:
+    return {"release": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit()}
+
+
 @app.function(
     image=image,
     gpu=f"{SHAPE['gpu']}:{R.GPUS_PER_NODE}",
@@ -197,20 +225,51 @@ def check_cpu(recipe: dict, run_id: str):
     single_use_containers=True,
 )
 @modal.clustered(size=SHAPE["nodes"], rdma=SHAPE["nodes"] > 1)
-def train(recipe: dict, run_id: str):
+def train(recipe: dict, run_id: str, opts: dict | None = None):
+    """One segment. ``opts``: ``segment_seconds``, counted from this container's start (so time
+    spent waiting for GPUs is not lost), after which rank 0 saves and exits; the function
+    timeout stays the hard bound (miles_ext.platform.launch sets both). Returns the exit record
+    on rank 0."""
     import secrets as secrets_lib
 
     import ray
 
+    from miles_ext.platform import progress as P
+    from miles_ext.platform.supervisor import SENTINEL, Supervisor, write_exit_record
+    from miles_ext.platform.validate import _inputs
+
+    opts = opts or {}
+    deadline = time.time() + float(opts["segment_seconds"]) if opts.get("segment_seconds") else None
     _check_shape(recipe)
     nodes = SHAPE["nodes"]
     run_dir = R.RESULTS / run_id
+    backend = R.backend(recipe)
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
     cluster = modal.Cluster.from_context()
     rank = cluster.container_rank()
     ips = cluster.container_ips(family="ipv4")
     head_ip, node_ip = ips[0], ips[rank]
+    models_volume.reload()
+    results_volume.reload()  # see checkpoints committed by an earlier container
+    if INPUTS_ON_VOLUME:
+        _inputs(run_id)
+    # a relaunch of a finished run (the caller's timer fired after the final save): every
+    # rank returns before Ray starts, so it costs a container start, not a cluster start
+    if P.is_complete(backend, _tracker(run_dir), recipe["algorithm"]["num_rollout"]):
+        print(f"{run_id} is already complete (checkpoint {_tracker(run_dir)}); nothing to train", flush=True)
+        if rank != 0:
+            return None
+        record = {"run_id": run_id, "reason": "success", "retryable": False, "returncode": None,
+                  "segment": None, "started_at": time.time(), "ended_at": time.time(), "step": None,
+                  "tracker": _tracker(run_dir), "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
+                  "next_rollout_id": P.next_rollout_id(backend, _tracker(run_dir)), "metrics": {},
+                  "image": _image_info(), "note": "already complete at launch", "tail": []}
+        write_exit_record(run_dir, record)
+        results_volume.commit()
+        with contextlib.suppress(Exception):
+            P.progress_dict(TARGET)[P.keys(run_id)["exit"]] = record
+        return record
     # Ray workers inherit the raylet's environment, so everything rollout workers
     # read (Harbor, the tunnel URL) is in env before `ray start`
     env = {
@@ -229,24 +288,33 @@ def train(recipe: dict, run_id: str):
     }
     start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
     succeeded = False
+    record = supervisor = None
     stack_ctx = contextlib.ExitStack()
     try:
-        models_volume.reload()
-        results_volume.reload()  # see checkpoints committed by an earlier container
         if rank != 0:
+            # this node's checkpoint shards (Megatron) reach the volume only when it commits
+            stop = threading.Event()
+            stack_ctx.callback(stop.set)
+            threading.Thread(target=_commit_every, args=(stop, WORKER_COMMIT_SECS), daemon=True).start()
             _wait_for_port(head_ip, 6379, timeout=600)
             subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
             if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
                 raise RuntimeError("Miles training failed on the head node; see the App logs")
-            return
+            return None
 
-        resume = (run_dir / "checkpoints" / "latest_checkpointed_iteration.txt").exists()
-        args = R.miles_args(recipe, run_id, resume)
+        resume = _tracker(run_dir) is not None
+        args = R.miles_args(recipe, run_id, resume) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
+        segment = len(list(run_dir.glob("recipe-*.json")))
         (run_dir / f"recipe-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
             json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit(),
-                        "resume": resume, "recipe": recipe, "argv": args}, indent=1)
+                        "resume": resume, "segment": segment, "deadline": deadline, "recipe": recipe,
+                        "argv": args}, indent=1)
         )
+        supervisor = Supervisor(run_id, recipe, run_dir, progress_dict=P.progress_dict(TARGET), segment=segment,
+                                deadline=deadline, commit=results_volume.commit, image=_image_info(),
+                                backend=backend)
+        supervisor.heartbeat()
         if R.needs_tunnel(recipe):
             # in-sandbox agents reach the session servers through one public tunnel;
             # the random token keeps it from being an open relay
@@ -264,25 +332,36 @@ def train(recipe: dict, run_id: str):
 
         subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
-        deadline = time.monotonic() + 600
+        ray_ready_by = time.monotonic() + 600
         while ray.cluster_resources().get("GPU", 0) < nodes * R.GPUS_PER_NODE:
-            if time.monotonic() > deadline:
+            if time.monotonic() > ray_ready_by:
                 raise TimeoutError(f"Ray cluster incomplete: {ray.cluster_resources()}")
             time.sleep(2)
         print(f"Ray cluster ready: {ray.cluster_resources()}", flush=True)
         ray.shutdown()
 
         entry = R.entrypoint(recipe)
-        print(f"fork {os.environ.get('MILES_FORK_RELEASE')} commit {_image_commit()} resume={resume}\n{entry} " + " ".join(args), flush=True)
-        subprocess.run(["python", str(stack.MILES_SRC / entry), *args], cwd=stack.MILES_SRC, env=env, check=True)
+        print(f"fork {os.environ.get('MILES_FORK_RELEASE')} commit {_image_commit()} resume={resume} "
+              f"segment={segment} deadline={deadline}\n{entry} " + " ".join(args), flush=True)
+        record = supervisor.run(["python", str(stack.MILES_SRC / entry), *args], cwd=str(stack.MILES_SRC), env=env)
+        print(f"exit record: {json.dumps({k: v for k, v in record.items() if k != 'tail'}, default=str)}", flush=True)
+        if record["reason"] not in ("success", "segment_end", "lease_expired"):
+            raise RuntimeError(f"Miles ended with {record['reason']} (exit code {record['returncode']}); "
+                               "see the exit record and the App logs")
+        # a segment that saved and stopped cleanly also counts: workers exit without error
         succeeded = True
-        if FINAL_RETENTION:
+        if FINAL_RETENTION and record["reason"] == "success":
             ckpt = recipe["checkpoint"]
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
                                             final=True)
             removed = [f"{d['kind']}:{d['step']}" for d in dropped]
             print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
-        return str(run_dir)
+        return record
+    except BaseException as e:
+        if rank == 0 and record is None and supervisor is not None:  # failed before or around Miles: still leave a record
+            with contextlib.suppress(Exception):
+                supervisor.finish("error", None, note=f"launcher: {type(e).__name__}: {e}"[:2000])
+        raise
     finally:
         stack_ctx.close()
         results_volume.commit()
@@ -290,6 +369,14 @@ def train(recipe: dict, run_id: str):
             _terminate_task_sandboxes(recipe, run_id)
             for _ in range(nodes - 1):
                 completion_queue.put(succeeded, partition=run_id)
+
+
+def _commit_every(stop, secs: float):
+    while not stop.wait(secs):
+        try:
+            results_volume.commit()
+        except Exception as e:
+            print(f"periodic commit: {type(e).__name__}: {e}", flush=True)
 
 
 def _overrides(num_rollout: int, rollout_batch_size: int, n_samples: int, save_interval: int) -> dict:
@@ -301,9 +388,19 @@ def _overrides(num_rollout: int, rollout_batch_size: int, n_samples: int, save_i
     return out
 
 
+def spawn_detached():
+    """``miles_ext.platform.launch``'s child process: start the app detached, spawn one segment and
+    print its ids on a ``LAUNCHED`` line. The configuration is ``MILES_EXT_LAUNCH``."""
+    fn = train.with_options(timeout=int(LAUNCH["timeout"])) if LAUNCH.get("timeout") else train
+    with modal.enable_output(), app.run(detach=True, environment_name=TARGET.modal_environment):
+        call = fn.spawn(RECIPE, LAUNCH["run_id"], LAUNCH.get("opts") or {})
+        out = {"app_id": app.app_id, "call_id": call.object_id}
+    print("LAUNCHED " + json.dumps(out), flush=True)
+
+
 @app.local_entrypoint()
 def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_samples: int = 0,
-         save_interval: int = 0, check_only: bool = False):
+         save_interval: int = 0, check_only: bool = False, segment_hours: float = 0):
     recipe = R.load(os.environ.get("MILES_RECIPE") or DEFAULT_RECIPE,
                     _overrides(num_rollout, rollout_batch_size, n_samples, save_interval))
     run_id = run_id or f"{recipe['name']}-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -316,4 +413,5 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
         check.remote(recipe, run_id)
         print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")
         return
-    print(f"done: {train.spawn(recipe, run_id).get()}")
+    opts = {"segment_seconds": segment_hours * HOURS} if segment_hours else {}
+    print(f"done: {train.spawn(recipe, run_id, opts).get()}")

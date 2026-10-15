@@ -68,6 +68,8 @@ def test_resource_names_dev():
     assert names["sandbox_apps"] == ["miles-mobius-run1", "miles-fork-sbx-run1"]
     assert names["gpu_app"] == "mdev-run1" and names["gpu_app_per_run"]
     assert names["secret"] == "mdev-secret-run1"
+    assert names["progress_dict"] == "mdev-progress"
+    assert names["progress_keys"] == ["exit:run1", "lease:run1", "run:run1"]
     assert not T.resource_names(_recipe(), "run1", None)["gpu_app_per_run"]  # shared miles-fork: by call id only
 
 
@@ -91,7 +93,11 @@ def test_teardown_is_idempotent(monkeypatch):
     monkeypatch.setattr(T, "_stop_app", lambda ident, env: stopped.append((ident, env)) or "ap-1")
     monkeypatch.setattr(T, "run_secret_exists", lambda run_id, target: secret["exists"])
     monkeypatch.setattr(T, "delete_run_secret", lambda run_id, target: secret.update(exists=False))
+    progress = {"run:run1": {}, "lease:run1": {}, "run:run2": {}}
+    monkeypatch.setattr(T, "delete_keys", lambda run_id, target: [
+        k for k in (f"run:{run_id}", f"lease:{run_id}", f"exit:{run_id}") if progress.pop(k, None) is not None])
     first = T.teardown("run1", _recipe(), DEV)
+    assert "progress:run:run1" in first["released"] and progress == {"run:run2": {}}
     assert first["remaining"] == [] and "sandboxes:miles-mobius-run1:3" in first["released"]
     assert stopped == [("mdev-run1", "miles-dev")]
     second = T.teardown("run1", _recipe(), DEV)
@@ -233,4 +239,4 @@ def test_validate_shallow_resolves_argv():
 def test_launcher_final_retention_switch():
     src = (ROOT / "miles_ext/launch/modal_app.py").read_text()
     assert '"0" if TARGET.secret_name else "1"' in src  # platform runs (per-run secret) retain themselves
-    assert "if FINAL_RETENTION:" in src
+    assert 'if FINAL_RETENTION and record["reason"] == "success":' in src
