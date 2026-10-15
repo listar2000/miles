@@ -230,6 +230,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     from miles_ext.platform.validate import _inputs
 
     opts = opts or {}
+    recipe = R.from_dict(recipe)  # defaults for keys a recipe resolved by an older release lacks
     deadline = time.time() + float(opts["segment_seconds"]) if opts.get("segment_seconds") else None
     _check_shape(recipe)
     run_dir = R.RESULTS / run_id

@@ -47,9 +47,12 @@ def instant_errors(recipe: dict, run_id: str, target: Target | dict | None) -> l
     errors = []
     try:
         target = Target.of(target)
-        recipe = target.apply(recipe)
     except (ValueError, KeyError) as e:
         return [{"path": "target", "message": str(e)}]
+    try:
+        recipe = target.apply(recipe)
+    except (KeyError, TypeError, AttributeError) as e:  # an unknown key, or a section that is not a mapping
+        return [{"path": "recipe", "message": str(e).strip("'\"")}]
     if field := R.field_errors(recipe):
         errors += field  # every bad field at once; the checks below compute with the values
     else:

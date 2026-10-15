@@ -97,7 +97,7 @@ def test_teardown_is_idempotent(monkeypatch):
     monkeypatch.setattr(T, "progress_dict", lambda target: progress)
     monkeypatch.setattr(T, "delete_keys", lambda run_id, target: [
         k for k in (f"run:{run_id}", f"lease:{run_id}", f"active:{run_id}") if progress.pop(k, None) is not None])
-    cancelled, running, app_state = [], {"fc-live"}, {"mdev-run1": "APP_STATE_DEPLOYED"}
+    cancelled, running, app_state = [], {"fc-live"}, {"ap-eph": "APP_STATE_EPHEMERAL"}
 
     class Call:
         def __init__(self, call_id):
@@ -109,12 +109,15 @@ def test_teardown_is_idempotent(monkeypatch):
     monkeypatch.setattr(T.modal.FunctionCall, "from_id", Call)
     monkeypatch.setattr(T, "call_running", lambda call_id: call_id in running)
     monkeypatch.setattr(T, "_app_live", lambda ident, env: app_state.get(ident))
+    # the trainer's app is ephemeral: found by listing the environment's apps by exact name
+    listed = []
+    monkeypatch.setattr(T, "_live_app_ids", lambda name, env: listed.append((name, env)) or list(app_state))
     first = T.teardown("run1", _recipe(), DEV)
     assert cancelled == ["fc-live"]  # from active:run1, though the caller passed no call id
     assert "progress:run:run1" in first["released"] and progress == {"run:run2": {}}
     assert "sandboxes:miles-mobius-run1:3" in first["released"]
-    assert first["remaining"] == ["call:fc-live", "app:mdev-run1:APP_STATE_DEPLOYED"]  # not stopped yet
-    assert stopped == [("mdev-run1", "miles-dev")]
+    assert first["remaining"] == ["call:fc-live", "app:ap-eph:APP_STATE_EPHEMERAL"]  # not stopped yet
+    assert stopped == [("ap-eph", "miles-dev")] and listed[0] == ("mdev-run1", "miles-dev")
     running.clear(), app_state.clear()
     second = T.teardown("run1", _recipe(), DEV, call_id="fc-live")
     assert second["remaining"] == [] and not any(r.startswith(("sandboxes", "secret")) for r in second["released"])
@@ -131,6 +134,8 @@ def test_modal_internals_teardown_uses_exist():
     assert callable(resolve_app_identifier) and hasattr(_Client, "from_env") and synchronizer
     assert api_pb2.AppStopRequest and api_pb2.APP_STOP_SOURCE_CLI is not None
     assert {api_pb2.APP_STATE_STOPPED, api_pb2.APP_STATE_STOPPING} and api_pb2.AppState.Name(api_pb2.APP_STATE_STOPPED)
+    assert api_pb2.AppListRequest(environment_name="e") and {"app_id", "description", "state"} <= {
+        f.name for f in api_pb2.AppListResponse.AppListItem.DESCRIPTOR.fields}
 
 
 def test_unknown_provider_has_no_adapter():
@@ -380,3 +385,23 @@ def test_schema_carries_rules():
         "anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]}
     assert props["cluster"]["properties"]["gpu"]["enum"] == list(R.GPU_TYPES)
     assert set(R.FIELD_RULES) <= {p for p, _ in R._leaves(R.DEFAULTS)}  # no rule for a key that does not exist
+
+
+def _r5_resolved(recipe: dict) -> dict:
+    """A recipe as r5 resolved and stored it: no async section, no r6 algorithm keys."""
+    old = {k: v for k, v in recipe.items() if k != "async"}
+    old["algorithm"] = {k: v for k, v in recipe["algorithm"].items()
+                        if k not in ("advantage_estimator", "kl_loss_coef", "entropy_coef", "seed")}
+    return old
+
+
+def test_recipe_resolved_by_r5_still_validates_and_launches():
+    old = _r5_resolved(_recipe())
+    assert V.instant_errors(old, "run1", DEV) == []
+    resolved = Target.of(DEV).apply(old)
+    assert _argv(resolved) == _argv(Target.of(DEV).apply(_recipe()))
+
+
+def test_unknown_recipe_key_is_a_recipe_error():
+    errs = V.instant_errors({**_recipe(), "algorithm": {**_recipe()["algorithm"], "lr_typo": 1}}, "run1", DEV)
+    assert errs[0]["path"] == "recipe" and "lr_typo" in errs[0]["message"]

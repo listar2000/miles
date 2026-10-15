@@ -49,7 +49,7 @@ RESERVED_FLAGS = {
     "--async-max-concurrent-samples": "async.max_concurrent_samples",
     "--async-unused-samples-handler": "async.unused_samples",
     "--pause-generation-mode": "async.pause_generation",
-    "--partial-rollout": "nothing (Miles rejects it in fully async mode)",
+    "--partial-rollout": "unsupported: Miles rejects it in fully async mode",
 }
 
 
@@ -74,7 +74,9 @@ def reserved_flag_errors(recipe: dict, run_id: str = "reserved-check") -> list[d
     for arg in map(str, recipe.get("extra_args") or []):
         flag = arg.split("=", 1)[0]
         if flag in RESERVED_FLAGS:
-            errors.append({"path": "extra_args", "message": f"{flag} is set by {RESERVED_FLAGS[flag]}; use that"})
+            owner = RESERVED_FLAGS[flag]
+            message = f"{flag} is {owner}" if owner.startswith("unsupported") else f"{flag} is set by {owner}; use that"
+            errors.append({"path": "extra_args", "message": message})
         elif flag in emitted:
             errors.append({"path": "extra_args", "message": f"{flag} is already set by the recipe"})
     return errors

@@ -85,8 +85,9 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
 - **Multi-node commits** (`shards.py`, r6, review M7): before rank 0 commits a new
   tracker it asks every worker to commit (`commit:<run_id>` with a fresh token) and
   waits for their acks (queue partition `ack-<run_id>`, 300 s at most), so a durable
-  tracker never names a save whose other-node shards are not durable. Workers also
-  commit every 2 min and on exit.
+  tracker never names a save whose other-node shards are not durable. The wait is best
+  effort (120 s at most, under the heartbeat's 300 s staleness limit) and never keeps rank
+  0 from committing. Workers also commit every 2 min and on exit.
 - **One segment at a time**: `launch` claims `active:<run_id>` (refuses while the call it
   names is running), then writes `run:<run_id>` as `pending` with the call id. Heartbeats and
   exit records carry `call_id`; `observe` reports `ended` only when the exit record's call id
@@ -107,7 +108,8 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   and a new `async` section: `over_sampling_batch_size`, `max_concurrent_samples`
   (null: batch x n), `unused_samples` (`drop` | `retry`), `pause_generation`
   (`in_place` | `retract`; Miles rejects `abort` and `--partial-rollout` in fully async
-  mode, so neither is offered). Defaults reproduce the r5 argv.
+  mode, so neither is offered). Defaults reproduce the r5 argv, and `Target.apply` and
+  the trainer fill defaults, so a recipe resolved by r5 (no `async`) still runs.
 - **Field checks** (r6, review M1): `recipe.FIELD_RULES` gives each field a type and,
   where it matters, a range or choice list (GPU types, estimators, minimums);
   `field_errors` reports every bad field as `{path, message}` before anything computes
@@ -117,8 +119,11 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   emits for the recipe (computed from its output), nor a named knob's flag; the hand list
   `RESERVED_FLAGS` only names the key to use instead.
 - **Teardown reports GPU work** (r6, review M8): it also cancels the call named in
-  `active:<run_id>`, stops the per-run app by name even when given an app id, and lists
-  calls and apps not yet stopped in `remaining`. A test imports the Modal internals the
+  `active:<run_id>`, stops every live app named exactly like the per-run app even when
+  given an app id, and lists calls and apps not yet stopped in `remaining`. The trainer
+  runs as an ephemeral app, which a name lookup never finds (the platform saw one survive
+  a cancel during launch), so those ids come from the environment's app list filtered
+  by equality, as `modal app list` shows it. A test imports the Modal internals the
   app stop relies on, so an SDK upgrade fails there first.
 - **Layout** (`layout.py`, r6, review L1): run paths, tracker reads and volume handles
   in one module; nothing else parses the tracker.

@@ -10,6 +10,8 @@ from miles_ext.platform import shards
 
 
 class FakeQueue:
+    """Like modal.Queue: a blocking get raises queue.Empty at its timeout."""
+
     def __init__(self):
         self.parts = {}
 
@@ -20,10 +22,7 @@ class FakeQueue:
         self._q(partition).put(item)
 
     def get(self, partition, timeout):
-        try:
-            return self._q(partition).get(timeout=timeout)
-        except queue_lib.Empty:
-            return None
+        return self._q(partition).get(timeout=timeout)
 
 
 def _cluster(nodes, live_workers):
@@ -71,4 +70,14 @@ def test_single_node_is_a_plain_commit():
     calls = []
     assert shards.head_commit("run1", 1, {}, None, lambda: calls.append(1), key="k") is not None
     shards.head_commit("run1", 1, {}, None, lambda: calls.append(1), key="k")()
+    assert calls == [1]
+
+
+def test_a_broken_progress_dict_still_commits():
+    class Broken(dict):
+        def __setitem__(self, key, value):
+            raise ConnectionError("dict down")
+
+    calls = []
+    shards.head_commit("run1", 2, Broken(), FakeQueue(), lambda: calls.append(1), key="k", log=lambda *_: None)()
     assert calls == [1]

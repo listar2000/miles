@@ -71,9 +71,10 @@ class Target:
         return asdict(self)
 
     def apply(self, recipe: dict) -> dict:
-        """The recipe with this target's sandbox prefix (the only recipe key a target owns)."""
-        out = {**recipe, "sandbox": {**recipe["sandbox"], "app_prefix": self.sandbox_app_prefix}}
-        return out
+        """The recipe with this target's sandbox prefix (the only recipe key a target owns), and
+        defaults for keys it lacks (a recipe resolved by an older release has no ``async``)."""
+        recipe = R.from_dict(recipe)
+        return {**recipe, "sandbox": {**recipe["sandbox"], "app_prefix": self.sandbox_app_prefix}}
 
     def with_(self, **changes) -> "Target":
         return replace(self, **changes)

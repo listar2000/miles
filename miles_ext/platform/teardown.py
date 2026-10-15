@@ -9,8 +9,10 @@ Guards (the Modal workspace and the Sail org are shared with other teams):
 - every name comes from ``Target`` and the run id, and must be in our
   namespaces (``check_own_app_name``); an adapter refuses any other name;
 - apps are addressed by exact name only: Modal ``App.lookup`` in the target's
-  environment (never created), Sail ``App.list`` filtered by equality (never
-  minted). Nothing here lists by prefix or pattern;
+  environment (never created) for sandbox apps, the environment's app list
+  filtered by equality for the per-run GPU app (an ephemeral app has no lookup),
+  Sail ``App.list`` filtered by equality (never minted). Nothing here matches by
+  prefix or pattern;
 - Modal calls carry ``environment_name=target.modal_environment``; Sail is
   scoped by the org of ``SAIL_API_KEY`` (the SDK has no project or environment
   parameter), so the key is the Sail guard.
@@ -109,11 +111,13 @@ def resource_names(recipe: dict, run_id: str, target: Target | dict | None) -> d
 
 
 def _gpu_idents(run_id: str, target: Target, app_id: str | None) -> list[str]:
-    """The app by id (from launch) and, when the name is this run's alone, by exact name too:
-    a launch interrupted before it reported its ids still leaves the per-run app findable."""
+    """The app by id (from launch) and, when the name is this run's alone, every live app of
+    that exact name in the target's environment. The trainer runs as an ephemeral app, which
+    a name lookup does not find, so the names come from the environment's app list; a launch
+    interrupted before it reported its ids still leaves the per-run app findable."""
     idents = [app_id] if app_id else []
     if gpu_app_is_per_run(run_id, target):
-        idents.append(target.app_name)
+        idents += [a for a in _live_app_ids(target.app_name, target.modal_environment) if a not in idents]
     return idents
 
 
@@ -180,6 +184,25 @@ async def _app_live_async(ident: str, environment: str | None) -> str | None:
     if lifecycle.app_state in (api_pb2.APP_STATE_STOPPED, api_pb2.APP_STATE_STOPPING):
         return None
     return api_pb2.AppState.Name(lifecycle.app_state)
+
+
+async def _live_app_ids_async(name: str, environment: str | None) -> list[str]:
+    from modal.client import _Client
+    from modal_proto import api_pb2
+
+    client = await _Client.from_env()
+    resp = await client._stub.AppList(api_pb2.AppListRequest(environment_name=environment or ""))
+    return [a.app_id for a in resp.apps if a.description == name  # exact name, never a pattern
+            and a.state not in (api_pb2.APP_STATE_STOPPED, api_pb2.APP_STATE_STOPPING)]
+
+
+def _live_app_ids(name: str, environment: str | None) -> list[str]:
+    """Ids of the apps named exactly ``name`` (deployed or ephemeral) that are not stopped,
+    as ``modal app list`` shows them."""
+    from modal._utils.async_utils import synchronizer
+
+    R.check_own_app_name(name)
+    return synchronizer.create_blocking(_live_app_ids_async)(name, environment)
 
 
 def _app_live(ident: str, environment: str | None) -> str | None:

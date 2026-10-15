@@ -11,20 +11,22 @@ every worker node to commit and waits for their acknowledgements:
 - each worker polls that key every ``POLL_SECS``; on a new token it commits and puts
   ``(rank, token)`` in partition ``ack-<run_id>`` of the completion queue;
 - rank 0 waits for ``nodes - 1`` acknowledgements of its token (``ACK_TIMEOUT_SECS``
-  at most: a dead worker cannot hold the run, its shards are lost either way), then
-  commits itself.
+  at most, under the heartbeat's staleness limit: a dead worker cannot hold the run,
+  its shards are lost either way), then commits itself. The wait is best effort:
+  nothing in it can keep rank 0 from committing.
 
 Workers also commit on a timer, and every rank commits on exit; this only closes the
 window in which a killed cluster leaves a durable tracker naming an incomplete save.
 """
 
+import queue as queue_lib
 import threading
 import time
 import uuid
 from typing import Callable
 
 POLL_SECS = 5
-ACK_TIMEOUT_SECS = 300
+ACK_TIMEOUT_SECS = 120
 
 
 def ack_partition(run_id: str) -> str:
@@ -37,7 +39,7 @@ def head_commit(run_id: str, nodes: int, progress_dict, queue, commit: Callable[
     if nodes <= 1:
         return commit
 
-    def commit_all() -> None:
+    def wait_for_workers() -> None:
         token = uuid.uuid4().hex
         progress_dict[key] = {"token": token, "ts": time.time()}
         acked, by = set(), time.monotonic() + timeout
@@ -46,10 +48,19 @@ def head_commit(run_id: str, nodes: int, progress_dict, queue, commit: Callable[
             if left <= 0:
                 log(f"shards: no commit ack from ranks {sorted(set(range(1, nodes)) - acked)} in {timeout:.0f}s; "
                     "committing anyway")
-                break
-            item = queue.get(partition=ack_partition(run_id), timeout=min(left, 30))
+                return
+            try:  # Modal's blocking get raises queue.Empty at its timeout
+                item = queue.get(partition=ack_partition(run_id), timeout=min(left, 30))
+            except queue_lib.Empty:
+                continue
             if item and item[1] == token:
                 acked.add(item[0])
+
+    def commit_all() -> None:
+        try:
+            wait_for_workers()
+        except Exception as e:
+            log(f"shards: waiting for worker commits failed ({type(e).__name__}: {e}); committing anyway")
         commit()
 
     return commit_all
