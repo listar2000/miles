@@ -306,7 +306,7 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
         # no RAY_API_SERVER_ADDRESS: the fork's head-node lookup reads the GCS (fix-003)
         "WANDB_RUN_GROUP": run_id,
         # wandb.init reads tags from here; Miles does not pass any
-        "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"miles-mobius:{_trainer()}", f"upstream:{stack.UPSTREAM_TAG}",
+        "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"miles-mobius:{_trainer()}", f"upstream:{stack.UPSTREAM_LABEL}",
                                                        f"commit:{_image_commit()[:10]}"]),
         # like WANDB_RUN_GROUP, the env wins over the name Miles passes (<group>_<random>-RANK_0)
         **({"WANDB_NAME": recipe["tracking"]["wandb_name"]} if recipe["tracking"].get("wandb_name") else {}),

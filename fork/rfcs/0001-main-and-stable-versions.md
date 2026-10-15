@@ -40,12 +40,25 @@ commit a2dd311cfe, which only recorded the digest.
 (fixes and hooks only, as now) are resolved in the merge commit, which carries
 `Fork-Infra: sync-v0.1.3`. Then the usual checks, land, build.
 
+**Between releases (amendment, 2026-10-15).** Upstream tags every few weeks
+and its `main` moves daily. A sync may take an untagged upstream commit, but
+only one that a published upstream image was built from (today the
+`radixark/miles:dev` builds; the commit is in the image's `/root/miles/.git`),
+and `BASE_IMAGE` moves to that image by digest in the same change. Code and
+image then match commit for commit, as with a release. The merge commit
+carries `Fork-Infra: sync-<sha9>`. `stack.UPSTREAM_TAG` stays the newest
+merged release tag (v0.1.2's lockfile commit sits only on upstream's release
+branch, so it stays in our history); `stack.UPSTREAM_BASE` names the merged
+commit, and the ledger and the image build diff against it. Prefer release
+tags; take `main` only when a change we need is there.
+
 ## Ledger and rulebook changes
 
-- `ledger.py` lists `<newest merged upstream tag>..main`, not `<tag>..fork/<tag>`;
-  it reads the base from the last `sync-*` merge (or `stack.UPSTREAM_TAG`).
+- `ledger.py` lists `<stack.UPSTREAM_BASE>..main`, not `<tag>..fork/<tag>`,
+  leaving out commits reachable from `stack.UPSTREAM_TAG` (upstream's release
+  branch commits) and merge commits. Done 2026-10-15.
 - The "fixes and hooks first" order rule goes: with merges there is no replay
-  order. Markers, trailers, `ID_FORMATS`, one commit per fix and vendored blob
+  order (done 2026-10-15). Markers, trailers, `ID_FORMATS`, one commit per fix and vendored blob
   checks stay as they are.
 - `sync.py` becomes a merge helper; its `FORK_RELEASE`/`FORK_IMAGE` rewrites
   go, since no version lives in the tree any more.

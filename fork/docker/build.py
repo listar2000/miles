@@ -116,10 +116,10 @@ def git(*args: str) -> str:
 
 
 def src_layer(commit: str, path: Path):
-    """The fork tree over /root/miles, with whiteouts for files the fork deletes from the upstream tag."""
+    """The fork tree over /root/miles, with whiteouts for files the fork deletes from the upstream base."""
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", "--prefix=root/miles/", commit],
                              check=True, capture_output=True).stdout
-    deleted = git("diff", "--name-only", "--diff-filter=D", stack.UPSTREAM_TAG, commit).split()
+    deleted = git("diff", "--name-only", "--diff-filter=D", stack.UPSTREAM_BASE, commit).split()
     with tempfile.NamedTemporaryFile(suffix=".tar") as raw:
         raw.write(archive)
         raw.flush()
@@ -234,7 +234,7 @@ def main():
             "org.opencontainers.image.base.name": BASE_IMAGE,
             "org.opencontainers.image.base.digest": base_amd64.split("@")[1],
             "org.opencontainers.image.title": "miles-mobius",
-            "miles.mobius.upstream": stack.UPSTREAM_TAG,
+            "miles.mobius.upstream": stack.UPSTREAM_LABEL,
             "miles.mobius.harbor": f"{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}",
             "miles.mobius.mini-swe-agent": stack.MINI_SWE_AGENT_VERSION,
             "miles.mobius.sail": stack.SAIL_SDK_VERSION,

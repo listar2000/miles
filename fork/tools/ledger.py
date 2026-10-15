@@ -6,26 +6,30 @@ Ext) and, for fixes and hooks, ``Touches:`` (upstream files it edits), ``Evidenc
 ``Upstream-Status:`` and ``Remove-When:``. Git keeps these through a rebase,
 so the history is the record and nothing has to be kept in sync by hand.
 
-    python fork/tools/ledger.py list              # table of fork commits since the base tag
+    python fork/tools/ledger.py list              # table of fork commits since the upstream base
     python fork/tools/ledger.py check             # touch-point audit (exit 1 on any violation)
     python fork/tools/ledger.py markdown          # the table for fork/README.md
     python fork/tools/ledger.py markers           # file-only check (no git history; used in the image)
 
 ``check`` enforces the layout rules:
   1. outside the fork's own paths (OWN_PATHS) the only files
-     that differ from the base tag are the ones fixes and hooks declare in ``Touches:``;
+     that differ from the upstream base are the ones fixes and hooks declare in ``Touches:``;
   2. every declared file carries a ``[fork <id>]`` marker for each commit touching it;
   3. every fork commit has exactly one ``Fork-*`` trailer; fixes and hooks touch
      only upstream files, infra and extensions only the fork's own paths;
-  4. fixes and hooks come before infra and extensions, so a sync meets every
-     possible conflict first and the rest replays cleanly;
-  5. every file in fork/vendored.json (third-party code copied verbatim) still
+  4. every file in fork/vendored.json (third-party code copied verbatim) still
      has the git blob of its upstream source (also checked by ``markers``);
-  6. ids follow their kind (``ID_FORMATS``): ``fix-NNN``, ``hook-NNN``, ``ext-NNN``,
+  5. ids follow their kind (``ID_FORMATS``): ``fix-NNN``, ``hook-NNN``, ``ext-NNN``,
      and a kebab-case name for infra (``infra-NNN``, ``release-<tag>-rN``, or a
      short name such as ``repo-refs``). One id names one change; a change may span
      several commits (an extension grows release by release), and a fix or hook
      id is used by exactly one commit.
+
+The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
+merged (a release tag, or between releases the commit an upstream image was
+built from; RFC 0001). Commits reachable from ``stack.UPSTREAM_TAG`` are
+upstream's too (a release tag's own commits sit on upstream's release branch),
+and merge commits carry no change of ours, so neither is listed.
 """
 
 import argparse
@@ -50,12 +54,22 @@ def git(*args: str) -> str:
     return subprocess.run(["git", "-C", str(ROOT), *args], check=True, capture_output=True, text=True).stdout
 
 
-def base_tag() -> str:
+def _stack_value(name: str) -> str:
     tree = ast.parse((ROOT / "miles_ext/stack.py").read_text())
     for node in tree.body:
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "UPSTREAM_TAG":
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == name:
             return ast.literal_eval(node.value)
-    raise SystemExit("UPSTREAM_TAG not found in miles_ext/stack.py")
+    raise SystemExit(f"{name} not found in miles_ext/stack.py")
+
+
+def base_tag() -> str:
+    """The newest upstream release tag merged into the branch."""
+    return _stack_value("UPSTREAM_TAG")
+
+
+def base_ref() -> str:
+    """The upstream commit the branch last merged: the tag itself, or a commit after it."""
+    return _stack_value("UPSTREAM_BASE")
 
 
 def own(path: str) -> bool:
@@ -85,7 +99,8 @@ class Commit:
 def commits(base: str) -> list[Commit]:
     out = []
     sep = "\x1e"
-    log = git("log", "--reverse", "--no-merges", f"--format={sep}%H%x00%s%x00%(trailers:only,unfold)", f"{base}..HEAD")
+    log = git("log", "--reverse", "--no-merges", f"--format={sep}%H%x00%s%x00%(trailers:only,unfold)", f"{base}..HEAD",
+              f"^{base_tag()}")
     for chunk in log.split(sep)[1:]:
         sha, subject, trailer_text = chunk.split("\x00")
         trailers: dict[str, list[str]] = {}
@@ -142,7 +157,6 @@ def cmd_check(base: str) -> int:
     problems = vendored_problems()
     series = commits(base)
     declared: dict[str, set[str]] = {}
-    seen_own = False
     for c in series:
         if c.kind is None:
             problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
@@ -151,10 +165,6 @@ def cmd_check(base: str) -> int:
             problems.append(f"{c.sha} {c.fork_id!r}: a Fork-{c.kind} id must match {ID_FORMATS[c.kind]}")
         if c.kind in UPSTREAM_KINDS and sum(o.fork_id == c.fork_id for o in series) > 1:
             problems.append(f"{c.sha} {c.fork_id}: a {c.kind.lower()} id is used by one commit only")
-        if c.kind in UPSTREAM_KINDS and seen_own:
-            problems.append(f"{c.sha} {c.fork_id}: {c.kind.lower()} after an infra/ext commit "
-                            "(fixes and hooks go first in the series)")
-        seen_own = seen_own or c.kind not in UPSTREAM_KINDS
         if c.kind in UPSTREAM_KINDS:
             touches = {t.strip() for v in c.trailers.get("Touches", []) for t in v.split(",") if t.strip()}
             for key in ("Evidence", "Upstream-Status", "Remove-When"):
@@ -210,11 +220,12 @@ def cmd_markers() -> int:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["list", "check", "markdown", "markers"])
-    ap.add_argument("--base", help="upstream tag the branch sits on (default: UPSTREAM_TAG in miles_ext/stack.py)")
+    ap.add_argument("--base", help="upstream commit or tag the branch last merged (default: UPSTREAM_BASE in "
+                    "miles_ext/stack.py)")
     args = ap.parse_args()
     if args.command == "markers":
         sys.exit(cmd_markers())
-    base = args.base or base_tag()
+    base = args.base or base_ref()
     if args.command == "list":
         cmd_list(base)
     elif args.command == "markdown":

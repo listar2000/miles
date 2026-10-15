@@ -12,6 +12,12 @@ from pathlib import Path
 # source over /root/miles), so CUDA, torch, SGLang and Megatron stay exactly
 # what upstream tested.
 UPSTREAM_TAG = "v0.1.2"
+# The upstream commit main last merged: UPSTREAM_TAG itself, or between releases
+# the commit BASE_IMAGE was built from (RFC 0001). The ledger and the src
+# layer's whiteouts diff against it.
+UPSTREAM_BASE = "v0.1.2"
+# What image labels and W&B tags call the upstream: the tag, plus the commit when main is past it
+UPSTREAM_LABEL = UPSTREAM_TAG if UPSTREAM_BASE == UPSTREAM_TAG else f"{UPSTREAM_TAG}+{UPSTREAM_BASE[:10]}"
 BASE_IMAGE = "radixark/miles:v0.1.2@sha256:c81d8ba7b91571aac8e0bb2be372c6a9664e1ff7b88f518a8891861bae83e3b7"
 
 # Harbor: the branch Miles documents for v0.1.2 (harbor-miles-v0.20.0), pinned
