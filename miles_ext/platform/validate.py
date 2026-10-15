@@ -34,7 +34,11 @@ GPU_FOR_MEGATRON = "H100"
 LIBCUDA_STUB = "/usr/local/cuda/lib64/stubs/libcuda.so"
 PARSED_KEYS = ["train_backend", "fully_async", "rollout_num_gpus", "actor_num_nodes", "actor_num_gpus_per_node",
                "global_batch_size", "num_rollout", "save_interval", "save", "save_hf", "tito_model",
-               "sglang_tool_call_parser", "wandb_project", "wandb_team"]
+               "sglang_tool_call_parser", "wandb_project", "wandb_team",
+               # the named training knobs (r6)
+               "advantage_estimator", "use_kl_loss", "kl_loss_coef", "entropy_coef", "seed", "ref_load",
+               "over_sampling_batch_size", "async_max_concurrent_samples", "async_unused_samples_handler",
+               "pause_generation_mode"]
 
 
 def _path_of(message: str, default: str) -> str:
