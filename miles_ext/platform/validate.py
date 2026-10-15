@@ -151,7 +151,9 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
             return fn()
         except BaseException as e:  # noqa: BLE001 (SystemExit from argparse included)
             message = str(e) or type(e).__name__
-            if not isinstance(e, (RuntimeError, ValueError, FileNotFoundError)):
+            if isinstance(e, subprocess.CalledProcessError):
+                message += "\n" + "\n".join((e.stderr or e.stdout or "").strip().splitlines()[-15:])
+            elif not isinstance(e, (RuntimeError, ValueError, FileNotFoundError)):
                 message += "\n" + "".join(traceback.format_exception_only(type(e), e)).strip()
             errors.append({"path": path or name, "message": message})
             return None

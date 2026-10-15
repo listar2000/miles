@@ -71,6 +71,22 @@ taskset is on the results volume (`<results_volume>/<run_id>/inputs/`).
 Tests: `miles_ext/tests/test_platform.py`, `test_sandbox_cleanup.py` (CPU only).
 Live checks on the dev environment are in the r3 release note.
 
+## Checked on miles-dev (2026-10-15, commit dc768d5df2)
+- `prepare_weights("Qwen/Qwen3.5-9B", "main")` into `mdev-weights`: resolved to
+  `c202236235…`, 19.3 GB in 101 s; a lock left by a killed prepare blocked the
+  next one as designed (released by hand).
+- `validate`: FSDP Sail recipe on CPU ok in 60 s; the 2-node Megatron recipe with
+  `save_hf` on one H100 ok in 88 s (`save_hf` resolved to
+  `/results/<run>/hf/iter_{rollout_id:07d}`).
+- libcuda stub (one try, as planned): fails. The stub gets past loading
+  `libcuda.so.1`, but Megatron's `validate_args` queries device properties
+  (`cudaGetDeviceCount`: "CUDA driver is a stub library"). Megatron validates on a GPU.
+- `teardown` of a run with two live Modal sandboxes in `miles-mobius-<run>`:
+  released both, `remaining` empty; a second call released nothing.
+- Final retention on dummy saves (`keep_final_full: false`): left only the final
+  HF export and `latest_checkpointed_iteration.txt`.
+- Not yet exercised on a real save: `finalize_hf` and Megatron's `--save-hf` output.
+
 ## Remove when
 Not an upstream gap: this is our platform's API. It changes with the platform
 (r4: launch, observe, supervisor, exit record).
