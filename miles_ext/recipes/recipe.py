@@ -52,7 +52,9 @@ RUN_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 DEFAULTS: dict[str, Any] = {
     "name": "",
     # backend None: the preset's (fsdp); "megatron" needs the preset's megatron_model_type
-    "model": {"preset": None, "backend": None},
+    # revision: a commit sha of the preset's HF repo; set, the weights are read from the
+    # shared cache key (miles_ext.platform.weights), unset from the preset's directory
+    "model": {"preset": None, "backend": None, "revision": None},
     # cpu/memory are requests (Modal bills max(request, usage)); timeout caps a hung run
     "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6},
     "taskset": {"tasks_dir": None, "prompts": None, "harness": HARNESS_SANDBOX},
@@ -96,7 +98,10 @@ DEFAULTS: dict[str, Any] = {
         "sglang_mem_fraction": None,  # None: 0.85 fully async, 0.7 colocated
         "max_tokens_per_gpu": 32768,
     },
-    "checkpoint": {"save_interval": 10},
+    # keep: full saves kept while training (applied by the platform's retention);
+    # keep_final_full: at the end keep the final full save (resume or continue
+    # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
+    "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated)
     "parallel": {"tp": 1, "pp": 1, "cp": 1},
@@ -118,6 +123,11 @@ def _merge(base: dict, override: dict, where: str = "") -> dict:
     return out
 
 
+def from_dict(spec: dict, overrides: dict | None = None) -> dict:
+    """A recipe from a dict (the platform's spec), with defaults and overrides; inputs stay where they are."""
+    return _merge(_merge(DEFAULTS, spec or {}), overrides or {})
+
+
 def load(path: str | Path, overrides: dict | None = None) -> dict:
     """Read a recipe file, apply defaults and overrides, resolve local input paths."""
     path = Path(path).resolve()
@@ -134,7 +144,8 @@ def load(path: str | Path, overrides: dict | None = None) -> dict:
     return recipe
 
 
-def validate(recipe: dict) -> None:
+def validate(recipe: dict, local_inputs: bool = True) -> None:
+    """``local_inputs=False``: the taskset is on the results volume (platform runs), not local paths."""
     preset = recipe["model"]["preset"]
     if preset not in PRESETS:
         raise ValueError(f"model.preset must be one of {sorted(PRESETS)}, got {preset!r}")
@@ -157,8 +168,16 @@ def validate(recipe: dict) -> None:
     if recipe["algorithm"]["mode"] == "fully_async" and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE:
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
     _validate_trainer(recipe)
-    if not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]:
+    if local_inputs and (not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]):
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
+    ckpt = recipe["checkpoint"]
+    if not isinstance(ckpt["keep"], int) or isinstance(ckpt["keep"], bool) or ckpt["keep"] < 1:
+        raise ValueError(f"checkpoint.keep must be an integer >= 1, got {ckpt['keep']!r}")
+    if ckpt["save_hf"] and backend(recipe) != "megatron":
+        raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
+    revision = recipe["model"]["revision"]
+    if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
+        raise ValueError(f"model.revision must be a full commit sha, got {revision!r}")
     project = recipe["tracking"]["wandb_project"]
     if not project or not re.fullmatch(r"miles-[a-z0-9][a-z0-9-]*", project):
         raise ValueError(f"tracking.wandb_project must name the campaign as miles-<campaign>, got {project!r}")
@@ -264,7 +283,10 @@ def needs_tunnel(recipe: dict) -> bool:
 
 
 def model_dir(recipe: dict) -> Path:
-    return MODELS / PRESETS[recipe["model"]["preset"]].dir_name
+    preset = PRESETS[recipe["model"]["preset"]]
+    if revision := recipe["model"].get("revision"):
+        return MODELS / f"{preset.hf_repo.replace('/', '--')}/{revision}"  # miles_ext.platform.weights key
+    return MODELS / preset.dir_name
 
 
 APP_NAME_MAX = 64  # Modal's limit on app names
@@ -386,6 +408,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --train-backend {backend(recipe)}
         --hf-checkpoint {model_dir(recipe)}
         --save {ckpt_dir} --save-interval {recipe["checkpoint"]["save_interval"]}
+        {f"--save-hf {RESULTS / run_id / 'hf' / 'iter_{rollout_id:07d}'}" if recipe["checkpoint"]["save_hf"] else ""}
         {f"--load {ckpt_dir}" if resume else ""}
 
         --prompt-data {PROMPTS} --input-key prompt --metadata-key metadata

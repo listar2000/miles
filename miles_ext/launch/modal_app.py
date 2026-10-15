@@ -9,8 +9,12 @@ adds the run inputs (tasks, prompts) and the cluster wiring.
     modal run --detach -m miles_ext.launch.modal_app --run-id <id>        # train (same id again resumes)
 
 Credentials come from the .env in ``MILES_DOTENV_DIR`` (default: cwd) as a
-Modal Secret. Names are this fork's own: app ``miles-fork``, volume
-``miles-fork-results``, queue ``miles-fork-completion``, sandbox app (Modal or
+Modal Secret, or from the per-run secret named by ``MILES_SECRET_NAME``
+(``miles_ext.platform.secrets``). Names are this fork's own, and the platform's
+dev setup overrides them through env (a ``miles_ext.platform.Target``):
+app ``miles-fork`` (``MILES_APP_NAME``), volumes ``miles-fork-results``
+(``MILES_RESULTS_VOLUME``) and ``miles-swe-models`` (``MILES_WEIGHTS_VOLUME``),
+queue ``miles-fork-completion``, sandbox app (Modal or
 Sail, per the recipe's sandbox.provider) ``<sandbox.app_prefix><run_id>``,
 default ``miles-mobius-<run_id>`` (``miles-fork-sbx-<run_id>`` before 2026-10-15;
 exit cleanup checks both).
@@ -27,6 +31,10 @@ import time
 import modal
 
 from miles_ext import stack
+from miles_ext.platform.checkpoints import apply_retention_local
+from miles_ext.platform.images import fork_image
+from miles_ext.platform.target import Target
+from miles_ext.platform.teardown import sandbox_adapter
 from miles_ext.recipes import recipe as R
 
 _SHAPE_ENV = "MILES_EXT_SHAPE"
@@ -55,10 +63,26 @@ MEGATRON_SRC = "/root/Megatron-LM"
 def _pythonpath() -> str:
     return ":".join(p for p in (os.environ.get("PYTHONPATH"), MEGATRON_SRC) if p)
 
-app = modal.App("miles-fork")
-models_volume = modal.Volume.from_name("miles-swe-models", create_if_missing=True)
-results_volume = modal.Volume.from_name("miles-fork-results", create_if_missing=True, version=2)
-secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
+# the target's names; inside a container they come back through the image env (_TARGET_ENV)
+_TARGET_ENV = "MILES_EXT_TARGET"
+if modal.is_local():
+    TARGET = Target.of({k: v for k, v in {
+        "app_name": os.environ.get("MILES_APP_NAME"),
+        "results_volume": os.environ.get("MILES_RESULTS_VOLUME"),
+        "weights_volume": os.environ.get("MILES_WEIGHTS_VOLUME"),
+        "secret_name": os.environ.get("MILES_SECRET_NAME"),
+        "modal_environment": os.environ.get("MODAL_ENVIRONMENT"),
+    }.items() if v})
+else:
+    TARGET = Target.of(json.loads(os.environ[_TARGET_ENV]))
+
+app = modal.App(TARGET.app_name)
+models_volume = modal.Volume.from_name(TARGET.weights_volume, create_if_missing=True)
+results_volume = modal.Volume.from_name(TARGET.results_volume, create_if_missing=True, version=2)
+if TARGET.secret_name:
+    secrets = [modal.Secret.from_name(TARGET.secret_name)]
+else:
+    secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
 completion_queue = modal.Queue.from_name("miles-fork-completion", create_if_missing=True)
 
 def _image_ref() -> str | None:
@@ -66,26 +90,13 @@ def _image_ref() -> str | None:
     return None if os.environ.get("MILES_FORK_RELEASE", "").startswith("commit-") else (stack.FORK_IMAGE or None)
 
 
-def _image_from_commit(commit: str) -> modal.Image:
-    """What fork/docker/build.py publishes, built by Modal: base, the same deps install, our commit over /root/miles."""
-    return (
-        modal.Image.from_registry(stack.BASE_IMAGE)
-        .run_commands(stack.DEPS_INSTALL)
-        .run_commands(f"cd {stack.MILES_SRC} && git fetch --no-tags {stack.FORK_REPO} {commit} "
-                      f"&& git checkout --force --detach {commit} && python fork/tools/ledger.py markers")
-        .env({"PYTHONPATH": str(stack.MILES_SRC), "MILES_FORK_RELEASE": f"commit-{commit[:10]}",
-              "MILES_FORK_COMMIT": commit})
-    )
-
-
 if RECIPE is None:
     image = modal.Image.debian_slim()  # placeholder: inside the container the function's own image is used
-elif FROM_COMMIT:
-    image = _image_from_commit(FROM_COMMIT)
 else:
-    image = modal.Image.from_registry(stack.FORK_IMAGE)
+    image = fork_image(FROM_COMMIT or None)
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
-                                  _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True)})
+                                  _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
+                                  _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True)})
 if RECIPE is not None:
     image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS)).add_local_file(
         RECIPE["taskset"]["prompts"], str(R.PROMPTS)
@@ -116,23 +127,13 @@ def _terminate_task_sandboxes(recipe: dict, run_id: str):
 
 
 def _terminate_app_sandboxes(recipe: dict, name: str):
-    if recipe["sandbox"]["provider"] == "sail":
-        try:
-            from miles_ext.harbor.sail import terminate_app_sailboxes
-
-            print(f"terminated {terminate_app_sailboxes(name)} Sailboxes in Sail app {name}", flush=True)
-        except Exception as e:
-            print(f"Sailbox cleanup ({name}): {type(e).__name__}: {e}", flush=True)
-        return
+    provider = recipe["sandbox"]["provider"]
     try:
         R.check_own_app_name(name)
-        sandbox_app = modal.App.lookup(name)  # exact name; never creates (create_if_missing=False)
-        sandboxes = list(modal.Sandbox.list(app_id=sandbox_app.app_id))
-        for sb in sandboxes:
-            sb.terminate()
-        print(f"terminated {len(sandboxes)} task sandboxes in {name}", flush=True)
+        n = sandbox_adapter(provider, TARGET.modal_environment).terminate(name)  # exact name, never created
+        print(f"terminated {n} {provider} sandboxes in {name}", flush=True)
     except Exception as e:
-        print(f"task sandbox cleanup ({name}): {type(e).__name__}: {e}", flush=True)
+        print(f"sandbox cleanup ({provider} {name}): {type(e).__name__}: {e}", flush=True)
 
 
 def _check_shape(recipe: dict):
@@ -143,81 +144,32 @@ def _check_shape(recipe: dict):
 @app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume}, gpu="H100", cpu=4, memory=32768,
               timeout=1800)
 def check(recipe: dict, run_id: str):
-    """Dry run inside the fork image: commit, fork fixes, package imports, trial config, Miles argv."""
-    import sys
+    """Dry run inside the fork image: the platform's deep check (miles_ext.platform.validate) on one GPU."""
+    from miles_ext.platform.validate import run_deep_check
 
     _check_shape(recipe)
     print(f"image commit {_image_commit()}, stack {os.environ.get('MILES_FORK_RELEASE')}")
-    os.environ.update({**R.harbor_env(recipe, run_id), **R.trainer_env(recipe)})
-    os.environ["MILES_SESSION_PUBLIC_URL"] = "https://tunnel.invalid/token"
-    subprocess.run([sys.executable, str(stack.MILES_SRC / "fork/tools/ledger.py"), "markers"],
-                   cwd=stack.MILES_SRC, check=True)
-    os.environ["PYTHONPATH"] = _pythonpath()
-    if R.backend(recipe) == "megatron":
-        # what the trainer imports only when it builds the model, which parse_args never reaches
-        subprocess.run([sys.executable, "-c", "import megatron.training.training, megatron.post_training.checkpointing, "
-                        "miles_plugins.models.qwen3_5, miles_plugins.mbridge; print('megatron imports: ok')"],
-                       cwd=stack.MILES_SRC, check=True)
-
-    # fix-003: the head-node lookup must work with no Ray dashboard at all
-    subprocess.run(["ray", "start", "--head", "--include-dashboard=false", "--disable-usage-stats"], check=True,
-                   capture_output=True)
-    import ray
-
-    from miles.utils.ray_utils import _get_head_node_id
-
-    ray.init(address="auto")
-    print("head node (GCS lookup, no dashboard):", _get_head_node_id())
-    ray.shutdown()
-    subprocess.run(["ray", "stop", "--force"], capture_output=True)
-
-    from miles_ext.harbor import agent_function, host_agent, reward, sandbox_agent, session_proxy  # noqa: F401
-
-    print("upstream agent function:", agent_function.hf.__file__)
-    config = agent_function.build_trial_config(
-        {"instance_id": sorted(os.listdir(R.TASKS))[0]}, "http://10.0.0.1:30003/sessions/abc/v1", {"temperature": 1.0}
-    )
-    print("trial config:", config.agent.import_path, config.agent.env.get("OPENAI_API_BASE"), config.task.path)
-    # the sandbox provider as a trial would meet it: class, credentials, resource policy
-    from harbor.environments.factory import EnvironmentFactory
-
-    env_cfg = config.environment
-    print("environment:", env_cfg.type, env_cfg.import_path, env_cfg.kwargs)
-    EnvironmentFactory.run_preflight(env_cfg.type, env_cfg.import_path)
-    EnvironmentFactory.validate_resource_policies(env_cfg)
-    print("prompt rows:", len(R.PROMPTS.read_text().splitlines()), "tasks:", len(os.listdir(R.TASKS)))
-    args = R.miles_args(recipe, run_id, resume=False)
-    os.chdir(stack.MILES_SRC)
-    sys.argv = [R.entrypoint(recipe), *args]
-    from miles.utils.arguments import parse_args
-
-    parsed = parse_args()
-    keys = ["train_backend", "fully_async", "rollout_num_gpus", "actor_num_gpus_per_node", "global_batch_size",
-            "num_rollout", "save_interval", "tito_model", "sglang_tool_call_parser", "wandb_team"]
-    print({k: getattr(parsed, k, None) for k in keys})
+    result = run_deep_check(recipe, run_id)
+    print(json.dumps({k: result[k] for k in ("trial_config", "parsed")}, indent=1, default=str))
     if R.backend(recipe) == "megatron":
         print("megatron layout:", R.megatron_parallel(recipe), "actor nodes x gpus:", R.trainer_layout(recipe))
+    if result["errors"]:
+        raise RuntimeError("check failed:\n" + "\n".join(f"{e['path']}: {e['message']}" for e in result["errors"]))
     print("check: ok")
 
 
 @app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume}, cpu=4, memory=16384, timeout=900)
 def check_cpu(recipe: dict, run_id: str):
-    """Can Miles' argument validation run without a GPU? (the platform wants to validate specs cheaply)"""
-    import sys
-    import traceback
+    """Miles' argument validation without a GPU: FSDP as is, Megatron with the CUDA toolkit's libcuda stub."""
+    from miles_ext.platform.validate import _parse_args
 
-    os.chdir(stack.MILES_SRC)
-    os.environ.update(R.trainer_env(recipe))
-    sys.argv = [R.entrypoint(recipe), *R.miles_args(recipe, run_id, resume=False)]
+    stub = R.backend(recipe) == "megatron"
     try:
-        from miles.utils.arguments import parse_args
-
-        parsed = parse_args()
-        print("parse_args without a GPU: ok", {k: getattr(parsed, k, None) for k in ("train_backend", "fully_async")})
+        parsed = _parse_args(recipe, run_id, libcuda_stub=stub)
+        print(f"parse_args without a GPU (libcuda stub: {stub}): ok", parsed)
         return True
-    except BaseException:
-        print("parse_args without a GPU failed:")
-        traceback.print_exc()
+    except RuntimeError as e:
+        print(f"parse_args without a GPU (libcuda stub: {stub}) failed: {e}")
         return False
 
 
@@ -311,6 +263,10 @@ def train(recipe: dict, run_id: str):
         print(f"fork {os.environ.get('MILES_FORK_RELEASE')} commit {_image_commit()} resume={resume}\n{entry} " + " ".join(args), flush=True)
         subprocess.run(["python", str(stack.MILES_SRC / entry), *args], cwd=stack.MILES_SRC, env=env, check=True)
         succeeded = True
+        ckpt = recipe["checkpoint"]
+        dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"], final=True)
+        removed = [f"{d['kind']}:{d['step']}" for d in dropped]
+        print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
         return str(run_dir)
     finally:
         stack_ctx.close()

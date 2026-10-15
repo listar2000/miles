@@ -8,3 +8,4 @@ One row per change important enough for its own page (rules: fork/README.md,
 | --- | --- | --- | --- | --- |
 | ext-003 | Ext (vendored) | Sail sandboxes: Harbor main's Sail provider carried verbatim, loaded by Harbor `import_path`, plus lifetime/idle caps | active; remove when the pinned harbor-miles-* branch has `environments/sail.py` | [ext-003-harbor-sail.md](ext-003-harbor-sail.md) |
 | ext-004 | Ext | Megatron trainer in recipes: `model.backend`, `parallel`, HF weights via mbridge, trainers spanning nodes, layout validation | active | [ext-004-megatron-recipes.md](ext-004-megatron-recipes.md) |
+| ext-006 | Ext | Platform API `miles_ext.platform`: target guard, validate (CPU/1 GPU), teardown adapters, per-run secret, weights cache, checkpoints and retention | active | [ext-006-platform-api.md](ext-006-platform-api.md) |
