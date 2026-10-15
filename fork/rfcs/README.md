@@ -13,4 +13,4 @@ or a design that several changes follow.
 
 | RFC | Status |
 | --- | --- |
-| [0001 One running main, latest or a stable version](0001-main-and-stable-versions.md) | accepted 2026-10-15 |
+| [0001 One running main, latest or a stable version](0001-main-and-stable-versions.md) | accepted 2026-10-15; in the rulebook |
