@@ -140,6 +140,13 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   in one module; nothing else parses the tracker.
 - **R1** (`schema.py`): JSON Schema derived from `recipe.DEFAULTS` with the field rules'
   types, enums and bounds; defaults, presets, reserved flags, namespaces.
+- **Trainer versions** (`versions.py`): a run names its trainer once, `latest` or a
+  stable version `stable-YYYY-MM-DD`; `versions.resolve` turns that into a fixed
+  `repo@sha256:...` and the commit inside it (latest: the registry's `main` tag and
+  the image's own `MILES_FORK_COMMIT`; stable: `miles_ext/stable.json` read from
+  `main` on GitHub, the packaged copy as fallback). The platform stores the result
+  and passes `launch(image=...)` to every segment, so a resume never changes build.
+  Without `image`, launch still runs `stack.FORK_IMAGE`.
 
 Alternatives: separate packages per requirement (one dependency web, more
 churn for the platform); retention by Miles flags (Miles has none for full

@@ -43,7 +43,7 @@ import modal
 
 from miles_ext import stack
 from miles_ext.platform.checkpoints import apply_retention_local
-from miles_ext.platform.images import fork_image
+from miles_ext.platform.images import IMAGE_ENV, fork_image
 from miles_ext.platform.layout import read_tracker
 from miles_ext.platform.target import Target
 from miles_ext.platform.teardown import sandbox_adapter
@@ -61,7 +61,10 @@ if modal.is_local():
     # MILES_FORK_COMMIT=<sha>: build the same image on Modal from that pushed fork
     # commit instead of pulling FORK_IMAGE (when no registry push is possible)
     FROM_COMMIT = (LAUNCH or {}).get("from_commit") or os.environ.get("MILES_FORK_COMMIT", "")
-    if not stack.FORK_IMAGE and not FROM_COMMIT:
+    # MILES_IMAGE=<repo@sha256:...>: run that published image instead of FORK_IMAGE (the platform
+    # passes its run's resolved trainer image)
+    IMAGE = (LAUNCH or {}).get("image") or os.environ.get("MILES_IMAGE", "")
+    if not stack.FORK_IMAGE and not FROM_COMMIT and not IMAGE:
         raise RuntimeError("miles_ext/stack.py: FORK_IMAGE is empty; publish it or set MILES_FORK_COMMIT")
 else:
     RECIPE = None
@@ -116,13 +119,13 @@ WORKER_COMMIT_SECS = 120
 
 def _image_ref() -> str | None:
     """The registry image this container runs, or None when Modal built it from a commit."""
-    return None if os.environ.get("MILES_FORK_RELEASE", "").startswith("commit-") else (stack.FORK_IMAGE or None)
+    return os.environ.get(IMAGE_ENV) or None
 
 
 if RECIPE is None:
     image = modal.Image.debian_slim()  # placeholder: inside the container the function's own image is used
 else:
-    image = fork_image(FROM_COMMIT or None)
+    image = fork_image(FROM_COMMIT or None, IMAGE or None)
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
                                   _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True),
@@ -436,7 +439,7 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
                     _overrides(num_rollout, rollout_batch_size, n_samples, save_interval))
     run_id = run_id or f"{recipe['name']}-{time.strftime('%Y%m%d-%H%M%S')}"
     algo = recipe["algorithm"]
-    print(f"run_id={run_id} image={'built from ' + FROM_COMMIT[:10] if FROM_COMMIT else stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
+    print(f"run_id={run_id} image={'built from ' + FROM_COMMIT[:10] if FROM_COMMIT else IMAGE or stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "
           f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE} "
           f"wandb={recipe['tracking']['wandb_entity']}/{R.wandb_project(recipe, run_id)}")
