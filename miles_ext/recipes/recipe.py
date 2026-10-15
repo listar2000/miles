@@ -155,7 +155,8 @@ def load(path: str | Path, overrides: dict | None = None) -> dict:
 
 GPU_TYPES = ("H100", "H200", "B200", "B300")
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
-# does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode
+# does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
+# Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
 ADVANTAGE_ESTIMATORS = ("grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline")
 UNUSED_SAMPLES = ("drop", "retry")
 PAUSE_GENERATION = ("in_place", "retract")
@@ -540,6 +541,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         {f"--use-kl-loss --kl-loss-coef {algo['kl_loss_coef']}" if kl_loss else ""}
         {f"--ref-load {model_dir(recipe)}" if kl_loss and backend(recipe) != "megatron" else ""}
         {f"--seed {algo['seed']}" if algo["seed"] is not None else ""}
+        {"--normalize-advantages" if algo["advantage_estimator"].startswith("reinforce_plus_plus") else ""}
         --eps-clip {algo["eps_clip"]} --eps-clip-high {algo["eps_clip_high"]}
         --optimizer adam --lr {algo["lr"]} --lr-decay-style constant
         --weight-decay {algo["weight_decay"]} --adam-beta1 {beta1} --adam-beta2 {beta2}

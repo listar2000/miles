@@ -330,6 +330,13 @@ def test_named_knobs_emit_flags():
     assert _value(argv, "--pause-generation-mode") == "retract"
 
 
+@pytest.mark.parametrize("estimator", ["reinforce_plus_plus", "reinforce_plus_plus_baseline"])
+def test_reinforce_pp_normalizes_advantages(estimator):
+    """Miles asserts --normalize-advantages for these estimators (arguments.py, miles_validate_args)."""
+    assert "--normalize-advantages" in _argv(_recipe(algorithm={"advantage_estimator": estimator}))
+    assert "--normalize-advantages" not in _argv(_recipe())
+
+
 def test_megatron_kl_loss_keeps_one_ref_load():
     argv = _argv(_recipe("qwen35-9b-swegym8-megatron-2node.yaml", algorithm={"kl_loss_coef": 0.01}))
     assert argv.count("--ref-load") == 1 and "--use-kl-loss" in argv
