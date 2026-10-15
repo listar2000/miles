@@ -1,0 +1,9 @@
+[
+  {
+    "name": "stable-2026-10-15",
+    "commit": "28dcfeb141ce05ef5743acf85c4c64b19144854f",
+    "image": "docker.io/starlimobius/miles@sha256:a3715f98ac5fbd36405df78fd3d83ac4b0f817bd9a56187adcca780d8caa9126",
+    "date": "2026-10-15",
+    "note": "release fork-v0.1.2-r6; passed every dev run (smoke-r6-v1, deep validate FSDP and 2-node Megatron)"
+  }
+]

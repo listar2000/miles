@@ -41,3 +41,12 @@ MILES_SRC = Path("/root/miles")
 # upstream's release-docker trigger (v[0-9]+.*).
 FORK_RELEASE = "fork-v0.1.2-r6"
 FORK_IMAGE = "docker.io/starlimobius/miles:fork-v0.1.2-r6@sha256:a3715f98ac5fbd36405df78fd3d83ac4b0f817bd9a56187adcca780d8caa9126"  # built from 28dcfeb141
+
+# Trainer versions (miles_ext/platform/versions.py): main's newest build is the
+# moving tag LATEST_TAG; each build also keeps an immutable main-<sha12> tag.
+# A stable version is a dated tag on a commit and on its image, listed in
+# miles_ext/stable.json. Until the platform moves to versions, FORK_IMAGE stays
+# the image it runs.
+IMAGE_REPO = "docker.io/starlimobius/miles"
+LATEST_TAG = "main"
+STABLE_RE = r"stable-\d{4}-\d{2}-\d{2}(\.\d+)?"

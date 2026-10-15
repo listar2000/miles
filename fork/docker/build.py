@@ -31,6 +31,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -53,8 +54,9 @@ if modal.is_local():
 
     BASE_IMAGE = stack.BASE_IMAGE
     DEPS_INSTALL = stack.DEPS_INSTALL
+    LATEST_TAG, STABLE_RE = stack.LATEST_TAG, stack.STABLE_RE
 else:
-    BASE_IMAGE = DEPS_INSTALL = "unused-in-container"
+    BASE_IMAGE = DEPS_INSTALL = LATEST_TAG = STABLE_RE = "unused-in-container"
 
 app = modal.App("miles-fork-build")
 base_image = modal.Image.from_registry(BASE_IMAGE).entrypoint([])
@@ -158,7 +160,12 @@ def crane_binary(workdir: Path) -> Path:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--commit", default="HEAD", help="fork commit to release (must be on the fork remote)")
-    ap.add_argument("--release", default=stack.FORK_RELEASE, help="image tag, fork-<upstream tag>-r<N>")
+    ap.add_argument("--release", default=None, help="image tag, fork-<upstream tag>-r<N> (default: stack.FORK_RELEASE)")
+    ap.add_argument("--main", action="store_true",
+                    help="build main's tip: push main-<sha12> (immutable), then move the latest tag (main) to it")
+    ap.add_argument("--mark-stable", metavar="stable-YYYY-MM-DD", default=None,
+                    help="no build: add this tag to an existing image (--image repo@sha256:...)")
+    ap.add_argument("--image", default=None, help="with --mark-stable: the image, pinned by digest")
     ap.add_argument("--repo", default=None, help="Docker Hub repository (default: $DOCKERHUB_USERNAME/miles)")
     ap.add_argument("--workdir", default=None, help="keep layer tarballs here (a retry with the same pins reuses the deps layer)")
     args = ap.parse_args()
@@ -166,10 +173,25 @@ def main():
     user, token = os.environ.get("DOCKERHUB_USERNAME"), os.environ.get("DOCKERHUB_TOKEN")
     if not user or not token:
         raise SystemExit("DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be set")
+    repo = f"docker.io/{args.repo or user + '/miles'}"
+    if args.mark_stable:
+        return mark_stable(args, repo, user, token)
     commit = git("rev-parse", args.commit)
     if not git("branch", "-r", "--contains", commit):
         raise SystemExit(f"{commit[:10]} is not on any remote branch; push it first")
-    target = f"docker.io/{args.repo or user + '/miles'}:{args.release}"
+    if args.main:
+        if args.release:
+            raise SystemExit("--main names the image itself (main-<sha12>); drop --release")
+        try:
+            tip = git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{LATEST_TAG}")
+        except subprocess.CalledProcessError:
+            tip = ""
+        if commit != tip:
+            raise SystemExit(f"{commit[:10]} is not origin/{LATEST_TAG}'s tip ({tip[:10] or 'no such branch'}): "
+                             f"the {LATEST_TAG} tag only moves forward to the tip; fetch first")
+        args.release = f"{LATEST_TAG}-{commit[:12]}"
+    args.release = args.release or stack.FORK_RELEASE
+    target = f"{repo}:{args.release}"
     t0 = time.monotonic()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -220,9 +242,45 @@ def main():
             mutate += ["--label", f"{k}={v}"]
         pushed = run_crane(*mutate)
         digest = run_crane("digest", target)
+        if args.main:  # latest: what a run with trainer "latest" resolves to (miles_ext/platform/versions.py)
+            run_crane("tag", f"{target}@{digest}", LATEST_TAG)
     print(f"pushed {pushed} in {(time.monotonic() - t0) / 60:.1f} min\n"
           f'FORK_IMAGE = "{target}@{digest}"')
-    print(json.dumps({"release": args.release, "commit": commit, "image": f"{target}@{digest}"}))
+    print(json.dumps({"release": args.release, "commit": commit, "image": f"{target}@{digest}",
+                      "moved": LATEST_TAG if args.main else None}))
+
+
+def mark_stable(args, repo: str, user: str, token: str) -> None:
+    """Tag an existing image as a stable version; the image itself is unchanged."""
+    if not re.fullmatch(STABLE_RE, args.mark_stable):
+        raise SystemExit(f"--mark-stable {args.mark_stable!r} must look like stable-YYYY-MM-DD")
+    if not args.image or "@sha256:" not in args.image:
+        raise SystemExit("--mark-stable needs --image repo@sha256:<digest>")
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(args.workdir or tmp)
+        work.mkdir(parents=True, exist_ok=True)
+        crane = crane_binary(work)
+        env = {**os.environ, "DOCKER_CONFIG": str(work / "docker")}
+
+        def run_crane(*cargs: str, stdin: str | None = None) -> str:
+            proc = subprocess.run([str(crane), *cargs], env=env, input=stdin, capture_output=True, text=True)
+            if proc.returncode:
+                raise SystemExit(f"crane {cargs[0]} failed:\n{proc.stderr.strip()}")
+            return proc.stdout.strip()
+
+        try:
+            existing = run_crane("digest", f"{repo}:{args.mark_stable}")
+        except SystemExit:
+            existing = None
+        want = args.image.split("@", 1)[1]
+        if existing and existing != want:
+            raise SystemExit(f"{repo}:{args.mark_stable} already names {existing}; stable tags never move")
+        run_crane("auth", "login", "index.docker.io", "-u", user, "--password-stdin", stdin=token)
+        run_crane("tag", args.image, args.mark_stable)
+        digest = run_crane("digest", f"{repo}:{args.mark_stable}")
+    if digest != want:
+        raise SystemExit(f"tagged {args.mark_stable} but it reads back as {digest}")
+    print(json.dumps({"stable": args.mark_stable, "image": f"{repo}@{digest}"}))
 
 
 if __name__ == "__main__":
