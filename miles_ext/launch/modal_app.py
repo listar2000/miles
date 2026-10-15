@@ -13,7 +13,10 @@ Modal Secret, or from the per-run secret named by ``MILES_SECRET_NAME``
 (``miles_ext.platform.secrets``). Names are this fork's own, and the platform's
 dev setup overrides them through env (a ``miles_ext.platform.Target``):
 app ``miles-fork`` (``MILES_APP_NAME``), volumes ``miles-fork-results``
-(``MILES_RESULTS_VOLUME``) and ``miles-swe-models`` (``MILES_WEIGHTS_VOLUME``),
+(``MILES_RESULTS_VOLUME``) and ``miles-swe-models`` (``MILES_WEIGHTS_VOLUME``).
+Final checkpoint retention runs after a successful run unless a per-run secret is
+used (platform runs retain themselves); ``MILES_FINAL_RETENTION=1/0`` overrides.
+Other names:
 queue ``miles-fork-completion``, sandbox app (Modal or
 Sail, per the recipe's sandbox.provider) ``<sandbox.app_prefix><run_id>``,
 default ``miles-mobius-<run_id>`` (``miles-fork-sbx-<run_id>`` before 2026-10-15;
@@ -75,6 +78,15 @@ if modal.is_local():
     }.items() if v})
 else:
     TARGET = Target.of(json.loads(os.environ[_TARGET_ENV]))
+# Final checkpoint retention after a successful run, for standalone use. A platform
+# caller (one that passes a per-run secret) runs finalize_hf and its own retention,
+# with its pinned steps, so the launcher leaves the checkpoints alone.
+# MILES_FINAL_RETENTION=1/0 overrides.
+_RETENTION_ENV = "MILES_FINAL_RETENTION"
+if modal.is_local():
+    FINAL_RETENTION = os.environ.get(_RETENTION_ENV, "0" if TARGET.secret_name else "1") == "1"
+else:
+    FINAL_RETENTION = os.environ.get(_RETENTION_ENV) == "1"
 
 app = modal.App(TARGET.app_name)
 models_volume = modal.Volume.from_name(TARGET.weights_volume, create_if_missing=True)
@@ -96,7 +108,8 @@ else:
     image = fork_image(FROM_COMMIT or None)
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
-                                  _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True)})
+                                  _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True),
+                                  _RETENTION_ENV: "1" if FINAL_RETENTION else "0"})
 if RECIPE is not None:
     image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS)).add_local_file(
         RECIPE["taskset"]["prompts"], str(R.PROMPTS)
@@ -263,10 +276,12 @@ def train(recipe: dict, run_id: str):
         print(f"fork {os.environ.get('MILES_FORK_RELEASE')} commit {_image_commit()} resume={resume}\n{entry} " + " ".join(args), flush=True)
         subprocess.run(["python", str(stack.MILES_SRC / entry), *args], cwd=stack.MILES_SRC, env=env, check=True)
         succeeded = True
-        ckpt = recipe["checkpoint"]
-        dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"], final=True)
-        removed = [f"{d['kind']}:{d['step']}" for d in dropped]
-        print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
+        if FINAL_RETENTION:
+            ckpt = recipe["checkpoint"]
+            dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
+                                            final=True)
+            removed = [f"{d['kind']}:{d['step']}" for d in dropped]
+            print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
         return str(run_dir)
     finally:
         stack_ctx.close()

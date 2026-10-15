@@ -53,7 +53,12 @@ R3 (`launch`), R5/R6 (`observe`, supervisor, exit record) come in r4.
   save; pinned steps are never deleted. `delete_checkpoint` builds the path from a
   validated run id, an integer step and a kind, so only `<run>/checkpoints/iter_N`
   and `<run>/hf/iter_N` can be deleted, and it refuses the save the run resumes
-  from. The test launcher applies final retention after a successful run.
+  from. At the end, the final full save also stays while no HF export exists (FSDP
+  before `finalize_hf`), whatever `keep_final_full` says. The test launcher applies
+  final retention after a successful run only when standalone: with a per-run
+  secret (a platform caller) it leaves checkpoints to the caller, which runs
+  `finalize_hf` and then its own retention with its pinned steps
+  (`MILES_FINAL_RETENTION=1/0` overrides; r4 fix of two r3 bugs found by the platform).
 - **R1 (minimal)** (`schema.py`): JSON Schema derived from `recipe.DEFAULTS`,
   defaults, presets, reserved flags, namespaces. The full spec model is r4.
 

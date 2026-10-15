@@ -142,6 +142,9 @@ def test_retention_final_knob_and_pins():
         ("full", 10), ("full", 20), ("hf", 10)]
     assert _steps(C.retention_plan(saves, keep=1, keep_final_full=False, final=True, latest=20, pinned=(10,))) == [
         ("full", 20)]
+    # FSDP before finalize_hf: no HF export yet, so the final full save stays whatever the knob says
+    assert _steps(C.retention_plan(_saves([10, 20], []), keep=1, keep_final_full=False, final=True, latest=20)) == [
+        ("full", 10)]
 
 
 def test_retention_local(tmp_path):
@@ -225,3 +228,9 @@ def test_validate_shallow_resolves_argv():
     assert out["ok"] and out["argv"][0] == "train_async.py"
     assert out["argv"][out["argv"].index("--save-hf") + 1] == "/results/run1/hf/iter_{rollout_id:07d}"
     assert out["resolved"]["sandbox"]["app_prefix"] == "miles-mobius-"
+
+
+def test_launcher_final_retention_switch():
+    src = (ROOT / "miles_ext/launch/modal_app.py").read_text()
+    assert '"0" if TARGET.secret_name else "1"' in src  # platform runs (per-run secret) retain themselves
+    assert "if FINAL_RETENTION:" in src

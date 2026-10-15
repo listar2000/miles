@@ -103,7 +103,8 @@ def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final
 
     While training (``final=False``): keep the newest ``keep`` full saves and the
     one the run resumes from; HF exports are kept. At the end (``final=True``):
-    keep the final HF export, and the final full save only if ``keep_final_full``.
+    keep the final HF export, and the final full save if ``keep_final_full`` or if there
+    is no HF export yet.
     Pinned steps are never deleted."""
     if keep < 1:
         raise ValueError("keep must be >= 1")
@@ -114,7 +115,9 @@ def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final
         keep_steps = {s["step"] for s in full[:keep]} | ({latest} if latest is not None else set())
         drop = [s for s in full if s["step"] not in keep_steps]
     else:
-        keep_full = {full[0]["step"]} if (full and keep_final_full) else set()
+        # the final full save stays when asked, and always while no HF export exists
+        # (FSDP before finalize_hf): it is then the run's only copy of its weights
+        keep_full = {full[0]["step"]} if (full and (keep_final_full or not hf)) else set()
         drop = [s for s in full if s["step"] not in keep_full] + hf[1:]
     return [s for s in drop if s["step"] not in set(pinned)]
 
