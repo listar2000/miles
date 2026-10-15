@@ -7,6 +7,9 @@ understand: every Miles and Harbor detail stays in the fork, behind a few calls
 that take a `target` (where the run's resources live). This page covers the
 design's fork requirements R2, R4, R7, R8 and R9, plus a minimal R1 (schema).
 r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
+r6 adds named training knobs (the platform set five Miles flags through
+`extra_args`, which a named-fields API must not need) and the rest of the r5
+adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
 
 ## Decision
 - **Target** (`target.py`): `modal_environment`, `app_name` (GPU app),
@@ -39,7 +42,8 @@ r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
   key. Name `<namespace of app_name>secret-<run_id>` unless the target names one.
 - **R8 weights** (`weights.py`): `<org>--<name>/<sha>` on the weights volume, a
   `.ready` marker written after the download's commit, a lock per key in the Dict
-  `<weights_volume>-locks` (stale after 2 h). Branches resolve to a sha first.
+  `<weights_volume>-locks`; the holder refreshes it every 5 min while the download
+  runs and a lock 30 min without a refresh is taken over (r6, review M5). Branches resolve to a sha first.
   `list_weights` and `delete_weights` (the user's follow-up: cached weights must
   be listable and deletable); delete refuses anything but a keyed snapshot and a
   key being prepared. Recipes read the keyed path when `model.revision` is set,
@@ -77,8 +81,12 @@ r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
   remove it (save written), stops Miles and exits cleanly; stops Miles on SIGTERM;
   heartbeat with step and Miles metrics (from `{save}/events/*.jsonl`) to the Dict
   `<ns>progress` key `run:<run_id>`; lease at `lease:<run_id>` (`renew_lease`).
-  Worker nodes commit every 2 min so their shards reach the volume. `observe`
-  reads it back with completion and checkpoints.
+  `observe` reads it back with completion and checkpoints.
+- **Multi-node commits** (`shards.py`, r6, review M7): before rank 0 commits a new
+  tracker it asks every worker to commit (`commit:<run_id>` with a fresh token) and
+  waits for their acks (queue partition `ack-<run_id>`, 300 s at most), so a durable
+  tracker never names a save whose other-node shards are not durable. Workers also
+  commit every 2 min and on exit.
 - **One segment at a time**: `launch` claims `active:<run_id>` (refuses while the call it
   names is running), then writes `run:<run_id>` as `pending` with the call id. Heartbeats and
   exit records carry `call_id`; `observe` reports `ended` only when the exit record's call id
@@ -91,8 +99,31 @@ r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
 - **R6 exit record**: `<run>/exit.json`, `<run>/exits.jsonl` and Dict `exit:<run_id>`,
   reason `success|segment_end|lease_expired|stopped|oom|nccl_timeout|error`, with
   `retryable`, `complete` and the output tail on failure. Teardown deletes the Dict keys.
-- **R1 (minimal)** (`schema.py`): JSON Schema derived from `recipe.DEFAULTS`,
-  defaults, presets, reserved flags, namespaces. The full spec model is r4.
+- **Named training knobs** (r6, platform review P-M1): `algorithm.advantage_estimator`
+  (`grpo` | `gspo` | `reinforce_plus_plus` | `reinforce_plus_plus_baseline`; not `ppo`,
+  which needs a critic the recipe does not build), `algorithm.kl_loss_coef` (> 0 adds
+  `--use-kl-loss`; FSDP then also loads the base weights as `--ref-load`, Megatron
+  already passes it), `algorithm.entropy_coef`, `algorithm.seed` (null: Miles' 1234),
+  and a new `async` section: `over_sampling_batch_size`, `max_concurrent_samples`
+  (null: batch x n), `unused_samples` (`drop` | `retry`), `pause_generation`
+  (`in_place` | `retract`; Miles rejects `abort` and `--partial-rollout` in fully async
+  mode, so neither is offered). Defaults reproduce the r5 argv.
+- **Field checks** (r6, review M1): `recipe.FIELD_RULES` gives each field a type and,
+  where it matters, a range or choice list (GPU types, estimators, minimums);
+  `field_errors` reports every bad field as `{path, message}` before anything computes
+  with the values, so a string where a number belongs is an error, not a TypeError.
+  Miles' own asserts on the async sizes are mirrored.
+- **Reserved flags** (r6, review M2): `extra_args` may not repeat any flag `miles_args`
+  emits for the recipe (computed from its output), nor a named knob's flag; the hand list
+  `RESERVED_FLAGS` only names the key to use instead.
+- **Teardown reports GPU work** (r6, review M8): it also cancels the call named in
+  `active:<run_id>`, stops the per-run app by name even when given an app id, and lists
+  calls and apps not yet stopped in `remaining`. A test imports the Modal internals the
+  app stop relies on, so an SDK upgrade fails there first.
+- **Layout** (`layout.py`, r6, review L1): run paths, tracker reads and volume handles
+  in one module; nothing else parses the tracker.
+- **R1** (`schema.py`): JSON Schema derived from `recipe.DEFAULTS` with the field rules'
+  types, enums and bounds; defaults, presets, reserved flags, namespaces.
 
 Alternatives: separate packages per requirement (one dependency web, more
 churn for the platform); retention by Miles flags (Miles has none for full
@@ -105,7 +136,13 @@ and `checkpoints.apply_retention_local`; recipe keys `model.revision`,
 `checkpoint.keep`, `checkpoint.keep_final_full`, `checkpoint.save_hf`;
 `recipe.from_dict` and `recipe.validate(local_inputs=False)` for specs whose
 taskset is on the results volume (`<results_volume>/<run_id>/inputs/`).
-Tests: `miles_ext/tests/test_platform.py`, `test_sandbox_cleanup.py` (CPU only).
+Tests (CPU only): `miles_ext/tests/test_platform.py`, `test_supervisor.py`,
+`test_shards.py`, `test_sandbox_cleanup.py`, `test_vendored_overrides.py`.
+The trainer function lives in `miles_ext/launch/modal_app.py`, split by rank
+(`_head`, `_worker`); moving it under `platform/` with one config object is open.
+The package re-exports functions named like their modules (`schema`, `validate`,
+`teardown`, `launch`; review L2); the platform imports the functions, so the
+names stay, and tests import modules with `importlib`.
 Live checks on the dev environment are in the r3 release note.
 
 ## Checked on miles-dev (2026-10-15, commit dc768d5df2)
@@ -126,4 +163,4 @@ Live checks on the dev environment are in the r3 release note.
 
 ## Remove when
 Not an upstream gap: this is our platform's API. It changes with the platform
-(r5: launch, observe, supervisor, exit record).
+(r5: launch, observe, supervisor, exit record; r6: named knobs and the review backlog).
