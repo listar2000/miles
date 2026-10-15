@@ -240,3 +240,97 @@ def test_launcher_final_retention_switch():
     src = (ROOT / "miles_ext/launch/modal_app.py").read_text()
     assert '"0" if TARGET.secret_name else "1"' in src  # platform runs (per-run secret) retain themselves
     assert 'if FINAL_RETENTION and record["reason"] == "success":' in src
+
+
+# r6: named training knobs, field checks, reserved flags
+
+def _argv(recipe: dict, run_id: str = "run1") -> list[str]:
+    return R.miles_args(recipe, run_id, resume=False)
+
+
+def _value(argv: list[str], flag: str) -> str:
+    return argv[argv.index(flag) + 1]
+
+
+def test_named_knobs_defaults_match_r5_argv():
+    argv = _argv(_recipe())
+    assert _value(argv, "--advantage-estimator") == "grpo"
+    assert _value(argv, "--pause-generation-mode") == "in_place"
+    assert _value(argv, "--async-unused-samples-handler") == "drop"
+    assert _value(argv, "--entropy-coef") == "0.0" and _value(argv, "--kl-coef") == "0"
+    assert int(_value(argv, "--async-max-concurrent-samples")) > 0
+    for flag in ("--use-kl-loss", "--seed", "--over-sampling-batch-size", "--ref-load"):
+        assert flag not in argv
+
+
+def test_named_knobs_emit_flags():
+    r = _recipe(algorithm={"advantage_estimator": "gspo", "kl_loss_coef": 0.01, "entropy_coef": 0.001, "seed": 7},
+                **{"async": {"over_sampling_batch_size": 64, "max_concurrent_samples": 48, "unused_samples": "retry",
+                             "pause_generation": "retract"}})
+    assert V.instant_errors(r, "run1", DEV) == []
+    argv = _argv(r)
+    assert _value(argv, "--advantage-estimator") == "gspo"
+    assert "--use-kl-loss" in argv and _value(argv, "--kl-loss-coef") == "0.01"
+    assert _value(argv, "--ref-load") == str(R.model_dir(r))  # FSDP loads the reference copy
+    assert _value(argv, "--seed") == "7" and _value(argv, "--entropy-coef") == "0.001"
+    assert _value(argv, "--over-sampling-batch-size") == "64"
+    assert _value(argv, "--async-max-concurrent-samples") == "48"
+    assert _value(argv, "--async-unused-samples-handler") == "retry"
+    assert _value(argv, "--pause-generation-mode") == "retract"
+
+
+def test_megatron_kl_loss_keeps_one_ref_load():
+    argv = _argv(_recipe("qwen35-9b-swegym8-megatron-2node.yaml", algorithm={"kl_loss_coef": 0.01}))
+    assert argv.count("--ref-load") == 1 and "--use-kl-loss" in argv
+
+
+@pytest.mark.parametrize("over, path", [
+    ({"algorithm": {"advantage_estimator": "ppo"}}, "algorithm.advantage_estimator"),
+    ({"algorithm": {"kl_loss_coef": -1}}, "algorithm.kl_loss_coef"),
+    ({"algorithm": {"lr": 0}}, "algorithm.lr"),
+    ({"algorithm": {"num_rollout": "30"}}, "algorithm.num_rollout"),
+    ({"algorithm": {"seed": 1.5}}, "algorithm.seed"),
+    ({"algorithm": {"n_samples": True}}, "algorithm.n_samples"),
+    ({"async": {"pause_generation": "abort"}}, "async.pause_generation"),
+    ({"async": {"over_sampling_batch_size": 0}}, "async.over_sampling_batch_size"),
+    ({"cluster": {"gpu": "A10"}}, "cluster.gpu"),
+    ({"cluster": {"nodes": 0}}, "cluster.nodes"),
+    ({"cluster": {"timeout_hours": 25}}, "cluster.timeout_hours"),
+    ({"checkpoint": {"keep_final_full": "yes"}}, "checkpoint.keep_final_full"),
+])
+def test_field_errors(over, path):
+    errs = V.instant_errors(_recipe(**over), "run1", DEV)
+    assert [e["path"] for e in errs] == [path], errs
+
+
+def test_async_bounds_follow_miles():
+    errs = V.instant_errors(_recipe(algorithm={"rollout_batch_size": 8}, **{"async": {"over_sampling_batch_size": 7}}),
+                            "run1", DEV)
+    assert errs[0]["path"] == "async.over_sampling_batch_size"
+    errs = V.instant_errors(_recipe(**{"async": {"max_concurrent_samples": 1}}), "run1", DEV)
+    assert errs[0]["path"] == "async.max_concurrent_samples"
+
+
+def test_field_errors_report_every_field():
+    errs = V.instant_errors(_recipe(algorithm={"lr": "1e-6", "num_rollout": 0}), "run1", DEV)
+    assert {e["path"] for e in errs} == {"algorithm.lr", "algorithm.num_rollout"}
+    with pytest.raises(ValueError, match="algorithm.lr"):
+        R.validate(_recipe(algorithm={"lr": "1e-6"}), local_inputs=False)
+
+
+def test_reserved_flags_cover_everything_emitted():
+    errs = V.instant_errors(_recipe(extra_args=["--advantage-estimator", "gspo", "--lr=1e-5", "--seed", "3"]),
+                            "run1", DEV)
+    assert [e["message"].split()[0] for e in errs] == ["--advantage-estimator", "--lr", "--seed"]
+    assert V.instant_errors(_recipe(extra_args=["--log-probs-chunk-size", "512"]), "run1", DEV) == []
+    assert S.emitted_flags(_recipe()) >= {"--save", "--load", "--lr", "--advantage-estimator"}
+
+
+def test_schema_carries_rules():
+    props = S.schema()["json_schema"]["properties"]
+    assert props["algorithm"]["properties"]["advantage_estimator"]["enum"] == list(R.ADVANTAGE_ESTIMATORS)
+    assert props["algorithm"]["properties"]["lr"] == {"type": "number", "exclusiveMinimum": 0}
+    assert props["async"]["properties"]["over_sampling_batch_size"] == {
+        "anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]}
+    assert props["cluster"]["properties"]["gpu"]["enum"] == list(R.GPU_TYPES)
+    assert set(R.FIELD_RULES) <= {p for p, _ in R._leaves(R.DEFAULTS)}  # no rule for a key that does not exist

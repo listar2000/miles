@@ -38,15 +38,45 @@ RESERVED_FLAGS = {
     "--custom-generate-function-path": "taskset.harness",
     "--session-server-port": "platform (session servers)",
     "--use-session-server": "platform (session servers)",
+    # named knobs (r6): reserved even when the recipe leaves the flag out
+    "--advantage-estimator": "algorithm.advantage_estimator",
+    "--use-kl-loss": "algorithm.kl_loss_coef",
+    "--kl-loss-coef": "algorithm.kl_loss_coef",
+    "--entropy-coef": "algorithm.entropy_coef",
+    "--seed": "algorithm.seed",
+    "--max-weight-staleness": "algorithm.max_weight_staleness",
+    "--over-sampling-batch-size": "async.over_sampling_batch_size",
+    "--async-max-concurrent-samples": "async.max_concurrent_samples",
+    "--async-unused-samples-handler": "async.unused_samples",
+    "--pause-generation-mode": "async.pause_generation",
+    "--partial-rollout": "nothing (Miles rejects it in fully async mode)",
 }
 
 
-def reserved_flag_errors(recipe: dict) -> list[dict]:
+def emitted_flags(recipe: dict, run_id: str = "reserved-check") -> set[str]:
+    """Every flag ``miles_args`` emits for this recipe (resume and fresh start), without its extra_args."""
+    base = {**recipe, "extra_args": []}
+    flags = set()
+    for resume in (False, True):
+        flags |= {a for a in R.miles_args(base, run_id, resume=resume) if a.startswith("--")}
+    return flags
+
+
+def reserved_flag_errors(recipe: dict, run_id: str = "reserved-check") -> list[dict]:
+    """``extra_args`` may not repeat a flag the recipe already sets: the hand list names the key to
+    use instead; any other flag ``miles_args`` emits for this recipe is reserved too (argparse would
+    otherwise let the later copy win silently)."""
+    try:
+        emitted = emitted_flags(recipe, run_id)
+    except (ValueError, KeyError, TypeError):
+        emitted = set()  # the recipe is invalid; its own errors are reported
     errors = []
     for arg in map(str, recipe.get("extra_args") or []):
         flag = arg.split("=", 1)[0]
         if flag in RESERVED_FLAGS:
             errors.append({"path": "extra_args", "message": f"{flag} is set by {RESERVED_FLAGS[flag]}; use that"})
+        elif flag in emitted:
+            errors.append({"path": "extra_args", "message": f"{flag} is already set by the recipe"})
     return errors
 
 
@@ -69,12 +99,29 @@ def _schema_of(value, nullable: bool = False) -> dict:
     return {"anyOf": [t, {"type": "null"}]} if nullable else t
 
 
+_JSON_TYPES = {"int": "integer", "number": "number", "str": "string", "bool": "boolean", "list": "array"}
+
+
+def _rule_schema(rule: dict) -> dict:
+    t = {"type": _JSON_TYPES[rule["type"]]}
+    if "enum" in rule:
+        t["enum"] = list(rule["enum"])
+    if "min" in rule:
+        t["exclusiveMinimum" if rule.get("exclusive_min") else "minimum"] = rule["min"]
+    if "max" in rule:
+        t["maximum"] = rule["max"]
+    return {"anyOf": [t, {"type": "null"}]} if rule.get("nullable") else t
+
+
 def schema() -> dict:
     json_schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "Miles recipe",
                    **_schema_of(R.DEFAULTS)}
-    json_schema["properties"]["model"]["properties"]["preset"] = {"enum": sorted(PRESETS)}
-    json_schema["properties"]["sandbox"]["properties"]["provider"] = {"enum": list(R.SANDBOX_PROVIDERS)}
-    json_schema["properties"]["model"]["properties"]["backend"] = {"enum": [*R.BACKENDS, None]}
+    for path, rule in R.FIELD_RULES.items():
+        node = json_schema
+        *parents, leaf = path.split(".")
+        for key in parents:
+            node = node["properties"][key]
+        node["properties"][leaf] = _rule_schema(rule)
     return {
         "api_version": API_VERSION,
         "json_schema": json_schema,

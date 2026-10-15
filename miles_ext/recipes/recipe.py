@@ -30,6 +30,7 @@ HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST)
 # Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
 # miles_ext (the pinned Harbor predates it), loaded by import path
 SANDBOX_PROVIDERS = ("modal", "sail")
+BACKENDS = ("fsdp", "megatron")
 SAIL_IMPORT_PATH = "miles_ext.harbor.sail:SailEnvironment"
 
 GPUS_PER_NODE = 8
@@ -97,7 +98,15 @@ DEFAULTS: dict[str, Any] = {
         "max_weight_staleness": 2,
         "sglang_mem_fraction": None,  # None: 0.85 fully async, 0.7 colocated
         "max_tokens_per_gpu": 32768,
+        "advantage_estimator": "grpo",
+        "kl_loss_coef": 0.0,  # > 0: KL loss against the base weights (FSDP then loads a reference copy)
+        "entropy_coef": 0.0,
+        "seed": None,  # None: Miles' default (1234)
     },
+    # fully async rollout knobs (Miles' --async-* flags); None: Miles' default or, for
+    # max_concurrent_samples, rollout_batch_size * n_samples
+    "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
+              "pause_generation": "in_place"},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
@@ -144,16 +153,123 @@ def load(path: str | Path, overrides: dict | None = None) -> dict:
     return recipe
 
 
+GPU_TYPES = ("H100", "H200", "B200", "B300")
+# Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
+# does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode
+ADVANTAGE_ESTIMATORS = ("grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline")
+UNUSED_SAMPLES = ("drop", "retry")
+PAUSE_GENERATION = ("in_place", "retract")
+
+# path -> rule; every other leaf takes its type from DEFAULTS. Keys: type ("int", "number", "str",
+# "bool", "list"), nullable, min, max, enum.
+FIELD_RULES: dict[str, dict] = {
+    "cluster.gpu": {"type": "str", "enum": GPU_TYPES},
+    "cluster.nodes": {"type": "int", "min": 1, "max": 16},
+    "cluster.train_gpus": {"type": "int", "min": 1},
+    "cluster.cpu": {"type": "number", "min": 1},
+    "cluster.memory_gib": {"type": "int", "min": 1},
+    "cluster.timeout_hours": {"type": "number", "min": 0.1, "max": 24},
+    "model.preset": {"type": "str", "enum": tuple(sorted(PRESETS))},
+    "model.backend": {"type": "str", "nullable": True, "enum": BACKENDS},
+    "model.revision": {"type": "str", "nullable": True},
+    "taskset.tasks_dir": {"type": "str", "nullable": True},
+    "taskset.prompts": {"type": "str", "nullable": True},
+    "taskset.harness": {"type": "str", "enum": HARNESSES},
+    "agent.max_steps": {"type": "int", "min": 1},
+    "agent.exec_timeout": {"type": "int", "min": 1},
+    "agent.timeout": {"type": "int", "min": 1},
+    "agent.trial_timeout": {"type": "int", "min": 1},
+    "agent.verifier_timeout": {"type": "int", "min": 1},
+    "agent.cwd": {"type": "str", "nullable": True},
+    "sandbox.provider": {"type": "str", "enum": SANDBOX_PROVIDERS},
+    "sandbox.lifetime_secs": {"type": "int", "min": 60},
+    "sandbox.idle_secs": {"type": "int", "min": 1},
+    "sandbox.resource_policy": {"type": "str", "enum": ("limit", "request")},
+    "algorithm.mode": {"type": "str", "enum": ("fully_async", "sync")},
+    "algorithm.num_rollout": {"type": "int", "min": 1},
+    "algorithm.rollout_batch_size": {"type": "int", "min": 1},
+    "algorithm.n_samples": {"type": "int", "min": 1},
+    "algorithm.temperature": {"type": "number", "min": 0},
+    "algorithm.max_response_len": {"type": "int", "min": 1},
+    "algorithm.max_seq_len": {"type": "int", "min": 1},
+    "algorithm.lr": {"type": "number", "min": 0, "exclusive_min": True},
+    "algorithm.weight_decay": {"type": "number", "min": 0},
+    "algorithm.eps_clip": {"type": "number", "min": 0},
+    "algorithm.eps_clip_high": {"type": "number", "min": 0},
+    "algorithm.tis_clip": {"type": "number", "min": 0},
+    "algorithm.max_weight_staleness": {"type": "int", "min": 0},
+    "algorithm.sglang_mem_fraction": {"type": "number", "nullable": True, "min": 0.05, "max": 0.95},
+    "algorithm.max_tokens_per_gpu": {"type": "int", "min": 1},
+    "algorithm.advantage_estimator": {"type": "str", "enum": ADVANTAGE_ESTIMATORS},
+    "algorithm.kl_loss_coef": {"type": "number", "min": 0},
+    "algorithm.entropy_coef": {"type": "number", "min": 0},
+    "algorithm.seed": {"type": "int", "nullable": True},
+    "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
+    "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
+    "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
+    "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
+    "checkpoint.save_interval": {"type": "int", "min": 1},
+    "checkpoint.keep": {"type": "int", "min": 1},
+    "parallel.tp": {"type": "int", "min": 1},
+    "parallel.pp": {"type": "int", "min": 1},
+    "parallel.cp": {"type": "int", "min": 1},
+    "tracking.wandb_project": {"type": "str", "nullable": True},
+    "tracking.wandb_entity": {"type": "str", "nullable": True},
+}
+_TYPES = {"int": (int,), "number": (int, float), "str": (str,), "bool": (bool,), "list": (list,)}
+
+
+def _leaves(d: dict, prefix: str = ""):
+    for k, v in d.items():
+        if isinstance(v, dict):
+            yield from _leaves(v, f"{prefix}{k}.")
+        else:
+            yield f"{prefix}{k}", v
+
+
+def field_rule(path: str, default) -> dict | None:
+    if path in FIELD_RULES:
+        return FIELD_RULES[path]
+    for name, types in (("bool", (bool,)), ("int", (int,)), ("number", (float,)), ("str", (str,)), ("list", (list,))):
+        if isinstance(default, types):
+            return {"type": name}
+    return None  # None default with no rule: any value
+
+
+def field_errors(recipe: dict) -> list[dict]:
+    """Type, range and choice errors per field, as ``{path, message}`` (before any check that
+    computes with the values, so a string where a number belongs is reported, not raised)."""
+    errors = []
+    for path, default in _leaves(DEFAULTS):
+        rule = field_rule(path, default)
+        if rule is None:
+            continue
+        value = recipe
+        for key in path.split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        if value is None:
+            if not rule.get("nullable") and default is not None:
+                errors.append({"path": path, "message": f"{path} is required"})
+            continue
+        if isinstance(value, bool) and rule["type"] != "bool" or not isinstance(value, _TYPES[rule["type"]]):
+            errors.append({"path": path, "message": f"{path} must be {rule['type']}, got {value!r}"})
+            continue
+        if "enum" in rule and value not in rule["enum"]:
+            errors.append({"path": path, "message": f"{path} must be one of {list(rule['enum'])}, got {value!r}"})
+        if "min" in rule and (value < rule["min"] or rule.get("exclusive_min") and value == rule["min"]):
+            op = ">" if rule.get("exclusive_min") else ">="
+            errors.append({"path": path, "message": f"{path} must be {op} {rule['min']}, got {value!r}"})
+        if "max" in rule and value > rule["max"]:
+            errors.append({"path": path, "message": f"{path} must be <= {rule['max']}, got {value!r}"})
+    return errors
+
+
 def validate(recipe: dict, local_inputs: bool = True) -> None:
-    """``local_inputs=False``: the taskset is on the results volume (platform runs), not local paths."""
-    preset = recipe["model"]["preset"]
-    if preset not in PRESETS:
-        raise ValueError(f"model.preset must be one of {sorted(PRESETS)}, got {preset!r}")
-    if recipe["taskset"]["harness"] not in HARNESSES:
-        raise ValueError(f"taskset.harness must be one of {HARNESSES}")
+    """``local_inputs=False``: the taskset is on the results volume (platform runs), not local paths.
+    Raises ValueError with the first problem (``field_errors`` lists every field's)."""
+    if errors := field_errors(recipe):
+        raise ValueError(errors[0]["message"])
     sandbox = recipe["sandbox"]
-    if sandbox["provider"] not in SANDBOX_PROVIDERS:
-        raise ValueError(f"sandbox.provider must be one of {SANDBOX_PROVIDERS}")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*-", sandbox["app_prefix"] or ""):
         raise ValueError(f"sandbox.app_prefix must be lowercase letters, digits and '-', ending in '-', "
                          f"got {sandbox['app_prefix']!r}")
@@ -162,17 +278,18 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
                          f"got {sandbox['app_prefix']!r}")
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
-    if recipe["algorithm"]["mode"] not in ("fully_async", "sync"):
-        raise ValueError("algorithm.mode must be fully_async or sync")
     cluster = recipe["cluster"]
     if recipe["algorithm"]["mode"] == "fully_async" and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE:
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
+    algo, aio = recipe["algorithm"], recipe["async"]
+    if aio["max_concurrent_samples"] is not None and aio["max_concurrent_samples"] < algo["n_samples"]:
+        raise ValueError("async.max_concurrent_samples must be >= algorithm.n_samples (Miles asserts it)")
+    if aio["over_sampling_batch_size"] is not None and aio["over_sampling_batch_size"] < algo["rollout_batch_size"]:
+        raise ValueError("async.over_sampling_batch_size must be >= algorithm.rollout_batch_size (Miles asserts it)")
     _validate_trainer(recipe)
     if local_inputs and (not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]):
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
     ckpt = recipe["checkpoint"]
-    if not isinstance(ckpt["keep"], int) or isinstance(ckpt["keep"], bool) or ckpt["keep"] < 1:
-        raise ValueError(f"checkpoint.keep must be an integer >= 1, got {ckpt['keep']!r}")
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
     revision = recipe["model"]["revision"]
@@ -183,9 +300,6 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
         raise ValueError(f"tracking.wandb_project must name the campaign as miles-<campaign>, got {project!r}")
     if project in ARCHIVED_PROJECTS or project == SMOKE_PROJECT:
         raise ValueError(f"tracking.wandb_project {project!r} is reserved (archive or smoke runs)")
-
-
-BACKENDS = ("fsdp", "megatron")
 
 
 def backend(recipe: dict) -> str:
@@ -386,6 +500,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     mem_fraction = algo["sglang_mem_fraction"] or (0.85 if fully_async else 0.7)
     actor_nodes, actor_gpus_per_node = trainer_layout(recipe)
     beta1, beta2 = algo["adam_betas"]
+    aio = recipe["async"]
+    kl_loss = float(algo["kl_loss_coef"]) > 0
     if fully_async:
         # Rollout engines keep generating while the trainer steps: one batch of
         # trajectories in flight, weights pushed after every step, in-flight
@@ -394,9 +510,10 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
         --rollout-num-gpus {total_gpus - int(cluster["train_gpus"])} --num-gpus-per-node {GPUS_PER_NODE}
-        --fully-async --update-weights-interval 1 --pause-generation-mode in_place
-        --async-max-concurrent-samples {batch * n}
-        --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler drop
+        --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
+        --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
+        --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
+        {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         """
     else:
         placement = f"""
@@ -417,9 +534,12 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --rollout-temperature {algo["temperature"]}
         --rollout-max-response-len {algo["max_response_len"]} --max-seq-len {algo["max_seq_len"]}
 
-        --advantage-estimator grpo
+        --advantage-estimator {algo["advantage_estimator"]}
         --use-tis --tis-clip {algo["tis_clip"]} --tis-clip-low 0.0
-        --kl-coef 0 --entropy-coef 0
+        --kl-coef 0 --entropy-coef {algo["entropy_coef"]}
+        {f"--use-kl-loss --kl-loss-coef {algo['kl_loss_coef']}" if kl_loss else ""}
+        {f"--ref-load {model_dir(recipe)}" if kl_loss and backend(recipe) != "megatron" else ""}
+        {f"--seed {algo['seed']}" if algo["seed"] is not None else ""}
         --eps-clip {algo["eps_clip"]} --eps-clip-high {algo["eps_clip_high"]}
         --optimizer adam --lr {algo["lr"]} --lr-decay-style constant
         --weight-decay {algo["weight_decay"]} --adam-beta1 {beta1} --adam-beta2 {beta2}

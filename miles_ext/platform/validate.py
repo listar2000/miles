@@ -50,15 +50,19 @@ def instant_errors(recipe: dict, run_id: str, target: Target | dict | None) -> l
         recipe = target.apply(recipe)
     except (ValueError, KeyError) as e:
         return [{"path": "target", "message": str(e)}]
-    try:
-        R.validate(recipe, local_inputs=False)
-    except (ValueError, KeyError) as e:
-        errors.append({"path": _path_of(str(e), "recipe"), "message": str(e)})
+    if field := R.field_errors(recipe):
+        errors += field  # every bad field at once; the checks below compute with the values
+    else:
+        try:
+            R.validate(recipe, local_inputs=False)
+        except (ValueError, KeyError, TypeError) as e:
+            errors.append({"path": _path_of(str(e), "recipe"), "message": str(e)})
     try:
         R.sandbox_app_names_for_cleanup(recipe, run_id)
     except ValueError as e:
         errors.append({"path": "run_id", "message": str(e)})
-    errors += reserved_flag_errors(recipe)
+    if not errors:
+        errors += reserved_flag_errors(recipe, run_id)
     return errors
 
 
