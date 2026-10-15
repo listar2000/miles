@@ -91,7 +91,13 @@ class SailEnvironment(upstream.SailEnvironment):
 
 
 def terminate_app_sailboxes(app_name: str) -> int:
-    """Terminate every Sailbox in the app (sleeping ones included); the app is one run's alone."""
+    """Terminate every Sailbox in the app (sleeping ones included); the app is one run's alone.
+
+    Matches the app by exact name only, and refuses names outside our namespaces:
+    the Sail workspace is shared with other teams."""
+    from miles_ext.recipes.recipe import check_own_app_name
+
+    check_own_app_name(app_name)
     count = 0
     for app in (a for a in App.list() if a.name == app_name):  # list, not find: never mint an app here
         for box in Sailbox.list(app_id=app):

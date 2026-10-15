@@ -125,7 +125,8 @@ def _terminate_app_sandboxes(recipe: dict, name: str):
             print(f"Sailbox cleanup ({name}): {type(e).__name__}: {e}", flush=True)
         return
     try:
-        sandbox_app = modal.App.lookup(name)
+        R.check_own_app_name(name)
+        sandbox_app = modal.App.lookup(name)  # exact name; never creates (create_if_missing=False)
         sandboxes = list(modal.Sandbox.list(app_id=sandbox_app.app_id))
         for sb in sandboxes:
             sb.terminate()

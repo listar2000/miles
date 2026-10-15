@@ -43,6 +43,11 @@ PROMPTS = Path("/inputs/prompts.jsonl")
 
 DEFAULT_APP_PREFIX = "miles-mobius-"  # sandbox app = <prefix><run_id>
 LEGACY_APP_PREFIXES = ("miles-fork-sbx-",)  # default before 2026-10-15; cleanup still looks there
+# The Modal and Sail workspaces are shared with other teams (e.g. their mobius-<uuid>-N
+# apps). Every sandbox app we create or clean up starts with one of these, and
+# cleanup only ever addresses an exact app name, never a prefix or pattern.
+OWN_APP_NAMESPACES = ("miles-", "mdev-", "mrl-")
+RUN_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 
 DEFAULTS: dict[str, Any] = {
     "name": "",
@@ -140,6 +145,9 @@ def validate(recipe: dict) -> None:
         raise ValueError(f"sandbox.provider must be one of {SANDBOX_PROVIDERS}")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*-", sandbox["app_prefix"] or ""):
         raise ValueError(f"sandbox.app_prefix must be lowercase letters, digits and '-', ending in '-', "
+                         f"got {sandbox['app_prefix']!r}")
+    if not sandbox["app_prefix"].startswith(OWN_APP_NAMESPACES):
+        raise ValueError(f"sandbox.app_prefix must start with one of {OWN_APP_NAMESPACES} (shared workspace), "
                          f"got {sandbox['app_prefix']!r}")
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
@@ -267,9 +275,21 @@ def sandbox_app_name(recipe: dict, run_id: str) -> str:
 
     Never truncated: a cut name could collide with another run's, and cleanup
     and reconcilers match on it."""
+    if not re.fullmatch(RUN_ID_RE, run_id):
+        raise ValueError(f"run id {run_id!r}: letters, digits, '.', '_', '-', starting with a letter or digit")
     name = recipe["sandbox"]["app_prefix"] + run_id
     if len(name) > APP_NAME_MAX:
         raise ValueError(f"sandbox app name {name!r} is longer than {APP_NAME_MAX}; shorten the run id or prefix")
+    return check_own_app_name(name)
+
+
+def check_own_app_name(name: str) -> str:
+    """Raise unless ``name`` is one exact app name in our namespaces: cleanup terminates
+    everything in the app it names, on workspaces shared with other teams."""
+    prefix = next((p for p in OWN_APP_NAMESPACES if name.startswith(p)), None)
+    if prefix is None or not re.fullmatch(RUN_ID_RE, name[len(prefix):]):
+        raise ValueError(f"{name!r} is not one of our sandbox app names "
+                         f"(<{'|'.join(OWN_APP_NAMESPACES)}>..., letters, digits, '.', '_', '-')")
     return name
 
 
@@ -278,7 +298,7 @@ def sandbox_app_names_for_cleanup(recipe: dict, run_id: str) -> list[str]:
     so a run started before a rename and resumed after it still leaves nothing behind."""
     names = [sandbox_app_name(recipe, run_id)]
     if recipe["sandbox"]["app_prefix"] == DEFAULT_APP_PREFIX:
-        names += [p + run_id for p in LEGACY_APP_PREFIXES if len(p + run_id) <= APP_NAME_MAX]
+        names += [check_own_app_name(p + run_id) for p in LEGACY_APP_PREFIXES if len(p + run_id) <= APP_NAME_MAX]
     return names
 
 
