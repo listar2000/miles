@@ -25,6 +25,7 @@ from miles_ext.platform import progress as P
 from miles_ext.platform.secrets import run_secret_exists
 from miles_ext.platform.target import Target, run_secret_name
 from miles_ext.platform.teardown import resource_names
+from miles_ext.platform.weights import recipe_weights_ready
 from miles_ext.recipes import recipe as R
 
 GRACE_SECS = 20 * 60  # function timeout beyond the segment: the save and shutdown after the deadline
@@ -77,7 +78,7 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
         return out
     if not run_secret_exists(run_id, target):
         raise RuntimeError(f"secret {target.secret_name} does not exist (create_run_secret first)")
-    if recipe["model"].get("revision") and not _weights_ready(recipe, target):
+    if recipe["model"].get("revision") and not recipe_weights_ready(recipe, target):
         raise RuntimeError(f"weights {R.model_dir(recipe)} are not ready (prepare_weights first)")
     _claim(run_id, target)
     try:
@@ -131,13 +132,6 @@ def _spawn(recipe: dict, run_id: str, target: Target, *, inputs: str, from_commi
         tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
         raise RuntimeError(f"launch of {run_id} failed (exit {proc.returncode}):\n{tail}")
     return {**json.loads(line[len("LAUNCHED "):]), "spawn_seconds": round(time.time() - started, 1)}
-
-
-def _weights_ready(recipe: dict, target: Target) -> bool:
-    from miles_ext.platform.weights import _ready, _volume
-
-    key = str(R.model_dir(recipe).relative_to(R.MODELS))
-    return _ready(_volume(target), key) is not None
 
 
 def _package_root() -> str:

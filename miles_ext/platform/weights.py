@@ -25,6 +25,7 @@ import uuid
 
 import modal
 
+from miles_ext.platform.layout import weights_volume as _volume
 from miles_ext.platform.target import Target
 from miles_ext.recipes import recipe as R
 
@@ -49,11 +50,6 @@ def check_key(key: str) -> str:
     return key
 
 
-def _volume(target: Target, create: bool = False) -> modal.Volume:
-    return modal.Volume.from_name(target.weights_volume, environment_name=target.modal_environment,
-                                  create_if_missing=create)
-
-
 def _locks(target: Target) -> modal.Dict:
     return modal.Dict.from_name(f"{target.weights_volume}-locks", environment_name=target.modal_environment,
                                 create_if_missing=True)
@@ -64,6 +60,12 @@ def _ready(volume: modal.Volume, key: str) -> dict | None:
         return json.loads(b"".join(volume.read_file(f"{key}/{READY}")))
     except (FileNotFoundError, modal.exception.NotFoundError):
         return None
+
+
+def recipe_weights_ready(recipe: dict, target: Target | dict | None) -> bool:
+    """Whether the snapshot a recipe with ``model.revision`` reads has its ``.ready`` marker."""
+    key = str(R.model_dir(recipe).relative_to(R.MODELS))
+    return _ready(_volume(Target.of(target)), key) is not None
 
 
 def resolve_revision(hf_repo: str, revision: str | None, token: str | None = None) -> str:

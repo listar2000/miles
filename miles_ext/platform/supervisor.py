@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 from miles_ext.platform import progress as P
+from miles_ext.platform.layout import read_tracker
 
 SENTINEL = "/tmp/miles-save-now"
 POLL_SECS = 5
@@ -155,10 +156,7 @@ class Supervisor:
 
     # ---- helpers ----
     def _tracker(self) -> int | None:
-        try:
-            return int((self.run_dir / "checkpoints" / P.TRACKER).read_text().strip())
-        except (OSError, ValueError):
-            return None
+        return read_tracker(self.run_dir)
 
     def _lease_expires(self) -> float | None:
         try:

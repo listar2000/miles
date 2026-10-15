@@ -18,6 +18,8 @@ import re
 
 import modal
 
+from miles_ext.platform.layout import read_tracker, read_tracker_volume
+from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target
 from miles_ext.recipes import recipe as R
 
@@ -44,10 +46,6 @@ def checkpoint_path(run_id: str, step: int, kind: str) -> str:
     if not re.fullmatch(rf"{re.escape(run_id)}/(checkpoints|hf)/{ITER_RE}", path) or ".." in path.split("/"):
         raise ValueError(f"refusing checkpoint path {path!r}")
     return path
-
-
-def _volume(target: Target) -> modal.Volume:
-    return modal.Volume.from_name(target.results_volume, environment_name=target.modal_environment)
 
 
 def _bytes(volume: modal.Volume, path: str) -> int:
@@ -81,7 +79,7 @@ def delete_checkpoint(run_id: str, step: int, kind: str, target: Target | dict |
     target = Target.of(target)
     path = checkpoint_path(run_id, step, kind)
     volume = _volume(target)
-    if kind == "full" and _latest(volume, run_id) == int(step):
+    if kind == "full" and read_tracker_volume(volume, run_id) == int(step):
         raise RuntimeError(f"{path} is the save this run resumes from; not deleting")
     return _remove(volume, path)
 
@@ -92,14 +90,6 @@ def _remove(volume: modal.Volume, path: str) -> dict:
     except (FileNotFoundError, modal.exception.NotFoundError):
         return {"path": path, "deleted": False}
     return {"path": path, "deleted": True}
-
-
-def _latest(volume: modal.Volume, run_id: str) -> int | None:
-    try:
-        text = b"".join(volume.read_file(f"{run_id}/checkpoints/latest_checkpointed_iteration.txt")).decode()
-        return int(text.strip())
-    except (FileNotFoundError, modal.exception.NotFoundError, ValueError):
-        return None
 
 
 def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final: bool,
@@ -134,7 +124,7 @@ def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1,
     volume = _volume(target)
     saves = list_checkpoints(run_id, target, sizes=False)
     plan = retention_plan(saves, keep=keep, keep_final_full=keep_final_full, final=final,
-                          latest=_latest(volume, run_id), pinned=pinned)
+                          latest=read_tracker_volume(volume, run_id), pinned=pinned)
     if not dry_run:
         for s in plan:
             _remove(volume, checkpoint_path(run_id, s["step"], s["kind"]))
@@ -153,11 +143,7 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
         for d in sorted((run_dir / sub).glob("iter_*")) if (run_dir / sub).is_dir() else []:
             if d.is_dir() and (m := re.fullmatch(ITER_RE, d.name)) and {c.name for c in d.iterdir()} - NOT_A_SAVE:
                 saves.append({"step": int(m.group(1)), "kind": kind, "path": str(d)})
-    latest_file = run_dir / "checkpoints" / "latest_checkpointed_iteration.txt"
-    try:
-        latest = int(latest_file.read_text().strip())
-    except (OSError, ValueError):
-        latest = None
+    latest = read_tracker(run_dir)
     plan = retention_plan(saves, keep=keep, keep_final_full=keep_final_full, final=final, latest=latest,
                           pinned=pinned)
     for s in plan:
@@ -193,7 +179,7 @@ def finalize_hf(run_id: str, recipe: dict, target: Target | dict | None, *, step
     if R.backend(recipe) != "fsdp":
         raise ValueError("finalize_hf converts FSDP saves; Megatron writes HF weights itself (checkpoint.save_hf)")
     volume = _volume(target)
-    step = step if step is not None else _latest(volume, run_id)
+    step = step if step is not None else read_tracker_volume(volume, run_id)
     if step is None:
         raise RuntimeError(f"{run_id} has no full save to convert")
     cmd = finalize_hf_command(run_id, step, str(R.model_dir(recipe)))

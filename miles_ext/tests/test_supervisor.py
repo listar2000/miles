@@ -236,7 +236,7 @@ def _launch_env(monkeypatch, store, running):
         "complete": False, "next_rollout_id": 1, "num_rollout": 3, "tracker": 1})
     monkeypatch.setattr(P, "progress_dict", lambda target, create=True: store)
     monkeypatch.setattr(L, "run_secret_exists", lambda run_id, target: True)
-    monkeypatch.setattr(L, "_weights_ready", lambda recipe, target: True)
+    monkeypatch.setattr(L, "recipe_weights_ready", lambda recipe, target: True)
     monkeypatch.setattr(P, "call_running", lambda call_id: call_id in running)
     spawned = []
     monkeypatch.setattr(L, "_spawn", lambda *a, **k: spawned.append(1) or {"app_id": "ap-2", "call_id": "fc-2"})

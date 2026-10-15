@@ -44,13 +44,13 @@ from typing import Any
 from miles.rollout.agentic.session import openai_session_url
 
 from miles_ext.harbor import upstream
+from miles_ext.recipes import recipe as R
 
 hf = upstream.harbor_agent_function()
 
 logger = logging.getLogger(__name__)
 
-SANDBOX_HARNESS = "mini-swe-agent-sandbox"
-HOST_HARNESS = "mini-swe-agent-host"
+SANDBOX_HARNESS, HOST_HARNESS = R.HARNESS_SANDBOX, R.HARNESS_HOST
 # Harbor resolves agents it does not know by import path
 _IMPORT_PATHS = {
     SANDBOX_HARNESS: "miles_ext.harbor.sandbox_agent:SandboxMiniSweAgent",

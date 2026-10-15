@@ -42,6 +42,7 @@ import modal
 from miles_ext import stack
 from miles_ext.platform.checkpoints import apply_retention_local
 from miles_ext.platform.images import fork_image
+from miles_ext.platform.layout import read_tracker
 from miles_ext.platform.target import Target
 from miles_ext.platform.teardown import sandbox_adapter
 from miles_ext.recipes import recipe as R
@@ -203,13 +204,6 @@ def check_cpu(recipe: dict, run_id: str):
         return False
 
 
-def _tracker(run_dir) -> int | None:
-    try:
-        return int((run_dir / "checkpoints" / "latest_checkpointed_iteration.txt").read_text().strip())
-    except (OSError, ValueError):
-        return None
-
-
 def _image_info() -> dict:
     return {"release": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit()}
 
@@ -257,15 +251,15 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         _inputs(run_id)
     # a relaunch of a finished run (the caller's timer fired after the final save): every
     # rank returns before Ray starts, so it costs a container start, not a cluster start
-    if P.is_complete(backend, _tracker(run_dir), recipe["algorithm"]["num_rollout"]):
-        print(f"{run_id} is already complete (checkpoint {_tracker(run_dir)}); nothing to train", flush=True)
+    if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):
+        print(f"{run_id} is already complete (checkpoint {read_tracker(run_dir)}); nothing to train", flush=True)
         if rank != 0:
             return None
         record = {"run_id": run_id, "call_id": modal.current_function_call_id(), "reason": "success",
                   "retryable": False, "returncode": None,
                   "segment": None, "started_at": time.time(), "ended_at": time.time(), "step": None,
-                  "tracker": _tracker(run_dir), "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
-                  "next_rollout_id": P.next_rollout_id(backend, _tracker(run_dir)), "metrics": {},
+                  "tracker": read_tracker(run_dir), "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
+                  "next_rollout_id": P.next_rollout_id(backend, read_tracker(run_dir)), "metrics": {},
                   "image": _image_info(), "note": "already complete at launch", "tail": []}
         write_exit_record(run_dir, record)
         results_volume.commit()
@@ -311,7 +305,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
                 raise RuntimeError("Miles training failed on the head node; see the App logs")
             return None
 
-        resume = _tracker(run_dir) is not None
+        resume = read_tracker(run_dir) is not None
         args = R.miles_args(recipe, run_id, resume) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
         segment = len(list(run_dir.glob("recipe-*.json")))

@@ -24,12 +24,13 @@ import time
 
 import modal
 
+from miles_ext.platform.layout import read_tracker_volume
+from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target, check_own_name, namespace_of
 from miles_ext.recipes import recipe as R
 
 HEARTBEAT_SECS = 30
 STALE_HEARTBEAT_SECS = 5 * 60
-TRACKER = "latest_checkpointed_iteration.txt"
 EXIT_FILE = "exit.json"
 EXITS_LOG = "exits.jsonl"
 
@@ -107,20 +108,9 @@ def delete_keys(run_id: str, target: Target) -> list[str]:
     return gone
 
 
-def _volume(target: Target) -> modal.Volume:
-    return modal.Volume.from_name(target.results_volume, environment_name=target.modal_environment)
-
-
 def _read_json(volume: modal.Volume, path: str):
     try:
         return json.loads(b"".join(volume.read_file(path)))
-    except (FileNotFoundError, modal.exception.NotFoundError, ValueError):
-        return None
-
-
-def _tracker(volume: modal.Volume, run_id: str) -> int | None:
-    try:
-        return int(b"".join(volume.read_file(f"{run_id}/checkpoints/{TRACKER}")).decode().strip())
     except (FileNotFoundError, modal.exception.NotFoundError, ValueError):
         return None
 
@@ -148,7 +138,7 @@ def completion(run_id: str, target: Target | dict | None, recipe: dict | None = 
     volume = _volume(target)
     if recipe is None:
         recipe = (_launch_record(volume, run_id) or {}).get("recipe")
-    tracker = _tracker(volume, run_id)
+    tracker = read_tracker_volume(volume, run_id)
     if recipe is None:
         return {"complete": None, "next_rollout_id": None, "num_rollout": None, "tracker": tracker}
     backend, num_rollout = R.backend(recipe), recipe["algorithm"]["num_rollout"]

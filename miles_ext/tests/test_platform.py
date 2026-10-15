@@ -198,7 +198,7 @@ def test_retention_local(tmp_path):
 def test_delete_refuses_resume_point(monkeypatch):
     removed = []
     monkeypatch.setattr(C, "_volume", lambda target: object())
-    monkeypatch.setattr(C, "_latest", lambda volume, run_id: 20)
+    monkeypatch.setattr(C, "read_tracker_volume", lambda volume, run_id: 20)
     monkeypatch.setattr(C, "_remove", lambda volume, path: removed.append(path) or {"path": path, "deleted": True})
     with pytest.raises(RuntimeError, match="resumes from"):
         C.delete_checkpoint("run1", 20, "full", DEV)
