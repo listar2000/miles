@@ -54,7 +54,11 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   in a CPU container; `retention_plan` keeps the newest `checkpoint.keep` full
   saves and the resume point while training, and at the end the final HF export
   and, if `checkpoint.keep_final_full` (the user's binary knob), the final full
-  save; pinned steps are never deleted. `delete_checkpoint` builds the path from a
+  save; pinned steps are never deleted. Miles past v0.1.2 also writes rollout-side
+  state to `<run>/checkpoints/rollout/<rollout_id>/`; retention deletes the ones
+  older than every kept full save, keeping from the oldest kept step minus one
+  (a resume loads rollout `start_rollout_id - 1`: N for Megatron's `iter_N`, N - 1
+  for FSDP's), and none when no full save is left. `delete_checkpoint` builds the path from a
   validated run id, an integer step and a kind, so only `<run>/checkpoints/iter_N`
   and `<run>/hf/iter_N` can be deleted, and it refuses the save the run resumes
   from. At the end, the final full save also stays while no HF export exists (FSDP

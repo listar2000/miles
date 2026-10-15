@@ -4,13 +4,15 @@ Layout (relative to the volume root; the trainer mounts it at ``recipe.RESULTS``
 
     <run_id>/checkpoints/iter_NNNNNNN/   full saves (optimizer state), for resuming
     <run_id>/checkpoints/latest_checkpointed_iteration.txt
+    <run_id>/checkpoints/rollout/<rollout_id>/   rollout-side state per save (Miles past v0.1.2)
     <run_id>/hf/iter_NNNNNNN/            HF weights: Megatron writes one per save
                                          (``checkpoint.save_hf``); FSDP gets one from
                                          ``finalize_hf`` (upstream tools/convert_fsdp_to_hf.py)
 
 Every path is built here from a validated run id, an integer step and a kind,
 and must resolve to one of the two layouts above: nothing outside
-``<run_id>/checkpoints/iter_N`` or ``<run_id>/hf/iter_N`` can be deleted.
+``<run_id>/checkpoints/iter_N``, ``<run_id>/hf/iter_N`` or ``<run_id>/checkpoints/rollout/<id>``
+can be deleted.
 These calls use the Modal Volume API, so they run anywhere (no container).
 """
 
@@ -25,9 +27,13 @@ from miles_ext.recipes import recipe as R
 
 KINDS = {"full": "checkpoints", "hf": "hf"}
 ITER_RE = r"iter_(\d{7})"
-# Miles' rollout executor snapshots its event log into <save>/iter_{rollout_id}/debug_events at
-# each save; FSDP names its save iter_{rollout_id + 1}, so an FSDP run has dirs holding only that
+# Miles v0.1.2's rollout executor snapshots its event log into <save>/iter_{rollout_id}/debug_events at
+# each save; FSDP names its save iter_{rollout_id + 1}, so an FSDP run has dirs holding only that.
+# Later Miles keeps it in <save>/rollout/<rollout_id>/ instead; this stays for runs saved before.
 NOT_A_SAVE = {"debug_events"}
+# Later Miles saves rollout-side state (data source, async buffer, event log) at <save>/rollout/<rollout_id>/
+# and a resume loads rollout start_rollout_id - 1, which needs the directory of the save it resumes from
+ROLLOUT_STATE = "rollout"
 
 
 def iter_dir(step: int) -> str:
@@ -117,6 +123,22 @@ def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final
     return [s for s in drop if s["step"] not in set(pinned)]
 
 
+def rollout_state_plan(rollout_ids: list[int], kept_full_steps: list[int]) -> list[int]:
+    """Which rollout-state directories to delete (pure): those older than every kept full save.
+
+    Megatron's ``iter_N`` resumes from rollout N and FSDP's from rollout N - 1, so everything from
+    the oldest kept full step minus one stays. With no full save left, nothing is deleted."""
+    if not kept_full_steps:
+        return []
+    floor = min(kept_full_steps) - 1
+    return sorted(i for i in rollout_ids if i < floor)
+
+
+def _kept_full(saves: list[dict], plan: list[dict]) -> list[int]:
+    dropped = {(s["kind"], s["step"]) for s in plan}
+    return [s["step"] for s in saves if s["kind"] == "full" and (s["kind"], s["step"]) not in dropped]
+
+
 def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1, keep_final_full: bool = True,
                     final: bool = False, pinned: tuple[int, ...] = (), dry_run: bool = False) -> list[dict]:
     """Delete what ``retention_plan`` says; returns the deleted (or, dry run, the planned) saves."""
@@ -128,6 +150,13 @@ def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1,
     if not dry_run:
         for s in plan:
             _remove(volume, checkpoint_path(run_id, s["step"], s["kind"]))
+        state_dir = f"{checkpoint_path(run_id, 0, 'full').rsplit('/', 1)[0]}/{ROLLOUT_STATE}"
+        try:
+            ids = [int(n) for e in volume.listdir(state_dir) if (n := e.path.rstrip("/").rsplit("/", 1)[-1]).isdigit()]
+        except (FileNotFoundError, modal.exception.NotFoundError):
+            ids = []
+        for i in rollout_state_plan(ids, _kept_full(saves, plan)):
+            _remove(volume, f"{state_dir}/{i}")
     return plan
 
 
@@ -151,6 +180,10 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
         if path.parent.parent != run_dir.resolve() or not re.fullmatch(ITER_RE, path.name):
             raise RuntimeError(f"refusing to delete {path}")
         shutil.rmtree(path)
+    state_dir = run_dir / KINDS["full"] / ROLLOUT_STATE
+    ids = [int(d.name) for d in state_dir.iterdir() if d.is_dir() and d.name.isdigit()] if state_dir.is_dir() else []
+    for i in rollout_state_plan(ids, _kept_full(saves, plan)):
+        shutil.rmtree(state_dir / str(i))
     return plan
 
 

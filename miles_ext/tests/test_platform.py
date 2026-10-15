@@ -6,6 +6,7 @@
 import importlib
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -250,6 +251,44 @@ def test_retention_local(tmp_path):
     C.apply_retention_local(run, keep=1, keep_final_full=False, final=True)
     left = sorted(str(p.relative_to(run)) for p in run.rglob("*") if p.is_dir())
     assert left == ["checkpoints", "checkpoints/rollout", "hf", "hf/iter_0000020", "hf/iter_0000020/model", "trials"]
+
+
+def test_rollout_state_plan():
+    assert C.rollout_state_plan([9, 10, 19, 20, 29, 30], [30]) == [9, 10, 19, 20]  # FSDP iter_30 needs rollout 29
+    assert C.rollout_state_plan([8, 9, 10, 19, 20], [20, 10]) == [8]
+    assert C.rollout_state_plan([9, 10], []) == []  # no full save left: nothing to resume, leave it
+
+
+def test_retention_local_prunes_rollout_state(tmp_path):
+    run = tmp_path / "run1"
+    for s in (10, 20, 30):
+        (run / "checkpoints" / C.iter_dir(s) / "model").mkdir(parents=True)
+    for i in (9, 10, 19, 20, 29, 30):
+        (run / "checkpoints" / "rollout" / str(i) / "data_source").mkdir(parents=True)
+    (run / "checkpoints" / "latest_checkpointed_iteration.txt").write_text("30")
+    dropped = C.apply_retention_local(run, keep=1, keep_final_full=True, final=False)
+    assert [(d["kind"], d["step"]) for d in dropped] == [("full", 20), ("full", 10)]
+    assert sorted(p.name for p in (run / "checkpoints" / "rollout").iterdir()) == ["29", "30"]
+
+
+def test_apply_retention_prunes_rollout_state(monkeypatch):
+    removed = []
+    entries = {"run1/checkpoints": ["iter_0000010", "iter_0000020", "rollout", "latest_checkpointed_iteration.txt"],
+               "run1/checkpoints/rollout": ["9", "10", "19", "20", ".tmp-21-7"], "run1/checkpoints/iter_0000010": ["model"],
+               "run1/checkpoints/iter_0000020": ["model"]}
+
+    class Vol:
+        def listdir(self, path, recursive=False):
+            if path not in entries:
+                raise FileNotFoundError(path)
+            return [SimpleNamespace(path=f"{path}/{n}") for n in entries[path]]
+
+    monkeypatch.setattr(C, "_volume", lambda target: Vol())
+    monkeypatch.setattr(C, "read_tracker_volume", lambda volume, run_id: 20)
+    monkeypatch.setattr(C, "_remove", lambda volume, path: removed.append(path) or {"path": path, "deleted": True})
+    plan = C.apply_retention("run1", DEV, keep=1)
+    assert [(d["kind"], d["step"]) for d in plan] == [("full", 10)]
+    assert removed == ["run1/checkpoints/iter_0000010", "run1/checkpoints/rollout/9", "run1/checkpoints/rollout/10"]
 
 
 def test_delete_refuses_resume_point(monkeypatch):
