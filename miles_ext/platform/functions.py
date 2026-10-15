@@ -2,7 +2,8 @@
 
 - ``deep_check``: the validate step, in the fork image (CPU, or one GPU via ``with_options``);
 - ``convert_fsdp``: FSDP's final save to HF weights, in the fork image (CPU);
-- ``download``: base weights from the HF Hub, in a small image (CPU).
+- ``download``: base weights from the HF Hub, in the fork image too (CPU): importing
+  ``miles_ext`` needs the ``miles`` tree, and the image is cached once built.
 
 Volumes and secrets are per call (``with_options``), so nothing about a run is
 fixed here. The fork image is ``stack.FORK_IMAGE``, or the image built from a
@@ -16,7 +17,7 @@ import subprocess
 
 import modal
 
-from miles_ext.platform.images import download_image, fork_image
+from miles_ext.platform.images import fork_image
 
 app = modal.App("miles-platform")
 _fork = fork_image(os.environ.get("MILES_FORK_COMMIT") or None) if modal.is_local() else modal.Image.debian_slim()
@@ -39,7 +40,7 @@ def convert_fsdp(cmd: list[str]) -> str:
     return cmd[cmd.index("--output-dir") + 1]
 
 
-@app.function(image=download_image, cpu=4, memory=8192, timeout=DOWNLOAD_TIMEOUT)
+@app.function(image=_fork, cpu=4, memory=8192, timeout=DOWNLOAD_TIMEOUT)
 def download(hf_repo: str, revision: str, path: str) -> dict:
     from pathlib import Path
 

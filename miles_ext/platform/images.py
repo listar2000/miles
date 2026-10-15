@@ -23,7 +23,3 @@ def fork_image(commit: str | None = None) -> modal.Image:
         raise RuntimeError("miles_ext/stack.py: FORK_IMAGE is empty; publish it or pass a fork commit")
     return image.entrypoint([]).env({"PYTHONUNBUFFERED": "1"})
 
-
-# prepare_weights only downloads: a small image instead of the ~24 GB fork image
-HF_HUB = "huggingface_hub[hf_xet]==0.35.3"
-download_image = modal.Image.debian_slim(python_version="3.12").pip_install(HF_HUB)
