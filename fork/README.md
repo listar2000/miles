@@ -112,7 +112,7 @@ miles_ext/              extensions (top-level package next to miles/, on PYTHONP
                         harbor/sail/: Harbor's Sail provider (vendored) and the fork's subclass
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
-  platform/             reserved: platform-facing extensions (schema, validate, teardown, events)
+  platform/             the platform API (ext-006): schema, validate, launch, observe, teardown, secret, weights, checkpoints
 ```
 
 `miles_ext` is not added to upstream's `setup.py` (that would be a touch point

@@ -3,9 +3,11 @@
 Two places hold it, so a reader never depends on the trainer being alive:
 
 - the progress Dict ``<namespace of app_name>progress`` (``mdev-progress`` in dev),
-  keys ``run:<run_id>`` (rank 0's heartbeat, every ``HEARTBEAT_SECS``),
+  keys ``run:<run_id>`` (``launch`` writes it as ``pending`` with the segment's call
+  id, then rank 0's heartbeat replaces it every ``HEARTBEAT_SECS``),
+  ``active:<run_id>`` (the live segment's call id: at most one segment per run),
   ``lease:<run_id>`` (written by the caller, see ``renew_lease``) and
-  ``exit:<run_id>`` (the exit record); teardown deletes all three;
+  ``exit:<run_id>`` (the exit record); teardown deletes all of them;
 - the results volume: ``<run_id>/exit.json`` (the newest exit record) and
   ``<run_id>/exits.jsonl`` (one line per segment), next to the checkpoints.
 
@@ -61,7 +63,8 @@ def progress_dict_name(target: Target) -> str:
 def keys(run_id: str) -> dict:
     if not re.fullmatch(R.RUN_ID_RE, run_id or ""):
         raise ValueError(f"run id {run_id!r}")
-    return {"run": f"run:{run_id}", "lease": f"lease:{run_id}", "exit": f"exit:{run_id}"}
+    return {"run": f"run:{run_id}", "active": f"active:{run_id}", "lease": f"lease:{run_id}",
+            "exit": f"exit:{run_id}"}
 
 
 def progress_dict(target: Target, create: bool = True) -> modal.Dict:
@@ -118,6 +121,12 @@ def _launch_record(volume: modal.Volume, run_id: str) -> dict | None:
     return _read_json(volume, f"{run_id}/{names[-1]}") if names else None
 
 
+def rollouts_done(backend: str, iteration: int) -> int:
+    """How many rollouts a checkpoint holds (what a person means by its step): FSDP's
+    ``iter_N`` holds N, Megatron's holds N + 1. The iter number stays the path key."""
+    return next_rollout_id(backend, iteration)
+
+
 def completion(run_id: str, target: Target | dict | None, recipe: dict | None = None) -> dict:
     """``{complete, next_rollout_id, num_rollout, tracker}`` from the volume alone (no trainer needed).
     ``recipe`` gives ``num_rollout`` and the backend; without it, the newest launch record does."""
@@ -133,41 +142,59 @@ def completion(run_id: str, target: Target | dict | None, recipe: dict | None = 
     return {"complete": nxt >= num_rollout, "next_rollout_id": nxt, "num_rollout": num_rollout, "tracker": tracker}
 
 
-def observe(run_id: str, target: Target | dict | None, recipe: dict | None = None) -> dict:
-    """One poll: ``{phase, step, next_rollout_id, num_rollout, complete, last_checkpoint, checkpoints,
-    heartbeat_age, deadline, lease, metrics, exit}``.
+def phase_of(beat: dict | None, exit_record: dict | None, now: float) -> str:
+    """``pending`` (launched, no heartbeat yet: placement, image pull), ``starting``,
+    ``training``, ``checkpointing``, ``stopping`` (live heartbeat), ``ended`` (the exit record
+    belongs to the segment the heartbeat is from, or only an exit record is left after
+    teardown), ``no_heartbeat`` (the trainer stopped reporting; ``heartbeat_age`` says how long)."""
+    if beat is None:
+        return "ended" if exit_record else "no_heartbeat"
+    if beat.get("phase") == "pending":
+        return "pending"
+    if beat.get("phase") == "ended":
+        return "ended"
+    if exit_record and beat.get("call_id") and exit_record.get("call_id") == beat.get("call_id"):
+        return "ended"
+    if now - beat.get("heartbeat_at", 0) < STALE_HEARTBEAT_SECS:
+        return beat.get("phase", "training")
+    return "no_heartbeat"
 
-    ``phase`` is ``training``, ``checkpointing`` or ``stopping`` from a live heartbeat;
-    ``ended`` once an exit record exists for the current segment; ``no_heartbeat`` when
-    the trainer has not reported yet (placement, startup) or stopped reporting
-    (``heartbeat_age`` says for how long). ``complete`` comes from the checkpoints,
-    so it holds even when the segment was killed before writing its exit record."""
+
+def observe(run_id: str, target: Target | dict | None, recipe: dict | None = None) -> dict:
+    """One poll: ``{phase, call_id, step, next_rollout_id, num_rollout, complete, last_checkpoint,
+    rollouts_done, checkpoints, heartbeat_age, segment, deadline, lease, metrics, exit}``.
+
+    ``phase``: see ``phase_of``. ``call_id`` is the segment the heartbeat (or pending marker)
+    is from; ``exit`` is the newest exit record, which belongs to that segment only when
+    its ``call_id`` matches: relaunch on an exit only for the call you launched.
+    ``complete`` comes from the checkpoints, so it holds even when the segment was killed
+    before writing its exit record. Checkpoint entries carry ``rollouts_done``."""
     from miles_ext.platform.checkpoints import list_checkpoints
 
     target = Target.of(target)
+    if recipe is None:
+        recipe = (_launch_record(_volume(target), run_id) or {}).get("recipe")
     k, d = keys(run_id), progress_dict(target)
     beat = d.get(k["run"])
     lease = d.get(k["lease"])
     exit_record = d.get(k["exit"]) or _read_json(_volume(target), f"{run_id}/{EXIT_FILE}")
     done = completion(run_id, target, recipe)
     saves = list_checkpoints(run_id, target, sizes=False)
+    backend = R.backend(recipe) if recipe else None
+    for s in saves:  # an HF export is named like the full save it came from, on both backends
+        s["rollouts_done"] = rollouts_done(backend, s["step"]) if backend else None
     full = [s["step"] for s in saves if s["kind"] == "full"]
-    age = time.time() - beat["heartbeat_at"] if beat else None
-    if beat and exit_record and exit_record.get("segment") == beat.get("segment"):
-        phase = "ended"
-    elif beat and beat.get("phase") == "ended":
-        phase = "ended"
-    elif beat and age is not None and age < STALE_HEARTBEAT_SECS:
-        phase = beat.get("phase", "training")
-    else:
-        phase = "no_heartbeat"
+    now = time.time()
+    age = now - beat["heartbeat_at"] if beat and beat.get("heartbeat_at") else None
     return {
-        "phase": phase,
+        "phase": phase_of(beat, exit_record, now),
+        "call_id": (beat or {}).get("call_id"),
         "step": (beat or {}).get("step"),
         "next_rollout_id": done["next_rollout_id"],
         "num_rollout": done["num_rollout"],
         "complete": done["complete"],
         "last_checkpoint": max(full) if full else None,
+        "rollouts_done": rollouts_done(backend, max(full)) if full and backend else None,
         "checkpoints": saves,
         "heartbeat_age": age,
         "segment": (beat or {}).get("segment"),

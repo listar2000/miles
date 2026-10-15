@@ -18,6 +18,7 @@ import io
 import json
 import re
 import time
+import uuid
 
 import modal
 
@@ -84,7 +85,7 @@ def prepare_weights(hf_repo: str, revision: str | None, target: Target | dict | 
     if marker := _ready(volume, key):
         return {"key": key, "path": str(R.MODELS / key), "ready": True, "bytes": marker.get("bytes"),
                 "prepared": False}
-    locks, owner = _locks(target), f"{time.time():.0f}-{id(object())}"
+    locks, owner = _locks(target), uuid.uuid4().hex
     while not locks.put(key, {"owner": owner, "ts": time.time()}, skip_if_exists=True):
         held = locks.get(key) or {}
         if time.time() - held.get("ts", 0) > LOCK_STALE_SECS:

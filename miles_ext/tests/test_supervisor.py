@@ -208,3 +208,131 @@ def test_event_snapshot_dir_is_not_a_save(tmp_path):
     dropped = C.apply_retention_local(run, keep=1, keep_final_full=True, final=False)
     assert [(d["kind"], d["step"]) for d in dropped] == [("full", 1)]
     assert (run / "checkpoints" / "iter_0000000").exists()
+
+
+# review fixes (H1-H4, M3, M4, L3)
+
+def test_phase_of_matches_exit_to_segment():
+    now = time.time()
+    old_exit = {"call_id": "fc-old", "reason": "segment_end", "retryable": True}
+    assert P.phase_of({"phase": "pending", "call_id": "fc-new", "heartbeat_at": now - 900}, old_exit, now) == "pending"
+    assert P.phase_of({"phase": "training", "call_id": "fc-new", "heartbeat_at": now}, old_exit, now) == "training"
+    assert P.phase_of({"phase": "stopping", "call_id": "fc-old", "heartbeat_at": now}, old_exit, now) == "ended"
+    assert P.phase_of({"phase": "training", "call_id": "fc-new", "heartbeat_at": now - 3600}, None, now) == "no_heartbeat"
+    assert P.phase_of(None, old_exit, now) == "ended"  # after teardown: only exit.json is left
+    assert P.phase_of(None, None, now) == "no_heartbeat"
+
+
+class _Dict(dict):
+    def put(self, key, value, skip_if_exists=False):
+        if skip_if_exists and key in self:
+            return False
+        self[key] = value
+        return True
+
+
+def _launch_env(monkeypatch, store, running):
+    monkeypatch.setattr(P, "completion", lambda run_id, target, recipe: {
+        "complete": False, "next_rollout_id": 1, "num_rollout": 3, "tracker": 1})
+    monkeypatch.setattr(P, "progress_dict", lambda target, create=True: store)
+    monkeypatch.setattr(L, "run_secret_exists", lambda run_id, target: True)
+    monkeypatch.setattr(L, "_weights_ready", lambda recipe, target: True)
+    monkeypatch.setattr(L, "_call_running", lambda call_id: call_id in running)
+    spawned = []
+    monkeypatch.setattr(L, "_spawn", lambda *a, **k: spawned.append(1) or {"app_id": "ap-2", "call_id": "fc-2"})
+    return spawned
+
+
+def test_launch_marks_pending_and_refuses_a_live_segment(monkeypatch):
+    store, running = _Dict(), {"fc-1"}
+    spawned = _launch_env(monkeypatch, store, running)
+    store["active:run1"] = {"call_id": "fc-1", "ts": time.time()}
+    with pytest.raises(RuntimeError, match="still running"):
+        L.launch(_recipe(), "run1", DEV)
+    assert not spawned
+    running.clear()  # fc-1 ended without releasing (killed): taken over
+    out = L.launch(_recipe(), "run1", DEV)
+    assert out["launched"] and out["call_id"] == "fc-2"
+    assert store["run:run1"]["phase"] == "pending" and store["active:run1"]["call_id"] == "fc-2"
+
+
+def test_launch_releases_the_claim_when_spawn_fails(monkeypatch):
+    store = _Dict()
+    _launch_env(monkeypatch, store, set())
+    monkeypatch.setattr(L, "_spawn", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        L.launch(_recipe(), "run1", DEV)
+    assert "active:run1" not in store
+
+
+def test_final_step_save_keeps_heartbeating(tmp_path, monkeypatch):
+    """A deadline save that lands on the last step: Miles finishes; no commit storm, heartbeats go on."""
+    sentinel = tmp_path / "save-now"
+    sup, store, commits = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=1.6, sentinel=sentinel)
+    sup.call_id = "fc-1"  # steps end at 0.5, 1.0, 1.5 s; the save is asked for at 1.2 s, so it lands on the last
+    beats = []
+    real = sup.heartbeat
+    monkeypatch.setattr(sup, "heartbeat", lambda: beats.append(time.time()) or real())
+    script = tmp_path / "slow_tail.py"
+    script.write_text(FAKE_MILES.replace('print("done", flush=True)', 'time.sleep(1.5); print("done", flush=True)'))
+    cmd = _fake(tmp_path, sentinel, 0, 3, step_secs=0.5)
+    cmd[1] = str(script)
+    record = sup.run(cmd, cwd=str(tmp_path), env={})
+    assert record["reason"] == "success" and record["call_id"] == "fc-1"
+    assert len(commits) <= 4, f"{len(commits)} commits"
+    assert len(beats) >= 5  # still reporting through the 1.5 s tail
+
+
+def test_finish_releases_only_its_own_claim(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, store, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    sup.call_id = "fc-1"
+    store["active:run1"] = {"call_id": "fc-2"}
+    sup.finish("stopped", -15)
+    assert store["active:run1"] == {"call_id": "fc-2"}
+    store["active:run1"] = {"call_id": "fc-1"}
+    sup.finish("stopped", -15)
+    assert "active:run1" not in store
+
+
+def test_secret_is_replaced(monkeypatch):
+    SEC = importlib.import_module("miles_ext.platform.secrets")
+    store = {"mdev-secret-run1": {"WANDB_API_KEY": "old", "SAIL_API_KEY": "old"}}
+
+    class Objects:
+        @staticmethod
+        def delete(name, allow_missing=False, environment_name=None):
+            store.pop(name, None)
+
+        @staticmethod
+        def create(name, values, allow_existing=False, environment_name=None):
+            if name in store and not allow_existing:
+                raise RuntimeError("exists")
+            store.setdefault(name, values)
+
+    monkeypatch.setattr(SEC.modal.Secret, "objects", Objects)
+    SEC.create_run_secret(_recipe(), "run1", DEV, {"WANDB_API_KEY": "new", "SAIL_API_KEY": "new"})
+    assert store["mdev-secret-run1"]["WANDB_API_KEY"] == "new"
+
+
+def test_rollouts_done_per_backend():
+    assert P.rollouts_done("fsdp", 12) == 12 and P.rollouts_done("megatron", 3) == 4
+
+
+def test_schema_returns_copies():
+    S = importlib.import_module("miles_ext.platform.schema")
+    s = S.schema()
+    s["defaults"]["cluster"]["gpu"] = "B200"
+    assert R.DEFAULTS["cluster"]["gpu"] != "B200"
+
+
+@pytest.mark.parametrize("run_id,per_run", [("fork", False), ("k", False), ("run1", True)])
+def test_gpu_app_per_run_is_exact(run_id, per_run):
+    from miles_ext.platform.target import gpu_app_is_per_run
+    assert gpu_app_is_per_run(run_id, Target.of({**DEV, "app_name": "miles-fork"} if not per_run else
+                                                {**DEV, "app_name": f"mdev-{run_id}"})) is per_run
+
+
+def test_trainer_clears_the_completion_queue_before_the_head():
+    src = (importlib.import_module("miles_ext.tests.test_platform").ROOT / "miles_ext/launch/modal_app.py").read_text()
+    assert src.index("completion_queue.clear(partition=run_id)") < src.index('start + ["--head"')

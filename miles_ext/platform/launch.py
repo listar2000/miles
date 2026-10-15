@@ -10,7 +10,9 @@ placement until the call ends.
 
 Before spawning, ``launch`` returns without starting anything when the run is
 already complete (its checkpoints reach ``num_rollout``): a relaunch after the
-final save costs nothing.
+final save costs nothing. It refuses while another segment of the run is live
+(``active:<run_id>`` in the progress Dict holds its call id), and marks the new
+segment ``pending`` with its call id until the trainer's first heartbeat.
 """
 
 import json
@@ -77,13 +79,61 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
         raise RuntimeError(f"secret {target.secret_name} does not exist (create_run_secret first)")
     if recipe["model"].get("revision") and not _weights_ready(recipe, target):
         raise RuntimeError(f"weights {R.model_dir(recipe)} are not ready (prepare_weights first)")
-    if lease_seconds:
-        P.renew_lease(run_id, target, lease_seconds)
+    _claim(run_id, target)
+    try:
+        if lease_seconds:
+            P.renew_lease(run_id, target, lease_seconds)
+        ids = _spawn(recipe, run_id, target, inputs=inputs, from_commit=from_commit,
+                     final_retention=final_retention, timeout=timeout, segment_seconds=segment_seconds)
+    except BaseException:
+        P.progress_dict(target).pop(P.keys(run_id)["active"], None)
+        raise
+    d, now = P.progress_dict(target), time.time()
+    d[P.keys(run_id)["active"]] = {"call_id": ids["call_id"], "app_id": ids["app_id"], "ts": now}
+    d[P.keys(run_id)["run"]] = {"run_id": run_id, "phase": "pending", "call_id": ids["call_id"],
+                                "app_id": ids["app_id"], "launched_at": now, "heartbeat_at": now}
+    out.update(ids, launched=True)
+    return out
 
+
+def _call_running(call_id: str | None) -> bool:
+    if not call_id:
+        return False
+    import modal
+
+    try:
+        modal.FunctionCall.from_id(call_id).get(timeout=0)
+    except TimeoutError:
+        return True
+    except Exception:  # finished with an error, cancelled, or unknown
+        return False
+    return False
+
+
+def _claim(run_id: str, target: Target) -> bool:
+    """Take ``active:<run_id>``; raise if a segment of this run is live or being launched."""
+    d, key = P.progress_dict(target), P.keys(run_id)["active"]
+    for _ in range(2):
+        if d.put(key, {"call_id": None, "ts": time.time()}, skip_if_exists=True):
+            return True
+        held = d.get(key) or {}
+        if held.get("call_id") and _call_running(held["call_id"]):
+            raise RuntimeError(f"{run_id}: segment {held['call_id']} is still running (teardown it first)")
+        if not held.get("call_id") and time.time() - held.get("ts", 0) < SPAWN_TIMEOUT_SECS:
+            raise RuntimeError(f"{run_id}: another launch of this run is in progress")
+        d.pop(key, None)  # the segment it names has ended, or a launch died: take over
+    raise RuntimeError(f"{run_id}: could not claim the run for launch")
+
+
+def _spawn(recipe: dict, run_id: str, target: Target, *, inputs: str, from_commit: str | None,
+           final_retention: bool, timeout: int, segment_seconds: float | None) -> dict:
     config = {"recipe": recipe, "run_id": run_id, "target": target.as_dict(), "inputs": inputs,
               "from_commit": from_commit, "final_retention": final_retention, "timeout": timeout,
               "opts": {"segment_seconds": segment_seconds} if segment_seconds else {}}
-    env = {**os.environ, "MILES_EXT_LAUNCH": json.dumps(config)}
+    # the child's configuration is MILES_EXT_LAUNCH alone: drop the test launcher's MILES_* switches
+    # (a stray MILES_FORK_COMMIT in the caller's env would otherwise change the image)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MILES_")}
+    env["MILES_EXT_LAUNCH"] = json.dumps(config)
     if target.modal_environment:
         env["MODAL_ENVIRONMENT"] = target.modal_environment
     code = "from miles_ext.launch import modal_app; modal_app.spawn_detached()"
@@ -94,8 +144,7 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
     if proc.returncode != 0 or line is None:
         tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
         raise RuntimeError(f"launch of {run_id} failed (exit {proc.returncode}):\n{tail}")
-    out.update(json.loads(line[len("LAUNCHED "):]), launched=True, spawn_seconds=round(time.time() - started, 1))
-    return out
+    return {**json.loads(line[len("LAUNCHED "):]), "spawn_seconds": round(time.time() - started, 1)}
 
 
 def _weights_ready(recipe: dict, target: Target) -> bool:

@@ -32,11 +32,13 @@ def secret_values(recipe: dict, values: dict[str, str]) -> dict[str, str]:
 
 
 def create_run_secret(recipe: dict, run_id: str, target: Target | dict | None, values: dict[str, str]) -> str:
-    """Create (or replace) the run's secret; returns its name."""
+    """Create or replace the run's secret with ``values``; returns its name. Replaces, so a
+    relaunch picks up rotated keys (``allow_existing`` would keep the old values)."""
     target = Target.of(target)
     name = run_secret_name(run_id, target)
-    modal.Secret.objects.create(name, secret_values(recipe, values), allow_existing=True,
-                                environment_name=target.modal_environment)
+    values = secret_values(recipe, values)
+    modal.Secret.objects.delete(name, allow_missing=True, environment_name=target.modal_environment)
+    modal.Secret.objects.create(name, values, environment_name=target.modal_environment)
     return name
 
 

@@ -95,4 +95,4 @@ def run_secret_name(run_id: str, target: Target) -> str:
 def gpu_app_is_per_run(run_id: str, target: Target) -> bool:
     """Teardown stops the GPU app by name only when the name is this run's alone
     (``mdev-<run_id>``); the shared test app ``miles-fork`` is stopped by call id only."""
-    return target.app_name.endswith(run_id)
+    return target.app_name == f"{namespace_of(target.app_name)}{run_id}" and target.app_name != Target().app_name

@@ -260,7 +260,8 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         print(f"{run_id} is already complete (checkpoint {_tracker(run_dir)}); nothing to train", flush=True)
         if rank != 0:
             return None
-        record = {"run_id": run_id, "reason": "success", "retryable": False, "returncode": None,
+        record = {"run_id": run_id, "call_id": modal.current_function_call_id(), "reason": "success",
+                  "retryable": False, "returncode": None,
                   "segment": None, "started_at": time.time(), "ended_at": time.time(), "step": None,
                   "tracker": _tracker(run_dir), "complete": True, "num_rollout": recipe["algorithm"]["num_rollout"],
                   "next_rollout_id": P.next_rollout_id(backend, _tracker(run_dir)), "metrics": {},
@@ -268,7 +269,11 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         write_exit_record(run_dir, record)
         results_volume.commit()
         with contextlib.suppress(Exception):
-            P.progress_dict(TARGET)[P.keys(run_id)["exit"]] = record
+            d, keys = P.progress_dict(TARGET), P.keys(run_id)
+            d[keys["exit"]] = record
+            d[keys["run"]] = {"run_id": run_id, "call_id": record["call_id"], "phase": "ended",
+                              "heartbeat_at": time.time()}
+            d.pop(keys["active"], None)
         return record
     # Ray workers inherit the raylet's environment, so everything rollout workers
     # read (Harbor, the tunnel URL) is in env before `ray start`
@@ -313,7 +318,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         )
         supervisor = Supervisor(run_id, recipe, run_dir, progress_dict=P.progress_dict(TARGET), segment=segment,
                                 deadline=deadline, commit=results_volume.commit, image=_image_info(),
-                                backend=backend)
+                                backend=backend, call_id=modal.current_function_call_id())
         supervisor.heartbeat()
         if R.needs_tunnel(recipe):
             # in-sandbox agents reach the session servers through one public tunnel;
@@ -330,6 +335,9 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
             env["MILES_SESSION_PUBLIC_URL"] = f"{tunnel.url}/{token}"
             print(f"session tunnel: {tunnel.url}/<token>/<port>/...", flush=True)
 
+        # a segment whose workers died before reading leaves items behind; workers read only after
+        # the head's port opens, so clearing here, before the head starts, is safe
+        completion_queue.clear(partition=run_id)
         subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600

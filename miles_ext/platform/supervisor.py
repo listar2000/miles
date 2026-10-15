@@ -137,17 +137,19 @@ class _EventTail:
 
 class Supervisor:
     def __init__(self, run_id: str, recipe: dict, run_dir: Path, *, progress_dict, segment: int,
-                 deadline: float | None, commit, image: dict, backend: str):
+                 deadline: float | None, commit, image: dict, backend: str, call_id: str | None = None):
         self.run_id, self.recipe, self.run_dir = run_id, recipe, Path(run_dir)
         self.dict, self.keys = progress_dict, P.keys(run_id)
         self.segment, self.deadline, self.commit, self.image = segment, deadline, commit, image
+        self.call_id = call_id
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)
         self.started = time.time()
         self.events = _EventTail(self.run_dir / "checkpoints" / "events", since=self.started)
         self.phase = "starting"
         self.sigterm = threading.Event()
-        self.save_requested: tuple[float, str] | None = None  # (when, why)
+        self.save_requested: tuple[float, str] | None = None  # (when, why) while a requested save is pending
+        self.final_saved = False  # a requested save landed on the last step: Miles finishes by itself
         self.save_secs: float | None = None
         self.tracker = self._tracker()
 
@@ -174,7 +176,8 @@ class Supervisor:
 
     def heartbeat(self):
         self._put(self.keys["run"], {
-            "run_id": self.run_id, "phase": self.phase, "segment": self.segment, "step": self.events.step,
+            "run_id": self.run_id, "call_id": self.call_id, "phase": self.phase, "segment": self.segment,
+            "step": self.events.step,
             "next_rollout_id": P.next_rollout_id(self.backend, self.tracker), "num_rollout": self.num_rollout,
             "deadline": self.deadline, "save_requested": self.save_requested, "started_at": self.started,
             "heartbeat_at": time.time(), "metrics": dict(self.events.metrics), "event_files": sorted(self.events.seen),
@@ -225,7 +228,7 @@ class Supervisor:
             if self.sigterm.is_set():
                 reason = "stopped"
                 break
-            if self.save_requested is None:
+            if self.save_requested is None and not self.final_saved:
                 expires = self._lease_expires()
                 when = trigger_at(self.deadline, expires, self.events.step_secs(self.started), self.save_secs,
                                   self.started)
@@ -236,18 +239,17 @@ class Supervisor:
                     self.save_requested = (time.time(), why)
                     self.phase = "checkpointing"
                     print(f"supervisor: asked Miles to save ({why})", flush=True)
-            elif not os.path.exists(SENTINEL):  # Miles removes it once the save is written
+            elif self.save_requested is not None and not os.path.exists(SENTINEL):  # Miles removes it once saved
                 self.save_secs = time.time() - self.save_requested[0]
                 self.tracker = self._tracker()
                 self.commit()
                 if P.is_complete(self.backend, self.tracker, self.num_rollout):
                     print("supervisor: that save was the final step; letting Miles finish", flush=True)
-                    self.save_requested = (self.save_requested[0], "final")
-                    self.phase = "training"
-                    continue
-                reason = self.save_requested[1]
-                print(f"supervisor: save {self.tracker} written; stopping Miles ({reason})", flush=True)
-                break
+                    self.final_saved, self.save_requested, self.phase = True, None, "training"
+                else:
+                    reason = self.save_requested[1]
+                    print(f"supervisor: save {self.tracker} written; stopping Miles ({reason})", flush=True)
+                    break
             if time.time() - last_beat >= P.HEARTBEAT_SECS:
                 self.heartbeat()
                 last_beat = time.time()
@@ -265,7 +267,8 @@ class Supervisor:
     def finish(self, reason: str, returncode: int | None, note: str | None = None) -> dict:
         """Write the exit record (volume and Dict) and the final heartbeat."""
         record = {
-            "run_id": self.run_id, "reason": reason, "retryable": reason in P.RETRYABLE, "returncode": returncode,
+            "run_id": self.run_id, "call_id": self.call_id, "reason": reason, "retryable": reason in P.RETRYABLE,
+            "returncode": returncode,
             "segment": self.segment, "started_at": self.started, "ended_at": time.time(),
             "step": self.events.step, "tracker": self.tracker,
             "next_rollout_id": P.next_rollout_id(self.backend, self.tracker), "num_rollout": self.num_rollout,
@@ -277,6 +280,11 @@ class Supervisor:
         self._put(self.keys["exit"], record)
         self.phase = "ended"
         self.heartbeat()
+        try:  # this segment no longer holds the run (launch may start the next one)
+            if (self.dict.get(self.keys["active"]) or {}).get("call_id") in (self.call_id, None):
+                self.dict.pop(self.keys["active"], None)
+        except Exception as e:
+            print(f"supervisor: releasing the run failed: {type(e).__name__}: {e}", flush=True)
         return record
 
 

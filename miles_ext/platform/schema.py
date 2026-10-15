@@ -3,9 +3,10 @@
 ``schema()`` returns the recipe's JSON Schema (derived from ``recipe.DEFAULTS``),
 the defaults, the presets, and the reserved flags: Miles flags that a recipe
 key or the platform's safety layer sets, which ``extra_args`` may not pass.
-The full spec model (apiVersion converters, field docs) comes with r4.
+The full spec model (apiVersion converters, field docs) is not built yet.
 """
 
+import copy
 import dataclasses
 
 from miles_ext.recipes import recipe as R
@@ -77,8 +78,8 @@ def schema() -> dict:
     return {
         "api_version": API_VERSION,
         "json_schema": json_schema,
-        "defaults": R.DEFAULTS,
+        "defaults": copy.deepcopy(R.DEFAULTS),
         "presets": {k: dataclasses.asdict(v) for k, v in PRESETS.items()},
-        "reserved_flags": RESERVED_FLAGS,
+        "reserved_flags": copy.deepcopy(RESERVED_FLAGS),
         "namespaces": list(R.OWN_APP_NAMESPACES),
     }

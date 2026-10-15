@@ -69,7 +69,7 @@ def test_resource_names_dev():
     assert names["gpu_app"] == "mdev-run1" and names["gpu_app_per_run"]
     assert names["secret"] == "mdev-secret-run1"
     assert names["progress_dict"] == "mdev-progress"
-    assert names["progress_keys"] == ["exit:run1", "lease:run1", "run:run1"]
+    assert names["progress_keys"] == ["active:run1", "exit:run1", "lease:run1", "run:run1"]
     assert not T.resource_names(_recipe(), "run1", None)["gpu_app_per_run"]  # shared miles-fork: by call id only
 
 

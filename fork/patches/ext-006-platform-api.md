@@ -79,6 +79,15 @@ r5 adds R3 (`launch`), R5 (rank-0 supervisor, `observe`) and R6 (exit record).
   `<ns>progress` key `run:<run_id>`; lease at `lease:<run_id>` (`renew_lease`).
   Worker nodes commit every 2 min so their shards reach the volume. `observe`
   reads it back with completion and checkpoints.
+- **One segment at a time**: `launch` claims `active:<run_id>` (refuses while the call it
+  names is running), then writes `run:<run_id>` as `pending` with the call id. Heartbeats and
+  exit records carry `call_id`; `observe` reports `ended` only when the exit record's call id
+  matches the heartbeat's, so a relaunched run reads `pending`, not the previous exit.
+  Phases: `pending`, `starting`, `training`, `checkpointing`, `stopping`, `ended`,
+  `no_heartbeat`. Rank 0 clears its completion-queue partition before the Ray head starts,
+  so a worker never reads a dead segment's message. `create_run_secret` replaces the secret
+  (rotated keys apply on relaunch). Checkpoints carry `rollouts_done` (FSDP `iter_N` holds N
+  rollouts, Megatron N + 1). (Adversarial review H1-H4, M3, M4, L3, L5, M9.)
 - **R6 exit record**: `<run>/exit.json`, `<run>/exits.jsonl` and Dict `exit:<run_id>`,
   reason `success|segment_end|lease_expired|stopped|oom|nccl_timeout|error`, with
   `retryable`, `complete` and the output tail on failure. Teardown deletes the Dict keys.
