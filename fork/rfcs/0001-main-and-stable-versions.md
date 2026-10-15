@@ -106,7 +106,7 @@ Next stable version. The old names stay readable for a transition.
 Repo-internal names (`fork/` folder, `Fork-*` trailers, `[fork fix-NNN]`
 markers) describe the patch series and are not platform-facing. They stay.
 
-## Modal names, option A (next stable version)
+## Modal names, option A (next stable version; on `main` since 2026-10-15)
 
 - The trainer accepts the `rl-` namespace next to `mdev-`, `mstg-` and `mrl-`.
   The old prefixes go only after dev's cleanup.

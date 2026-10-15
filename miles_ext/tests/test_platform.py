@@ -73,6 +73,41 @@ def test_resource_names_dev():
     assert not T.resource_names(_recipe(), "run1", None)["gpu_app_per_run"]  # shared miles-fork: by call id only
 
 
+
+RUN = "0bebf81d-61f8-5339-a02c-cfa4cc4ec536"
+OPTION_A = {"modal_environment": "rl-dev", "name_id": "0bebf81d", "app_name": "rl-dev-0bebf81d",
+            "results_volume": "rl-dev-results", "weights_volume": "rl-dev-weights"}
+
+
+def test_resource_names_option_a():
+    names = T.resource_names(_recipe(), RUN, OPTION_A)
+    assert names["gpu_app"] == "rl-dev-0bebf81d" and names["gpu_app_per_run"]
+    assert names["sandbox_apps"] == ["rl-dev-0bebf81d-sbx"]
+    assert names["secret"] == "rl-dev-0bebf81d-secret"
+    assert names["progress_dict"] == "rl-dev-progress"
+    assert names["results_dir"] == f"{RUN}/" and f"run:{RUN}" in names["progress_keys"]
+    recipe = Target.of(OPTION_A).apply(_recipe())
+    R.validate(recipe, local_inputs=False)
+    assert R.harbor_env(recipe, RUN)  # the sandbox env builds with the new app name
+
+
+@pytest.mark.parametrize("change", [
+    {"name_id": None},                       # rl- names need a name id
+    {"name_id": "0BEBF81D"},
+    {"app_name": "rl-dev-0bebf81e"},         # app name must end in the name id
+    {"app_name": "rl-0bebf81d"},             # and carry the environment
+    {"app_name": "mdev-run1"},               # a name id belongs to rl- names only
+])
+def test_option_a_guard(change):
+    with pytest.raises(ValueError):
+        Target.of({**OPTION_A, **change})
+
+
+def test_staging_legacy_prefix_accepted():
+    t = Target.of({**DEV, "modal_environment": "miles-staging", "app_name": "mstg-run1",
+                   "sandbox_app_prefix": "mstg-", "results_volume": "mstg-results"})
+    assert run_secret_name("run1", t) == "mstg-secret-run1"
+
 def test_teardown_is_idempotent(monkeypatch):
     live = {"miles-mobius-run1": 3}
     secret = {"exists": True}

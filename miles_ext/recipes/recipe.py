@@ -47,7 +47,7 @@ LEGACY_APP_PREFIXES = ("miles-fork-sbx-",)  # default before 2026-10-15; cleanup
 # The Modal and Sail workspaces are shared with other teams (e.g. their mobius-<uuid>-N
 # apps). Every sandbox app we create or clean up starts with one of these, and
 # cleanup only ever addresses an exact app name, never a prefix or pattern.
-OWN_APP_NAMESPACES = ("miles-", "mdev-", "mrl-")
+OWN_APP_NAMESPACES = ("miles-", "rl-", "mdev-", "mstg-", "mrl-")  # rl-<env>-: the platform; m*-: its names before 2026-10-15
 RUN_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 
 DEFAULTS: dict[str, Any] = {
@@ -80,6 +80,8 @@ DEFAULTS: dict[str, Any] = {
         # sandbox app = app_prefix + run_id; callers that scope cleanup by name
         # (the platform's mdev-/mrl- prefixes) set their own prefix
         "app_prefix": DEFAULT_APP_PREFIX,
+        # set by a target with a short name id (rl-<env>-<id>-sbx); None: app_prefix + run_id
+        "app_name": None,
     },
     "algorithm": {
         "mode": "fully_async",  # or "sync" (colocated)
@@ -280,6 +282,10 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if not sandbox["app_prefix"].startswith(OWN_APP_NAMESPACES):
         raise ValueError(f"sandbox.app_prefix must start with one of {OWN_APP_NAMESPACES} (shared workspace), "
                          f"got {sandbox['app_prefix']!r}")
+    if sandbox.get("app_name") is not None:
+        check_own_app_name(sandbox["app_name"])
+        if len(sandbox["app_name"]) > APP_NAME_MAX:
+            raise ValueError(f"sandbox.app_name {sandbox['app_name']!r} is longer than {APP_NAME_MAX}")
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
     cluster = recipe["cluster"]
@@ -417,7 +423,7 @@ def sandbox_app_name(recipe: dict, run_id: str) -> str:
     and reconcilers match on it."""
     if not re.fullmatch(RUN_ID_RE, run_id):
         raise ValueError(f"run id {run_id!r}: letters, digits, '.', '_', '-', starting with a letter or digit")
-    name = recipe["sandbox"]["app_prefix"] + run_id
+    name = recipe["sandbox"].get("app_name") or recipe["sandbox"]["app_prefix"] + run_id
     if len(name) > APP_NAME_MAX:
         raise ValueError(f"sandbox app name {name!r} is longer than {APP_NAME_MAX}; shorten the run id or prefix")
     return check_own_app_name(name)
@@ -437,7 +443,7 @@ def sandbox_app_names_for_cleanup(recipe: dict, run_id: str) -> list[str]:
     """The run's sandbox app plus the names earlier fork versions gave the same run id,
     so a run started before a rename and resumed after it still leaves nothing behind."""
     names = [sandbox_app_name(recipe, run_id)]
-    if recipe["sandbox"]["app_prefix"] == DEFAULT_APP_PREFIX:
+    if recipe["sandbox"]["app_prefix"] == DEFAULT_APP_PREFIX and not recipe["sandbox"].get("app_name"):
         names += [check_own_app_name(p + run_id) for p in LEGACY_APP_PREFIXES if len(p + run_id) <= APP_NAME_MAX]
     return names
 

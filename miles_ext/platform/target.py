@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass, replace
 from miles_ext.recipes import recipe as R
 
 VOLUME_NAME_RE = r"[a-z0-9][a-z0-9-]*"
+SCOPED_NAMESPACE = "rl-"  # names rl-<env>-<name_id>; they need a name id
+NAME_ID_RE = r"[a-z0-9]{6,16}"
 
 
 def check_own_name(name: str, what: str) -> str:
@@ -29,8 +31,12 @@ def check_own_name(name: str, what: str) -> str:
 class Target:
     """Defaults are the hand-launched test setup (``miles_ext.launch.modal_app``).
 
-    The platform's dev values: ``modal_environment="miles-dev"``,
-    ``app_name="mdev-<run_id>"``, ``sandbox_app_prefix="miles-mobius-"``,
+    The platform's names (option A, 2026-10-15) use a short name id next to the run id:
+    ``modal_environment="rl-dev"``, ``name_id="0bebf81d"``, ``app_name="rl-dev-0bebf81d"``,
+    ``results_volume="rl-dev-results"``, ``weights_volume="rl-dev-weights"``; then the
+    sandbox app is ``<app_name>-sbx``, the secret ``<app_name>-secret`` and the progress
+    Dict ``rl-dev-progress``. The run id still keys files, W&B and progress keys.
+    Before that (still accepted): ``app_name="mdev-<run_id>"``, ``sandbox_app_prefix``,
     ``results_volume="mdev-results"``."""
 
     modal_environment: str | None = None  # None: the Modal profile's default environment
@@ -39,6 +45,7 @@ class Target:
     results_volume: str = "miles-fork-results"
     weights_volume: str = "miles-swe-models"
     secret_name: str | None = None  # None: run_secret_name()
+    name_id: str | None = None  # short id in the run's names (option A); the platform keeps it unique
 
     @classmethod
     def of(cls, target: "Target | dict | None") -> "Target":
@@ -54,6 +61,11 @@ class Target:
 
     def check(self) -> None:
         check_own_name(self.app_name, "target.app_name")
+        if self.name_id is not None or self.app_name.startswith(SCOPED_NAMESPACE):
+            if not re.fullmatch(NAME_ID_RE, self.name_id or ""):
+                raise ValueError(f"target.name_id {self.name_id!r} must be {NAME_ID_RE} (needed for {SCOPED_NAMESPACE} names)")
+            if not re.fullmatch(rf"{SCOPED_NAMESPACE}[a-z0-9]+-{self.name_id}", self.app_name):
+                raise ValueError(f"target.app_name {self.app_name!r} must be {SCOPED_NAMESPACE}<env>-{self.name_id}")
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*-", self.sandbox_app_prefix or "") or not self.sandbox_app_prefix.startswith(
                 R.OWN_APP_NAMESPACES):
             raise ValueError(f"target.sandbox_app_prefix {self.sandbox_app_prefix!r} must start with one of "
@@ -74,7 +86,8 @@ class Target:
         """The recipe with this target's sandbox prefix (the only recipe key a target owns), and
         defaults for keys it lacks (a recipe resolved by an older release has no ``async``)."""
         recipe = R.from_dict(recipe)
-        return {**recipe, "sandbox": {**recipe["sandbox"], "app_prefix": self.sandbox_app_prefix}}
+        app_name = f"{self.app_name}-sbx" if self.name_id else None
+        return {**recipe, "sandbox": {**recipe["sandbox"], "app_prefix": self.sandbox_app_prefix, "app_name": app_name}}
 
     def with_(self, **changes) -> "Target":
         return replace(self, **changes)
@@ -84,10 +97,18 @@ def namespace_of(name: str) -> str:
     return next(p for p in R.OWN_APP_NAMESPACES if name.startswith(p))
 
 
+def scope_of(target: Target) -> str:
+    """The prefix of the target's shared names: ``rl-<env>-`` with a name id, else the namespace."""
+    return target.app_name[:-len(target.name_id)] if target.name_id else namespace_of(target.app_name)
+
+
 def run_secret_name(run_id: str, target: Target) -> str:
-    """The per-run secret: ``target.secret_name``, or ``<namespace of app_name>secret-<run_id>``."""
+    """The per-run secret: ``target.secret_name``, or ``<app_name>-secret`` with a name id,
+    else ``<namespace of app_name>secret-<run_id>``."""
     if target.secret_name:
         return target.secret_name
+    if target.name_id:
+        return check_own_name(f"{target.app_name}-secret", "secret name")
     if not re.fullmatch(R.RUN_ID_RE, run_id):
         raise ValueError(f"run id {run_id!r}")
     return check_own_name(f"{namespace_of(target.app_name)}secret-{run_id}", "secret name")
@@ -96,4 +117,6 @@ def run_secret_name(run_id: str, target: Target) -> str:
 def gpu_app_is_per_run(run_id: str, target: Target) -> bool:
     """Teardown stops the GPU app by name only when the name is this run's alone
     (``mdev-<run_id>``); the shared test app ``miles-fork`` is stopped by call id only."""
+    if target.name_id:
+        return True
     return target.app_name == f"{namespace_of(target.app_name)}{run_id}" and target.app_name != Target().app_name

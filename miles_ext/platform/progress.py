@@ -2,7 +2,7 @@
 
 Two places hold it, so a reader never depends on the trainer being alive:
 
-- the progress Dict ``<namespace of app_name>progress`` (``mdev-progress`` in dev),
+- the progress Dict ``<scope>progress`` (``rl-dev-progress``; ``mdev-progress`` before option A),
   keys ``run:<run_id>`` (``launch`` writes it as ``pending`` with the segment's call
   id, then rank 0's heartbeat replaces it every ``HEARTBEAT_SECS``),
   ``active:<run_id>`` (the live segment's call id: at most one segment per run),
@@ -26,7 +26,7 @@ import modal
 
 from miles_ext.platform.layout import read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
-from miles_ext.platform.target import Target, check_own_name, namespace_of
+from miles_ext.platform.target import Target, check_own_name, scope_of
 from miles_ext.recipes import recipe as R
 
 HEARTBEAT_SECS = 30
@@ -59,7 +59,7 @@ def is_complete(backend: str, tracker: int | None, num_rollout: int) -> bool:
 
 
 def progress_dict_name(target: Target) -> str:
-    return check_own_name(f"{namespace_of(target.app_name)}progress", "progress dict")
+    return check_own_name(f"{scope_of(target)}progress", "progress dict")
 
 
 def keys(run_id: str) -> dict:

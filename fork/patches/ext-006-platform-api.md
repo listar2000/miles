@@ -147,6 +147,13 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   `main` on GitHub, the packaged copy as fallback). The platform stores the result
   and passes `launch(image=...)` to every segment, so a resume never changes build.
   Without `image`, launch still runs `stack.FORK_IMAGE`.
+- **Names, option A** (`target.py`): a target with `name_id` (6-16 lowercase
+  letters/digits, unique per environment, kept so by the platform) names the run's
+  resources `rl-<env>-<id>` (GPU app), `<app>-sbx` (sandbox app, recipe key
+  `sandbox.app_name`, set by `Target.apply`), `<app>-secret`, and the shared
+  `rl-<env>-progress`; the run id still keys files, W&B and progress keys. `rl-`
+  names require a name id. The `mdev-`/`mstg-`/`mrl-` names stay accepted until
+  dev is cleaned up.
 
 Alternatives: separate packages per requirement (one dependency web, more
 churn for the platform); retention by Miles flags (Miles has none for full
