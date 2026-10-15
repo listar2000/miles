@@ -21,6 +21,7 @@ import collections
 import datetime
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -48,12 +49,35 @@ METRICS = (
     "perf/rollout_time",
 )
 _EVENT_FILES = ("rollout_executor.jsonl", "actor_cell00000_rank00000.jsonl", "trainer_controller_actor.jsonl")
-_OOM = ("CUDA out of memory", "OutOfMemoryError", "torch.OutOfMemoryError")
+_OOM = ("CUDA out of memory", "OutOfMemoryError", "torch.OutOfMemoryError",
+        # a Ray worker that dies this way was almost always killed by the kernel OOM killer
+        # (host memory); Ray's own message lists that as the first cause
+        "Worker unexpectedly exits with a connection error code 2")
 _NCCL = ("Watchdog caught collective operation timeout", "NCCL timeout", "ProcessGroupNCCL", "NCCL communicator was aborted")
 
 
+# the first line of Miles' (or Ray's) output that names an error goes into the exit record's note
+_ERROR_LINE = re.compile(r"\b\w*(Error|Exception)\b(?!\]|s\b)|Worker exit type: SYSTEM_ERROR|CUDA out of memory")
+_NOT_AN_ERROR = re.compile(r"^\s*(WARNING|\S*warn)|Traceback \(most recent call last\)", re.IGNORECASE)
+NOTE_CHARS = 500
+
+
+def first_error(lines, reason: str | None = None) -> str | None:
+    """The line that best names the failure: for ``oom`` the first line with an OOM sign, else
+    the first line naming an error (warnings and traceback headers skipped)."""
+    lines = list(lines)
+    if reason == "oom":
+        if hit := next((ln for ln in lines if any(s in ln for s in _OOM)), None):
+            return hit.strip()[:NOTE_CHARS]
+    for line in lines:
+        if _ERROR_LINE.search(line) and not _NOT_AN_ERROR.search(line):
+            return line.strip()[:NOTE_CHARS]
+    return None
+
+
 def classify(returncode: int, tail: list[str]) -> str:
-    """The exit reason of a Miles process that ended by itself."""
+    """The exit reason of a Miles process that ended by itself (``tail``: its output, or any part
+    of it that carries the cause)."""
     if returncode == 0:
         return "success"
     text = "\n".join(tail)
@@ -145,6 +169,7 @@ class Supervisor:
         self.call_id = call_id
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)
+        self.error_lines: list[str] = []  # the first error lines of the whole output, past the tail's reach
         self.started = time.time()
         self.events = _EventTail(self.run_dir / "checkpoints" / "events", since=self.started)
         self.phase = "starting"
@@ -187,6 +212,8 @@ class Supervisor:
             line = raw.decode(errors="replace")
             sys.stdout.write(line)
             self.tail.append(line.rstrip("\n"))
+            if len(self.error_lines) < TAIL_LINES and _ERROR_LINE.search(line) and not _NOT_AN_ERROR.search(line):
+                self.error_lines.append(line.rstrip("\n"))
         sys.stdout.flush()
 
     def _stop(self, proc: subprocess.Popen):
@@ -259,8 +286,10 @@ class Supervisor:
         self.events.poll()
         self.tracker = self._tracker()
         if reason is None:
-            reason = classify(proc.returncode, list(self.tail))
-        return self.finish(reason, proc.returncode)
+            reason = classify(proc.returncode, self.error_lines + list(self.tail))
+        note = first_error(self.error_lines + list(self.tail), reason) if reason not in ("success", "segment_end",
+                                                                                   "lease_expired") else None
+        return self.finish(reason, proc.returncode, note=note)
 
     def finish(self, reason: str, returncode: int | None, note: str | None = None) -> dict:
         """Write the exit record (volume and Dict) and the final heartbeat."""

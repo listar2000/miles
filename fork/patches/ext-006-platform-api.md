@@ -100,6 +100,17 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
 - **R6 exit record**: `<run>/exit.json`, `<run>/exits.jsonl` and Dict `exit:<run_id>`,
   reason `success|segment_end|lease_expired|stopped|oom|nccl_timeout|error`, with
   `retryable`, `complete` and the output tail on failure. Teardown deletes the Dict keys.
+  r6: `note` holds the first line of the output that names the error (for `oom`, the first
+  OOM sign), kept from the whole output, not only the 60-line tail; a Ray worker that died
+  with "connection error code 2" (the kernel OOM killer, by Ray's own account) reads as
+  `oom` (platform field report, Megatron run 267df4a9).
+- **Memory defaults** (r6): `algorithm.max_tokens_per_gpu` defaults to 16384 (was 32768).
+  It caps the tokens packed into one training micro-batch, and FSDP holds that micro-batch's
+  full-vocabulary logits (about 1 GiB per 1k tokens in fp32 at a 248k vocabulary): 32768
+  OOMed Qwen3.5-9B on 4 H200s. `algorithm.max_response_len` caps each model turn (SGLang's
+  `max_new_tokens`); a multi-turn trajectory's training response (all turns plus tool
+  output) is capped by `algorithm.max_seq_len` instead, which is why mean response lengths
+  run past `max_response_len`.
 - **Named training knobs** (r6, platform review P-M1): `algorithm.advantage_estimator`
   (`grpo` | `gspo` | `reinforce_plus_plus` | `reinforce_plus_plus_baseline`; not `ppo`,
   which needs a critic the recipe does not build), `algorithm.kl_loss_coef` (> 0 adds

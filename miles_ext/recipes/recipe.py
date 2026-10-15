@@ -97,7 +97,10 @@ DEFAULTS: dict[str, Any] = {
         "tis_clip": 2.0,
         "max_weight_staleness": 2,
         "sglang_mem_fraction": None,  # None: 0.85 fully async, 0.7 colocated
-        "max_tokens_per_gpu": 32768,
+        # tokens packed per training micro-batch (a longer sample gets one of its own). FSDP holds
+        # the micro-batch's full-vocabulary logits (~1 GiB per 1k tokens in fp32 at Qwen3.5's
+        # 248k vocab): 32768 OOMed a 9B run on 4 H200s (smoke-r5-v1), so the default is 16384
+        "max_tokens_per_gpu": 16384,
         "advantage_estimator": "grpo",
         "kl_loss_coef": 0.0,  # > 0: KL loss against the base weights (FSDP then loads a reference copy)
         "entropy_coef": 0.0,

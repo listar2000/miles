@@ -64,6 +64,33 @@ def test_classify(code, tail, reason):
     assert SUP.classify(code, tail) == reason
 
 
+RAY_OOM_KILL = [  # what the platform's Megatron run 267df4a9 printed before it ended (r5 field report)
+    "WARNING:megatron.bridge.models.muse_glimmer:Muse Glimmer Hugging Face classes are unavailable",
+    "Traceback (most recent call last):",
+    "ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.",
+    "The actor is dead because its worker process has died. Worker exit type: SYSTEM_ERROR Worker exit detail: "
+    "Worker unexpectedly exits with a connection error code 2. End of file. Some common causes include: (1) the "
+    "process was killed by the OOM killer due to high memory usage",
+    "miles.utils.retry_utils.NonRetryableError: All cells failed in this training attempt",
+]
+
+
+def test_ray_worker_killed_reads_as_oom_with_a_note():
+    assert SUP.classify(1, RAY_OOM_KILL) == "oom"
+    assert SUP.first_error(RAY_OOM_KILL, "oom").startswith("The actor is dead because its worker process has died")
+    assert SUP.first_error(RAY_OOM_KILL, "error").startswith("ray.exceptions.ActorDiedError")
+    assert SUP.first_error(["WARNING: ValueError-ish text", "all good"]) is None
+
+
+def test_error_note_survives_a_long_tail(tmp_path, monkeypatch):
+    """The cause is printed long before Miles exits; the note keeps it past the tail's 60 lines."""
+    sentinel = tmp_path / "save-now"
+    sup, _, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    code = "print('KeyError: missing rollout key'); [print('shutting down', i) for i in range(200)]; raise SystemExit(1)"
+    record = sup.run([sys.executable, "-c", code], cwd=str(tmp_path), env={})
+    assert record["reason"] == "error" and record["note"] == "KeyError: missing rollout key"
+
+
 # the supervisor around a fake Miles
 
 FAKE_MILES = textwrap.dedent('''
