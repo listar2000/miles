@@ -20,7 +20,12 @@ so the history is the record and nothing has to be kept in sync by hand.
   4. fixes and hooks come before infra and extensions, so a sync meets every
      possible conflict first and the rest replays cleanly;
   5. every file in fork/vendored.json (third-party code copied verbatim) still
-     has the git blob of its upstream source (also checked by ``markers``).
+     has the git blob of its upstream source (also checked by ``markers``);
+  6. ids follow their kind (``ID_FORMATS``): ``fix-NNN``, ``hook-NNN``, ``ext-NNN``,
+     and a kebab-case name for infra (``infra-NNN``, ``release-<tag>-rN``, or a
+     short name such as ``repo-refs``). One id names one change; a change may span
+     several commits (an extension grows release by release), and a fix or hook
+     id is used by exactly one commit.
 """
 
 import argparse
@@ -38,6 +43,7 @@ OWN_PATHS = ("fork/", "miles_ext/", "FORK.md", ".claude/skills/miles-fork/")
 KINDS = ("Fix", "Hook", "Infra", "Ext")
 UPSTREAM_KINDS = ("Fix", "Hook")  # the only kinds allowed to edit upstream files
 MARKER = re.compile(r"\[fork ((?:fix|hook)-\d{3})\]")
+ID_FORMATS = {"Fix": r"fix-\d{3}", "Hook": r"hook-\d{3}", "Ext": r"ext-\d{3}", "Infra": r"[a-z0-9]+(?:[.-][a-z0-9]+)*"}
 
 
 def git(*args: str) -> str:
@@ -141,6 +147,10 @@ def cmd_check(base: str) -> int:
         if c.kind is None:
             problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
             continue
+        if not re.fullmatch(ID_FORMATS[c.kind], c.fork_id):
+            problems.append(f"{c.sha} {c.fork_id!r}: a Fork-{c.kind} id must match {ID_FORMATS[c.kind]}")
+        if c.kind in UPSTREAM_KINDS and sum(o.fork_id == c.fork_id for o in series) > 1:
+            problems.append(f"{c.sha} {c.fork_id}: a {c.kind.lower()} id is used by one commit only")
         if c.kind in UPSTREAM_KINDS and seen_own:
             problems.append(f"{c.sha} {c.fork_id}: {c.kind.lower()} after an infra/ext commit "
                             "(fixes and hooks go first in the series)")

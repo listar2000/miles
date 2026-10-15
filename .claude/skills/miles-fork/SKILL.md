@@ -41,7 +41,7 @@ Take the next free number from `ledger.py list` (numbers are never reused).
 | add an extension point upstream lacks | Hook | in place, smallest possible edit | `Fork-Hook: hook-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
-| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | `Fork-Infra: infra-NNN` |
+| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `release-fork-<tag>-rN`, or a short name) |
 
 Prefer the kinds lower in the table: an Ext cannot conflict on a sync, a Fix
 can. If an extension needs upstream to call it somewhere it doesn't, write a
