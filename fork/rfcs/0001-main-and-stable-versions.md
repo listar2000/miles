@@ -1,6 +1,6 @@
-# Plan: one running `main`, `latest` or a stable version
+# RFC 0001: one running `main`, `latest` or a stable version
 
-Status: draft on `fork/v0.1.2-main-channel` (2026-10-15). Becomes the rulebook
+Status: accepted 2026-10-15; steps 1-3 of Order done (Actions off, `main` default, `stable-2026-10-15`). Becomes the rulebook
 (`fork/README.md`) and skill (`.claude/skills/miles-fork/SKILL.md`) once the
 steps marked **needs OK** are done. Nothing here deletes or moves a tag or an
 image, and the platform keeps running r6 (`stack.FORK_IMAGE`) until it opts in.

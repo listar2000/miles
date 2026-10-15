@@ -103,6 +103,7 @@ fork/
   tools/ledger.py       list / audit the series (touch points, markers, trailers, order)
   tools/sync.py         rebase onto a newer upstream tag + stack bump
   patches/README.md     index of patch pages; patches/<fork-id>-<slug>.md, one page each
+  rfcs/README.md        index of RFCs (process and design proposals); rfcs/NNNN-<slug>.md
   vendored.json         upstream files carried verbatim in miles_ext/ (blob-checked)
   deps/harbor/          offline Harbor patches (task-set generation only; see Harbor)
 .claude/skills/miles-fork/  the workflow for agents changing this fork
