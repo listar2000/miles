@@ -108,7 +108,7 @@ def prepare_weights(hf_repo: str, revision: str | None, target: Target | dict | 
 
         secrets = [modal.Secret.from_name(secret_name, environment_name=target.modal_environment)] if secret_name else []
         fn = functions.download.with_options(volumes={R.MODELS: volume}, secrets=secrets)
-        with functions.app.run(environment_name=target.modal_environment):
+        with functions.run(target):
             result = fn.remote(hf_repo, revision, str(R.MODELS / key))
         marker = {"hf_repo": hf_repo, "revision": revision, "bytes": result["bytes"], "prepared_at": time.time()}
         with volume.batch_upload(force=True) as batch:  # after the snapshot's commit (the function's exit)

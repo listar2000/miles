@@ -22,15 +22,15 @@ class FakeRegistry:
 
 
 def test_latest_reads_commit_from_image():
-    reg = FakeRegistry([f"MILES_FORK_COMMIT={SHA}", f"MILES_FORK_RELEASE=main-{SHA[:12]}", "PATH=/bin"])
+    reg = FakeRegistry([f"MILES_MOBIUS_COMMIT={SHA}", f"MILES_MOBIUS_VERSION=main@{SHA[:10]}", "PATH=/bin"])
     got = V.resolve("latest", registry=reg)
     assert reg.asked == [stack.LATEST_TAG]
-    assert got == {"trainer": "latest", "name": f"main-{SHA[:12]}", "commit": SHA,
+    assert got == {"trainer": "latest", "name": f"main@{SHA[:10]}", "commit": SHA,
                    "image": f"{stack.IMAGE_REPO}@{DIGEST}"}
 
 
 def test_latest_without_commit_fails():
-    with pytest.raises(RuntimeError, match="MILES_FORK_COMMIT"):
+    with pytest.raises(RuntimeError, match="MILES_MOBIUS_COMMIT"):
         V.resolve("latest", registry=FakeRegistry(["PATH=/bin"]))
 
 
@@ -84,8 +84,8 @@ def test_spawn_passes_image(monkeypatch):
     monkeypatch.setattr(L.subprocess, "run", run)
     image = f"{stack.IMAGE_REPO}@{DIGEST}"
     L._spawn({"name": "r"}, "run1", Target.of(None), inputs="volume", from_commit=None, image=image,
-             final_retention=False, timeout=60, segment_seconds=None)
-    assert seen["image"] == image and seen["from_commit"] is None
+             trainer="latest", final_retention=False, timeout=60, segment_seconds=None)
+    assert seen["image"] == image and seen["trainer"] == "latest" and seen["from_commit"] is None
 
 
 def test_fork_image_requires_digest():
@@ -94,3 +94,22 @@ def test_fork_image_requires_digest():
         fork_image(image=f"{stack.IMAGE_REPO}:main")
     with pytest.raises(ValueError, match="not both"):
         fork_image(commit=SHA, image=f"{stack.IMAGE_REPO}@{DIGEST}")
+
+
+def test_image_env_names_prefer_miles_mobius(monkeypatch):
+    from miles_ext.platform import images
+    monkeypatch.setenv("MILES_FORK_RELEASE", "fork-v0.1.2-r6")
+    monkeypatch.setenv("MILES_FORK_COMMIT", "b" * 40)
+    monkeypatch.delenv("MILES_MOBIUS_VERSION", raising=False)
+    monkeypatch.delenv("MILES_MOBIUS_COMMIT", raising=False)
+    assert images.image_version() == "fork-v0.1.2-r6" and images.image_commit() == "b" * 40  # an r6 image
+    monkeypatch.setenv("MILES_MOBIUS_VERSION", f"main@{SHA[:10]}")
+    monkeypatch.setenv("MILES_MOBIUS_COMMIT", SHA)
+    assert images.image_version() == f"main@{SHA[:10]}" and images.image_commit() == SHA
+
+
+def test_build_main_names_and_env():
+    src = (Path(V.__file__).resolve().parents[2] / "fork/docker/build.py").read_text()
+    assert '"MILES_MOBIUS_VERSION": version' in src and '"MILES_MOBIUS_COMMIT": commit' in src
+    assert "miles.fork." not in src
+    assert stack.IMAGE_REPO.endswith("/miles-mobius")

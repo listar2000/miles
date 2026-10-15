@@ -105,7 +105,7 @@ def validate(recipe: dict, run_id: str, target: Target | dict | None = None, *, 
     secret_name = secret_name or target.secret_name
     secrets = [modal.Secret.from_name(secret_name, environment_name=target.modal_environment)] if secret_name else []
     fn = functions.deep_check.with_options(gpu=gpu, volumes=volumes, secrets=secrets)
-    with functions.app.run(environment_name=target.modal_environment):
+    with functions.run(target):
         remote = fn.remote(resolved, run_id, libcuda_stub)
     out.update({k: remote[k] for k in ("trial_config", "parsed")}, ran_on=gpu or "cpu")
     out["errors"] = remote["errors"]
@@ -154,8 +154,11 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
     from miles_ext import stack
 
     errors: list[dict] = []
+    from miles_ext.platform.images import image_commit, image_version
+
+    # "stack" repeats "version" for callers of releases before 2026-10-15
     result = {"errors": errors, "trial_config": None, "parsed": None,
-              "image_commit": os.environ.get("MILES_FORK_COMMIT"), "stack": os.environ.get("MILES_FORK_RELEASE")}
+              "image_commit": image_commit(), "version": image_version(), "stack": image_version()}
 
     def step(name: str, fn, path: str | None = None):
         try:

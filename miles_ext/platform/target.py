@@ -102,6 +102,17 @@ def scope_of(target: Target) -> str:
     return target.app_name[:-len(target.name_id)] if target.name_id else namespace_of(target.app_name)
 
 
+def helper_app_name(target: Target) -> str:
+    """The app the platform's helper functions (deep check, HF export, weights download) run in:
+    ``rl-<env>-helpers`` with a name id, else the shared ``miles-platform``."""
+    return check_own_name(f"{scope_of(target)}helpers", "helper app") if target.name_id else "miles-platform"
+
+
+def completion_queue_name(target: Target) -> str:
+    """The trainer's completion queue (partitions per run id): ``rl-<env>-completion`` with a name id."""
+    return check_own_name(f"{scope_of(target)}completion", "queue") if target.name_id else "miles-fork-completion"
+
+
 def run_secret_name(run_id: str, target: Target) -> str:
     """The per-run secret: ``target.secret_name``, or ``<app_name>-secret`` with a name id,
     else ``<namespace of app_name>secret-<run_id>``."""

@@ -185,6 +185,6 @@ def finalize_hf(run_id: str, recipe: dict, target: Target | dict | None, *, step
     cmd = finalize_hf_command(run_id, step, str(R.model_dir(recipe)))
     weights = modal.Volume.from_name(target.weights_volume, environment_name=target.modal_environment)
     fn = functions.convert_fsdp.with_options(volumes={R.RESULTS: volume, R.MODELS: weights})
-    with functions.app.run(environment_name=target.modal_environment):
+    with functions.run(target):
         fn.remote(cmd)
     return {"step": step, "path": checkpoint_path(run_id, step, "hf")}

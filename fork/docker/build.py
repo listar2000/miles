@@ -162,10 +162,11 @@ def main():
     ap.add_argument("--commit", default="HEAD", help="fork commit to release (must be on the fork remote)")
     ap.add_argument("--release", default=None, help="image tag, fork-<upstream tag>-r<N> (default: stack.FORK_RELEASE)")
     ap.add_argument("--main", action="store_true",
-                    help="build main's tip: push main-<sha12> (immutable), then move the latest tag (main) to it")
+                    help="build main's tip into stack.IMAGE_REPO: push :<sha10> (immutable), then move :main (latest) to it")
     ap.add_argument("--mark-stable", metavar="stable-YYYY-MM-DD", default=None,
                     help="no build: add this tag to an existing image (--image repo@sha256:...)")
-    ap.add_argument("--image", default=None, help="with --mark-stable: the image, pinned by digest")
+    ap.add_argument("--image", default=None, help="with --mark-stable: the image, pinned by digest (copied into "
+                    "stack.IMAGE_REPO when it is elsewhere)")
     ap.add_argument("--repo", default=None, help="Docker Hub repository (default: $DOCKERHUB_USERNAME/miles)")
     ap.add_argument("--workdir", default=None, help="keep layer tarballs here (a retry with the same pins reuses the deps layer)")
     args = ap.parse_args()
@@ -174,6 +175,8 @@ def main():
     if not user or not token:
         raise SystemExit("DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be set")
     repo = f"docker.io/{args.repo or user + '/miles'}"
+    if args.main or args.mark_stable:
+        repo = f"docker.io/{args.repo}" if args.repo else stack.IMAGE_REPO
     if args.mark_stable:
         return mark_stable(args, repo, user, token)
     commit = git("rev-parse", args.commit)
@@ -181,7 +184,7 @@ def main():
         raise SystemExit(f"{commit[:10]} is not on any remote branch; push it first")
     if args.main:
         if args.release:
-            raise SystemExit("--main names the image itself (main-<sha12>); drop --release")
+            raise SystemExit("--main names the image itself (<sha10>); drop --release")
         try:
             tip = git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{LATEST_TAG}")
         except subprocess.CalledProcessError:
@@ -189,8 +192,8 @@ def main():
         if commit != tip:
             raise SystemExit(f"{commit[:10]} is not origin/{LATEST_TAG}'s tip ({tip[:10] or 'no such branch'}): "
                              f"the {LATEST_TAG} tag only moves forward to the tip; fetch first")
-        args.release = f"{LATEST_TAG}-{commit[:12]}"
-    args.release = args.release or stack.FORK_RELEASE
+    version = f"{LATEST_TAG}@{commit[:10]}" if args.main else (args.release or stack.FORK_RELEASE)
+    args.release = commit[:10] if args.main else version  # the image tag
     target = f"{repo}:{args.release}"
     t0 = time.monotonic()
 
@@ -227,14 +230,18 @@ def main():
         labels = {
             "org.opencontainers.image.source": stack.FORK_REPO,
             "org.opencontainers.image.revision": commit,
-            "org.opencontainers.image.version": args.release,
+            "org.opencontainers.image.version": version,
             "org.opencontainers.image.base.name": BASE_IMAGE,
             "org.opencontainers.image.base.digest": base_amd64.split("@")[1],
-            "miles.fork.harbor": f"{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}",
-            "miles.fork.mini-swe-agent": stack.MINI_SWE_AGENT_VERSION,
-            "miles.fork.sail": stack.SAIL_SDK_VERSION,
+            "org.opencontainers.image.title": "miles-mobius",
+            "miles.mobius.upstream": stack.UPSTREAM_TAG,
+            "miles.mobius.harbor": f"{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}",
+            "miles.mobius.mini-swe-agent": stack.MINI_SWE_AGENT_VERSION,
+            "miles.mobius.sail": stack.SAIL_SDK_VERSION,
         }
-        envs = {"PYTHONPATH": str(stack.MILES_SRC), "MILES_FORK_RELEASE": args.release, "MILES_FORK_COMMIT": commit}
+        # MILES_FORK_*: the names images before 2026-10-15 carried, for readers of that age
+        envs = {"PYTHONPATH": str(stack.MILES_SRC), "MILES_MOBIUS_VERSION": version, "MILES_MOBIUS_COMMIT": commit,
+                "MILES_FORK_RELEASE": version, "MILES_FORK_COMMIT": commit}
         mutate = ["mutate", base_amd64, "--append", str(deps_tar), "--append", str(src_tar), "-t", target]
         for k, v in envs.items():
             mutate += ["--env", f"{k}={v}"]
@@ -246,7 +253,7 @@ def main():
             run_crane("tag", f"{target}@{digest}", LATEST_TAG)
     print(f"pushed {pushed} in {(time.monotonic() - t0) / 60:.1f} min\n"
           f'FORK_IMAGE = "{target}@{digest}"')
-    print(json.dumps({"release": args.release, "commit": commit, "image": f"{target}@{digest}",
+    print(json.dumps({"release": args.release, "version": version, "commit": commit, "image": f"{target}@{digest}",
                       "moved": LATEST_TAG if args.main else None}))
 
 
@@ -276,7 +283,10 @@ def mark_stable(args, repo: str, user: str, token: str) -> None:
         if existing and existing != want:
             raise SystemExit(f"{repo}:{args.mark_stable} already names {existing}; stable tags never move")
         run_crane("auth", "login", "index.docker.io", "-u", user, "--password-stdin", stdin=token)
-        run_crane("tag", args.image, args.mark_stable)
+        if args.image.split("@", 1)[0] == repo:
+            run_crane("tag", args.image, args.mark_stable)
+        else:  # an image in another repository (r6 in starlimobius/miles): copy it, layers are mounted
+            run_crane("copy", args.image, f"{repo}:{args.mark_stable}")
         digest = run_crane("digest", f"{repo}:{args.mark_stable}")
     if digest != want:
         raise SystemExit(f"tagged {args.mark_stable} but it reads back as {digest}")

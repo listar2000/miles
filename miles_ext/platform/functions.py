@@ -6,10 +6,10 @@
   ``miles_ext`` needs the ``miles`` tree, and the image is cached once built.
 
 Volumes and secrets are per call (``with_options``), so nothing about a run is
-fixed here. The fork image is ``stack.FORK_IMAGE``, or the image built from a
-pushed commit when ``MILES_FORK_COMMIT`` is set when this module is imported
-(the same switch as the test launcher); inside a container the function's own
-image is used.
+fixed here. The image is ``stack.FORK_IMAGE``, ``MILES_IMAGE`` (a ``repo@sha256:``)
+or the image built from a pushed commit when ``MILES_FORK_COMMIT`` is set when this
+module is imported (the same switches as the test launcher); inside a container the
+function's own image is used.
 """
 
 import os
@@ -18,9 +18,16 @@ import subprocess
 import modal
 
 from miles_ext.platform.images import fork_image
+from miles_ext.platform.target import Target, helper_app_name
 
-app = modal.App("miles-platform")
-_fork = fork_image(os.environ.get("MILES_FORK_COMMIT") or None) if modal.is_local() else modal.Image.debian_slim()
+app = modal.App("miles-platform")  # each run() names the app after its target (helper_app_name)
+_fork = (fork_image(os.environ.get("MILES_FORK_COMMIT") or None, os.environ.get("MILES_IMAGE") or None)
+         if modal.is_local() else modal.Image.debian_slim())
+
+
+def run(target: Target):
+    """``with functions.run(target):`` the helper app, in the target's environment, under its name."""
+    return app.run(name=helper_app_name(target), environment_name=target.modal_environment)
 
 CHECK_TIMEOUT = 1800
 CONVERT_TIMEOUT = 2 * 3600

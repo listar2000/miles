@@ -154,6 +154,14 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   `rl-<env>-progress`; the run id still keys files, W&B and progress keys. `rl-`
   names require a name id. The `mdev-`/`mstg-`/`mrl-` names stay accepted until
   dev is cleaned up.
+- **miles-mobius names** (2026-10-15): images carry `MILES_MOBIUS_VERSION` and
+  `MILES_MOBIUS_COMMIT` (and the old `MILES_FORK_*` pair; readers take either,
+  `images.image_version`/`image_commit`) and `miles.mobius.*` labels, in
+  `starlimobius/miles-mobius`. `launch(trainer=...)` tags W&B `miles-mobius:<trainer>`
+  plus `upstream:<tag>` (was `fork:<release>`), and the launch and exit records gain
+  `trainer` and `version` (the old `stack`/`release` keys repeat `version`).
+  `tracking.wandb_name` sets the W&B display name. With a name id the helper app is
+  `rl-<env>-helpers` and the completion queue `rl-<env>-completion`.
 
 Alternatives: separate packages per requirement (one dependency web, more
 churn for the platform); retention by Miles flags (Miles has none for full

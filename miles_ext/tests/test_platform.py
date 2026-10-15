@@ -103,6 +103,23 @@ def test_option_a_guard(change):
         Target.of({**OPTION_A, **change})
 
 
+def test_option_a_helper_and_queue_names():
+    from miles_ext.platform.target import completion_queue_name, helper_app_name
+    t = Target.of(OPTION_A)
+    assert helper_app_name(t) == "rl-dev-helpers" and completion_queue_name(t) == "rl-dev-completion"
+    assert helper_app_name(Target.of(DEV)) == "miles-platform"  # dev keeps its names until cleanup
+    assert completion_queue_name(Target.of(DEV)) == "miles-fork-completion"
+
+
+def test_wandb_project_and_name():
+    recipe = R.from_dict({**_recipe(), "tracking": {**_recipe()["tracking"],
+                          "wandb_project": "miles-mobius-dev-test-project", "wandb_name": "0bebf81d · swe-gym overfit"}})
+    R.validate(recipe, local_inputs=False)
+    assert R.wandb_project(recipe, RUN) == "miles-mobius-dev-test-project"
+    bad = {**recipe, "tracking": {**recipe["tracking"], "wandb_name": 7}}
+    assert any(e["path"] == "tracking.wandb_name" for e in R.field_errors(bad))
+
+
 def test_staging_legacy_prefix_accepted():
     t = Target.of({**DEV, "modal_environment": "miles-staging", "app_name": "mstg-run1",
                    "sandbox_app_prefix": "mstg-", "results_volume": "mstg-results"})

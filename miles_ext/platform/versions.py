@@ -7,7 +7,7 @@ a resume never moves to a newer build.
 
 - ``latest``: the image tagged ``LATEST_TAG`` in ``IMAGE_REPO``, i.e. the last
   build of ``main`` (it can trail ``main`` after a doc-only landing). Its commit
-  is read from the image's own config (``MILES_FORK_COMMIT``), not from git.
+  is read from the image's own config (``MILES_MOBIUS_COMMIT``), not from git.
 - ``stable-YYYY-MM-DD``: an entry of the stable list (``STABLE_LIST``), each a
   commit and image digest that passed the staging smoke test and trained one
   recipe to the end. The list is read from ``main`` on GitHub, not from this
@@ -41,10 +41,10 @@ def resolve(trainer: str, *, registry=None, stable=None) -> dict:
         reg = registry or Registry(IMAGE_REPO)
         digest, config = reg.manifest(LATEST_TAG)
         env = dict(e.split("=", 1) for e in config.get("config", {}).get("Env", []) if "=" in e)
-        commit = env.get("MILES_FORK_COMMIT")
+        commit = env.get("MILES_MOBIUS_COMMIT")
         if not commit:
-            raise RuntimeError(f"{IMAGE_REPO}:{LATEST_TAG} ({digest}) has no MILES_FORK_COMMIT")
-        return {"trainer": LATEST, "name": env.get("MILES_FORK_RELEASE") or f"main-{commit[:12]}",
+            raise RuntimeError(f"{IMAGE_REPO}:{LATEST_TAG} ({digest}) has no MILES_MOBIUS_COMMIT")
+        return {"trainer": LATEST, "name": env.get("MILES_MOBIUS_VERSION") or f"main@{commit[:10]}",
                 "commit": commit, "image": f"{IMAGE_REPO}@{digest}"}
     if not re.fullmatch(STABLE_RE, trainer or ""):
         raise ValueError(f"trainer {trainer!r} must be {LATEST!r} or a stable version (stable-YYYY-MM-DD)")

@@ -41,7 +41,7 @@ def segment_timeout(segment_seconds: float | None, shape_timeout_hours: float) -
 
 def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_seconds: float | None = None,
            lease_seconds: float | None = None, inputs: str = "volume", from_commit: str | None = None,
-           final_retention: bool = False, image: str | None = None) -> dict:
+           final_retention: bool = False, image: str | None = None, trainer: str | None = None) -> dict:
     """Start one segment; returns ``{launched, complete, app_id, call_id, names, timeout, segment_seconds}``.
 
     - ``recipe``: the resolved recipe (``validate`` passed); ``target``: where it runs.
@@ -57,6 +57,8 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
       pulling the release image (``stack.FORK_IMAGE``).
     - ``image``: the trainer image, ``repo@sha256:...`` (``versions.resolve`` at run
       creation; pass the same value to every segment of the run). None: ``stack.FORK_IMAGE``.
+    - ``trainer``: what the run asked for (``latest`` or ``stable-YYYY-MM-DD``), recorded in
+      the W&B tag ``miles-mobius:<trainer>``, the launch record and the exit record.
     - ``final_retention``: let the trainer apply final retention itself (standalone use;
       the platform runs its own, with its pinned steps).
     """
@@ -86,7 +88,7 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
     try:
         if lease_seconds:
             P.renew_lease(run_id, target, lease_seconds)
-        ids = _spawn(recipe, run_id, target, inputs=inputs, from_commit=from_commit, image=image,
+        ids = _spawn(recipe, run_id, target, inputs=inputs, from_commit=from_commit, image=image, trainer=trainer,
                      final_retention=final_retention, timeout=timeout, segment_seconds=segment_seconds)
     except BaseException:
         P.progress_dict(target).pop(P.keys(run_id)["active"], None)
@@ -115,9 +117,10 @@ def _claim(run_id: str, target: Target) -> bool:
 
 
 def _spawn(recipe: dict, run_id: str, target: Target, *, inputs: str, from_commit: str | None, image: str | None,
+           trainer: str | None = None,
            final_retention: bool, timeout: int, segment_seconds: float | None) -> dict:
     config = {"recipe": recipe, "run_id": run_id, "target": target.as_dict(), "inputs": inputs,
-              "from_commit": from_commit, "image": image, "final_retention": final_retention, "timeout": timeout,
+              "from_commit": from_commit, "image": image, "trainer": trainer, "final_retention": final_retention, "timeout": timeout,
               "opts": {"segment_seconds": segment_seconds} if segment_seconds else {}}
     # the child's configuration is MILES_EXT_LAUNCH alone: drop the test launcher's MILES_* switches
     # (a stray MILES_FORK_COMMIT in the caller's env would otherwise change the image)

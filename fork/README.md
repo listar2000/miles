@@ -197,11 +197,19 @@ new project.
   name `miles-smoke` themselves).
 - `miles-swe-rl` holds everything from before this rule. It is an archive:
   no new runs, and nothing in it is moved or deleted without the owner's OK.
-- The W&B group and run name are the launcher's run id (`<recipe>-<yyyymmdd-hhmmss>`
-  unless you pass `--run-id`); the run id is also what resumes a run.
+- The W&B group is the run id (`<recipe>-<yyyymmdd-hhmmss>` by hand unless you
+  pass `--run-id`; the platform's run UUID); the run id is also what resumes a
+  run. The display name is `tracking.wandb_name` when set (the platform sets
+  `<short id> · <run name>`), else Miles' default `<run id>_<random>-RANK_0`.
+- Platform runs log to `miles-mobius-<env>-<project slug>`, one project per
+  platform project and environment; the platform names it, the campaign rule
+  above is for hand-launched runs.
 - Tags are set for every run: `recipe:`, `model:`, `sandbox:`, `harness:`,
-  `fork:<release>` and `commit:<sha>`, plus any in `tracking.tags`. Filter by
-  these instead of encoding them in run names.
+  `miles-mobius:<trainer>` (`latest`, `stable-YYYY-MM-DD`, or the image's version
+  when launched by hand), `upstream:<tag>` and `commit:<sha10>`, plus any in
+  `tracking.tags` (the platform adds `env:` and `project:`). Runs before
+  2026-10-15 carry `fork:<release>` instead of `miles-mobius:` and `upstream:`.
+  Filter by these instead of encoding them in run names.
 
 ## Sync (moving to a newer upstream release)
 

@@ -120,7 +120,8 @@ DEFAULTS: dict[str, Any] = {
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated)
     "parallel": {"tp": 1, "pp": 1, "cp": 1},
     # W&B: one project per campaign, named by the recipe (fork/README.md, "W&B projects")
-    "tracking": {"wandb_project": None, "wandb_entity": "mobiuslab", "tags": []},
+    # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
+    "tracking": {"wandb_project": None, "wandb_entity": "mobiuslab", "wandb_name": None, "tags": []},
     "extra_args": [],
 }
 
@@ -221,6 +222,7 @@ FIELD_RULES: dict[str, dict] = {
     "parallel.cp": {"type": "int", "min": 1},
     "tracking.wandb_project": {"type": "str", "nullable": True},
     "tracking.wandb_entity": {"type": "str", "nullable": True},
+    "tracking.wandb_name": {"type": "str", "nullable": True},
 }
 _TYPES = {"int": (int,), "number": (int, float), "str": (str,), "bool": (bool,), "list": (list,)}
 
@@ -388,7 +390,7 @@ def wandb_project(recipe: dict, run_id: str) -> str:
 
 
 def wandb_tags(recipe: dict) -> list[str]:
-    """Tags every run carries; the launcher adds the fork release and commit."""
+    """Tags every run carries; the launcher adds ``miles-mobius:``, ``upstream:`` and ``commit:``."""
     return [f"recipe:{recipe['name']}", f"model:{recipe['model']['preset']}",
             f"sandbox:{recipe['sandbox']['provider']}", f"harness:{recipe['taskset']['harness']}",
             *recipe["tracking"]["tags"]]

@@ -43,7 +43,8 @@ import modal
 
 from miles_ext import stack
 from miles_ext.platform.checkpoints import apply_retention_local
-from miles_ext.platform.images import IMAGE_ENV, fork_image
+from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
+from miles_ext.platform.target import completion_queue_name
 from miles_ext.platform.layout import read_tracker
 from miles_ext.platform.target import Target
 from miles_ext.platform.teardown import sandbox_adapter
@@ -114,7 +115,7 @@ if TARGET.secret_name:
     secrets = [modal.Secret.from_name(TARGET.secret_name)]
 else:
     secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
-completion_queue = modal.Queue.from_name("miles-fork-completion", create_if_missing=True)
+completion_queue = modal.Queue.from_name(completion_queue_name(TARGET), create_if_missing=True)
 WORKER_COMMIT_SECS = 120
 
 def _image_ref() -> str | None:
@@ -126,6 +127,8 @@ if RECIPE is None:
     image = modal.Image.debian_slim()  # placeholder: inside the container the function's own image is used
 else:
     image = fork_image(FROM_COMMIT or None, IMAGE or None)
+    if (LAUNCH or {}).get("trainer"):
+        image = image.env({TRAINER_ENV: LAUNCH["trainer"]})
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
                                   _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True),
@@ -140,8 +143,12 @@ if RECIPE is not None and not INPUTS_ON_VOLUME:
 
 
 def _image_commit() -> str:
-    # set by fork/docker/build.py; /root/miles/.git still describes the upstream checkout under our layer
-    return os.environ.get("MILES_FORK_COMMIT", "unknown")
+    return image_commit()
+
+
+def _trainer() -> str:
+    """The W&B tag value: the run's trainer (latest, stable-...) or, launched by hand, the image's version."""
+    return os.environ.get(TRAINER_ENV) or image_version() or "unknown"
 
 
 def _wait_for_port(host: str, port: int, timeout: float):
@@ -184,7 +191,7 @@ def check(recipe: dict, run_id: str):
     from miles_ext.platform.validate import run_deep_check
 
     _check_shape(recipe)
-    print(f"image commit {_image_commit()}, stack {os.environ.get('MILES_FORK_RELEASE')}")
+    print(f"image commit {_image_commit()}, version {image_version()}")
     result = run_deep_check(recipe, run_id)
     print(json.dumps({k: result[k] for k in ("trial_config", "parsed")}, indent=1, default=str))
     if R.backend(recipe) == "megatron":
@@ -210,7 +217,9 @@ def check_cpu(recipe: dict, run_id: str):
 
 
 def _image_info() -> dict:
-    return {"release": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit()}
+    # "release" repeats "version" for callers of releases before 2026-10-15
+    return {"trainer": os.environ.get(TRAINER_ENV), "version": image_version(), "release": image_version(),
+            "image": _image_ref(), "commit": _image_commit()}
 
 
 @app.function(
@@ -297,8 +306,10 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
         # no RAY_API_SERVER_ADDRESS: the fork's head-node lookup reads the GCS (fix-003)
         "WANDB_RUN_GROUP": run_id,
         # wandb.init reads tags from here; Miles does not pass any
-        "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"fork:{os.environ.get('MILES_FORK_RELEASE')}",
+        "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"miles-mobius:{_trainer()}", f"upstream:{stack.UPSTREAM_TAG}",
                                                        f"commit:{_image_commit()[:10]}"]),
+        # like WANDB_RUN_GROUP, the env wins over the name Miles passes (<group>_<random>-RANK_0)
+        **({"WANDB_NAME": recipe["tracking"]["wandb_name"]} if recipe["tracking"].get("wandb_name") else {}),
     }
 
 
@@ -344,7 +355,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         run_dir.mkdir(parents=True, exist_ok=True)
         segment = len(list(run_dir.glob("recipe-*.json")))
         (run_dir / f"recipe-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
-            json.dumps({"stack": os.environ.get("MILES_FORK_RELEASE"), "image": _image_ref(), "commit": _image_commit(),
+            json.dumps({"trainer": os.environ.get(TRAINER_ENV), "version": image_version(),
+                        "stack": image_version(), "image": _image_ref(), "commit": _image_commit(),
                         "resume": resume, "segment": segment, "deadline": deadline, "recipe": recipe,
                         "argv": args}, indent=1)
         )
@@ -384,7 +396,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         ray.shutdown()
 
         entry = R.entrypoint(recipe)
-        print(f"fork {os.environ.get('MILES_FORK_RELEASE')} commit {_image_commit()} resume={resume} "
+        print(f"miles-mobius {image_version()} commit {_image_commit()} resume={resume} "
               f"segment={segment} deadline={deadline}\n{entry} " + " ".join(args), flush=True)
         record = supervisor.run(["python", str(stack.MILES_SRC / entry), *args], cwd=str(stack.MILES_SRC), env=env)
         print(f"exit record: {json.dumps({k: v for k, v in record.items() if k != 'tail'}, default=str)}", flush=True)
