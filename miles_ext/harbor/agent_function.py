@@ -32,6 +32,8 @@ module; with no import path set it delegates unchanged.
 Both mini-swe-agent harnesses use the same settings: mini.yaml templates,
 swebench.yaml shell env (cwd ``MSWEA_CWD`` or /testbed), ``HARBOR_AGENT_MAX_ITERATIONS``
 steps, ``MSWEA_EXEC_TIMEOUT`` seconds per command, sampling params from the rollout.
+Harbor installs the harness in each trial's sandbox; ``HARBOR_AGENT_SETUP_TIMEOUT_SEC``
+(the recipe's ``agent.setup_timeout``) caps that install instead of Harbor's 360 s.
 """
 
 import asyncio
@@ -151,6 +153,9 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path
+    # upstream's agent function leaves Harbor's agent-install cap at 360 s x HARBOR_TIMEOUT_MULTIPLIER
+    if setup_timeout := os.getenv("HARBOR_AGENT_SETUP_TIMEOUT_SEC"):
+        config.agent.override_setup_timeout_sec = float(setup_timeout)
     return config
 
 
