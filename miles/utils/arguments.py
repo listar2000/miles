@@ -965,6 +965,21 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "--dynamic-sampling-filter-path are always dropped."
                 ),
             )
+            # [fork fix-004] begin
+            parser.add_argument(
+                "--async-single-pass",
+                action="store_true",
+                default=False,
+                help=(
+                    "Fully async mode hands each prompt of --prompt-data out once instead of starting the "
+                    "next epoch when the data runs out, still keeping --async-max-concurrent-samples in "
+                    "flight. Once every prompt is out and finished, a rollout step that cannot fill "
+                    "--rollout-batch-size takes the groups that are left. For an eval run as one rollout "
+                    "(--num-rollout 1, --rollout-batch-size = number of prompts): every prompt gets exactly "
+                    "--n-samples-per-prompt samples and the step waits for all of them."
+                ),
+            )
+            # [fork fix-004] end
             parser.add_argument(
                 "--custom-async-data-buffer-path",
                 type=str,
@@ -3983,6 +3998,9 @@ def miles_validate_args(args):
             f"--n-samples-per-prompt ({args.n_samples_per_prompt}): the worker submits whole groups, "
             f"so one group already puts n_samples_per_prompt trajectories in flight"
         )
+
+    # [fork fix-004]
+    assert not args.async_single_pass or args.fully_async, "--async-single-pass is a --fully-async producer mode"
 
     _resolve_rollout_functions(args)
 

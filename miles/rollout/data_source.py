@@ -35,6 +35,11 @@ class DataSource(abc.ABC):
         """Pending-sample backlog, or None for sources without a buffer."""
         return None
 
+    # [fork fix-004]
+    def epoch_handed_out(self) -> bool:
+        """Whether every prompt of the current epoch has been handed out (``--async-single-pass``)."""
+        raise NotImplementedError(f"{type(self).__name__} cannot tell when an epoch is handed out")
+
 
 # TODO may further refactor data-loading part later
 class RolloutDataSource(DataSource):
@@ -79,6 +84,11 @@ class RolloutDataSource(DataSource):
                 self.dataset.shuffle(self.epoch_id)
         else:
             self.dataset = None
+
+    # [fork fix-004]
+    def epoch_handed_out(self) -> bool:
+        assert self.dataset is not None, "only the global dataset (--prompt-data) has epochs to hand out"
+        return self.sample_offset >= len(self.dataset)
 
     def get_samples(self, num_samples):
         # TODO further improve code
