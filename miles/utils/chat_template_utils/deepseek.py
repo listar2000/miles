@@ -25,6 +25,11 @@ from miles.utils.chat_template_utils.templates import encoding_dsv32
 _ASSISTANT_SP_TOKEN = "<｜Assistant｜>"
 
 
+# [fork fix-005]
+class UnrenderableMessagesError(ValueError):
+    """The official encoder refuses these messages, so they have no canonical rendering."""
+
+
 @functools.cache
 def _read_model_type(name_or_path: str) -> str:
     """Read ``model_type`` from a checkpoint's ``config.json`` (cached per path)."""
@@ -161,6 +166,21 @@ class DeepSeekV41Family(DeepSeekV4Family):
 
     def _inject_tools(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return _inject_tools_into_system(messages, tools, chat_encoding.dsv41_tool_payload)
+
+    # [fork fix-005] begin: encode_messages raises a bare ValueError on text holding the image
+    # placeholder (it marks where an image block goes), which the model can emit in its own
+    # reasoning; name that case so a caller can tell it from a rendering bug
+    def render_messages(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
+        for msg in messages:
+            for key in ("content", "reasoning_content"):
+                if isinstance(text := msg.get(key), str) and encoding_dsv41.IMAGE_PLACEHOLDER in text:
+                    raise UnrenderableMessagesError(
+                        f"a {msg.get('role')} message's {key} holds the image placeholder "
+                        f"{encoding_dsv41.IMAGE_PLACEHOLDER!r}, which the DeepSeek V4.1 encoder refuses in text"
+                    )
+        return super().render_messages(messages, **kwargs)
+
+    # [fork fix-005] end
 
     def _generation_prompt_suffix(self, tail_role: str | None, thinking_token: str) -> str | None:
         if tail_role in {"user", "developer", "tool", "system"}:
