@@ -70,9 +70,16 @@ def _shell_config() -> dict[str, Any]:
     }
 
 
+def _model_call_kwargs(sampling_params: dict[str, Any]) -> dict[str, Any]:
+    """litellm kwargs for one model call. Without ``timeout`` the OpenAI client's default
+    (600 s) cuts a long-thinking turn, and mini-swe-agent retries it from scratch; the
+    trial cap is the longest one call can usefully take."""
+    return {**sampling_params, "timeout": hf._trial_timeout_s()}
+
+
 def _sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
     """AgentConfig.kwargs for Harbor's MiniSweAgent: a mini-swe-agent config override."""
-    model_kwargs = {**sampling_params, "drop_params": True, "parallel_tool_calls": False}
+    model_kwargs = {**_model_call_kwargs(sampling_params), "drop_params": True, "parallel_tool_calls": False}
     return {
         "config": {
             "agent": {"step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")), "cost_limit": 0},
@@ -87,7 +94,7 @@ def _host_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> d
     return {
         "api_base": session_url,
         "api_key": api_key,
-        "llm_call_kwargs": dict(sampling_params),
+        "llm_call_kwargs": _model_call_kwargs(sampling_params),
         "step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")),
         "exec_timeout": shell["timeout"],
     }
