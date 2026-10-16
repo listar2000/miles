@@ -8,6 +8,7 @@ from miles.rollout.session.config import SessionServerConfig
 from miles.rollout.session.errors import MessageValidationError, SessionNotFoundError, TokenizationError
 from miles.rollout.session.request_args import PreparedChatRequest, prepare_chat_request
 from miles.rollout.session.types import SessionRecord
+from miles.utils.chat_template_utils.deepseek import UnrenderableMessagesError  # [fork fix-005]
 from miles.utils.chat_template_utils.message_matcher_hub import (
     SessionMessageMatcher,
     assert_messages_append_only_with_allowed_role,
@@ -432,5 +433,10 @@ class SessionRegistry:
             )
             mismatches = self.comparator.compare_sequences(expected_ids, session.token_ids)
             return [m.to_dict() for m in mismatches]
+        # [fork fix-005] begin: no canonical rendering to compare against, so no diagnostic
+        except UnrenderableMessagesError as e:
+            logger.info(f"tito_session_mismatch skipped: {e}")
+            return None
+        # [fork fix-005] end
         except Exception as e:
             raise TokenizationError(f"failed to compute tito_session_mismatch: {e}") from e
