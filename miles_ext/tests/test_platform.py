@@ -401,7 +401,7 @@ def test_named_knobs_defaults_match_r5_argv():
     assert _value(argv, "--async-unused-samples-handler") == "drop"
     assert _value(argv, "--entropy-coef") == "0.0" and _value(argv, "--kl-coef") == "0"
     assert int(_value(argv, "--async-max-concurrent-samples")) > 0
-    for flag in ("--use-kl-loss", "--seed", "--over-sampling-batch-size", "--ref-load"):
+    for flag in ("--use-kl-loss", "--seed", "--over-sampling-batch-size", "--ref-load", "--async-single-pass"):
         assert flag not in argv
 
 
@@ -419,6 +419,14 @@ def test_named_knobs_emit_flags():
     assert _value(argv, "--async-max-concurrent-samples") == "48"
     assert _value(argv, "--async-unused-samples-handler") == "retry"
     assert _value(argv, "--pause-generation-mode") == "retract"
+
+
+def test_an_eval_recipe_hands_each_task_out_once():
+    r = _recipe(algorithm={"num_rollout": 1, "rollout_batch_size": 52}, **{"async": {"single_pass": True}})
+    assert V.instant_errors(r, "run1", DEV) == []
+    assert "--async-single-pass" in _argv(r)
+    errs = V.instant_errors(_recipe(algorithm={"mode": "sync"}, **{"async": {"single_pass": True}}), "run1", DEV)
+    assert "async.single_pass" in errs[0]["message"]
 
 
 @pytest.mark.parametrize("estimator", ["reinforce_plus_plus", "reinforce_plus_plus_baseline"])

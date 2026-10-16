@@ -49,6 +49,7 @@ RESERVED_FLAGS = {
     "--async-max-concurrent-samples": "async.max_concurrent_samples",
     "--async-unused-samples-handler": "async.unused_samples",
     "--pause-generation-mode": "async.pause_generation",
+    "--async-single-pass": "async.single_pass",
     "--partial-rollout": "unsupported: Miles rejects it in fully async mode",
 }
 

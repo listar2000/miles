@@ -112,9 +112,10 @@ DEFAULTS: dict[str, Any] = {
         "seed": None,  # None: Miles' default (1234)
     },
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default or, for
-    # max_concurrent_samples, rollout_batch_size * n_samples
+    # max_concurrent_samples, rollout_batch_size * n_samples. single_pass: hand each prompt out
+    # once and let a step wait for every group (evals: num_rollout 1, rollout_batch_size = tasks)
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
-              "pause_generation": "in_place"},
+              "pause_generation": "in_place", "single_pass": False},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
@@ -302,6 +303,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
         raise ValueError("async.max_concurrent_samples must be >= algorithm.n_samples (Miles asserts it)")
     if aio["over_sampling_batch_size"] is not None and aio["over_sampling_batch_size"] < algo["rollout_batch_size"]:
         raise ValueError("async.over_sampling_batch_size must be >= algorithm.rollout_batch_size (Miles asserts it)")
+    if aio["single_pass"] and algo["mode"] != "fully_async":
+        raise ValueError("async.single_pass needs algorithm.mode fully_async (Miles asserts it)")
     _validate_trainer(recipe)
     if local_inputs and (not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]):
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
@@ -535,6 +538,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
+        {"--async-single-pass" if aio["single_pass"] else ""}
         """
     else:
         placement = f"""
