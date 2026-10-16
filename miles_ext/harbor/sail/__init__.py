@@ -20,6 +20,9 @@ run's caps:
     Sail may sleep a Sailbox only after this much idle time (compute billing
     stops while asleep; the next operation wakes it). Sail's own default is
     30 s, short enough to sleep a box whose agent is waiting on the model.
+image refs
+    a ``docker_image`` pinned as ``repo:tag@sha256:...`` becomes digest-only
+    (the same image); Sail refuses the pair.
 
 Credentials: the Sail SDK reads ``SAIL_API_KEY`` from the worker's environment.
 """
@@ -29,6 +32,7 @@ from typing import override
 
 from sail import App, AutoSleep, ImageDefinition, Sailbox
 
+from miles_ext.harbor.image_refs import digest_only
 from miles_ext.harbor.sail import harbor_sail as upstream
 
 # the override calls the SDK through the vendored module's names (the same
@@ -47,6 +51,9 @@ class SailEnvironment(upstream.SailEnvironment):
         if idle_secs:
             self._caps["auto_sleep"] = AutoSleep.not_before(int(idle_secs))
         super().__init__(*args, **kwargs)
+        # Sail refuses a ref with both a tag and a digest (TB4 pins every image as repo:tag@sha256:...)
+        if (ref := self.task_env_config.docker_image) and ref != digest_only(ref):
+            self.task_env_config = self.task_env_config.model_copy(update={"docker_image": digest_only(ref)})
 
     @staticmethod
     @override
