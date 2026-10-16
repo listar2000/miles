@@ -177,7 +177,8 @@ A change lands on `main` by fast-forward from its work branch, then the work
 branch is deleted. Build an image when something that runs in it changed (a
 fix, an extension, the deps layer); a doc-only landing can skip the build,
 and `latest` then stays on the last build (which is why a run reads its
-commit from the image, not from git).
+commit from the image, not from git). A pull request for the work branch
+follows `.github/pull_request_template.md`.
 
 ```bash
 python fork/tools/ledger.py check                 # must pass, on the work branch

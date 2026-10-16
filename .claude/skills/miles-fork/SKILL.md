@@ -195,6 +195,7 @@ branch, fast-forward `main` to it, push `main`, delete the work branch, then
 and moves `:main`, which is `latest`) and the launcher's `--check-only` on the
 new image.
 
+- A PR description follows `.github/pull_request_template.md` (its comment says what to leave out).
 - A doc-only landing skips the build; `latest` stays on the last build.
 - `--main` builds only `origin/main`'s tip. If `main` moved, rebase your own
   work branch onto it and land again; never force-push `main`.
