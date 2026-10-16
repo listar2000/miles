@@ -70,10 +70,14 @@ tags; take `main` only when a change we need is there.
 
 ## Image build and release workflow
 
-Builds stay local (or on Modal). There is no CI build because the Docker Hub
-token stays out of GitHub secrets.
+Every push to `main` runs `build.py --main` in GitHub Actions
+(`.github/workflows/miles-mobius-image.yml`, also startable by hand); the deps
+layer still installs on Modal. The job summary names the pushed digest. It
+needs the repository secrets `MILES_MOBIUS_DOCKERHUB_TOKEN` (Docker Hub,
+read-write) and `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` (workspace `mobius`).
+A local `build.py --main` still works the same way.
 
-1. **Landing.** Fast-forward `main`, push, then
+1. **Landing.** Fast-forward `main` and push; the workflow then runs
    `build.py --main`. It pushes `main-<sha12>` (immutable) and moves the `main`
    tag (= latest) to it, only forward and only to `origin/main`'s tip. A
    doc-only landing can skip the build; `latest` then stays on the last build.

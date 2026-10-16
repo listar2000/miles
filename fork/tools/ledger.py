@@ -43,7 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OWN_PATHS = ("fork/", "miles_ext/", "FORK.md", ".claude/skills/miles-fork/", ".github/pull_request_template.md")
+OWN_PATHS = ("fork/", "miles_ext/", "FORK.md", ".claude/skills/miles-fork/", ".github/pull_request_template.md",
+             ".github/workflows/miles-mobius-image.yml")
 KINDS = ("Fix", "Hook", "Infra", "Ext")
 UPSTREAM_KINDS = ("Fix", "Hook")  # the only kinds allowed to edit upstream files
 MARKER = re.compile(r"\[fork ((?:fix|hook)-\d{3})\]")
