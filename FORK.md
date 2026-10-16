@@ -1,9 +1,9 @@
 # listar2000/miles: a fork of radixark/miles
 
-This branch is an upstream Miles release plus a short, ordered series of fork
+`main` is miles-mobius: an upstream Miles release, merged in, plus our
 commits: bug fixes and hooks in upstream files (marked `[fork fix-NNN]` /
-`[fork hook-NNN]`), then fork machinery under `fork/` and extensions under
-`miles_ext/`. Rules, layout, image build and sync: [fork/README.md](fork/README.md).
+`[fork hook-NNN]`), fork machinery under `fork/` and extensions under
+`miles_ext/`. Rules, versions, image build and sync: [fork/README.md](fork/README.md).
 Pages for the important changes: [fork/patches/](fork/patches/README.md).
 Agents changing the fork: [.claude/skills/miles-fork](.claude/skills/miles-fork/SKILL.md).
 

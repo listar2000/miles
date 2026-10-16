@@ -1,8 +1,9 @@
 # RFC 0001: one running `main`, `latest` or a stable version
 
-Status: accepted 2026-10-15; steps 1-3 of Order done (Actions off, `main` default, `stable-2026-10-15`). Becomes the rulebook
-(`fork/README.md`) and skill (`.claude/skills/miles-fork/SKILL.md`) once the
-steps marked **needs OK** are done. Nothing here deletes or moves a tag or an
+Status: accepted 2026-10-15; steps 1-3 of Order done (Actions off, `main` default, `stable-2026-10-15`).
+Folded into the rulebook (`fork/README.md`) and skill
+(`.claude/skills/miles-fork/SKILL.md`) on 2026-10-15; the ledger rewrite is
+done, the sync tool change is still open (rulebook, "Not yet in the tools"). Nothing here deletes or moves a tag or an
 image, and the platform keeps running r6 (`stack.FORK_IMAGE`) until it opts in.
 
 ## What is decided

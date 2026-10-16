@@ -1,33 +1,36 @@
 ---
 name: miles-fork
-description: "How to change this fork of Miles (listar2000/miles) without making it harder to sync with upstream. Use for any change on a `fork/<tag>` branch: fixing a bug in upstream Miles code, adding a hook or an extension under miles_ext/, porting a file from a newer Miles or Harbor, writing a patch page, rebasing onto a new upstream release, or cutting a release image. Not needed for work on upstream's own `main`."
+description: "How to change miles-mobius, our Miles (listar2000/miles, branch main), without making it harder to sync with upstream. Use for any change here: fixing a bug in upstream Miles code, adding a hook or an extension under miles_ext/, porting a file from a newer Miles or Harbor, writing a patch page, merging a new upstream release, landing on main and building the image, or marking a version stable. Not needed for work in upstream radixark/miles itself."
 ---
 
 # Working with the Miles fork
 
-This repository is upstream Miles (radixark/miles) at a release tag plus an
-ordered series of our commits on a branch `fork/<tag>`, e.g. `fork/v0.1.2`.
-It is permanent: it gets rebased onto every new upstream release, and other
-people and agents contribute to it. Every rule below exists to keep that
-rebase mechanical.
+This repository is miles-mobius: upstream Miles (radixark/miles) plus our
+commits on one running branch, `main`. Upstream releases come in by merge,
+and other people and agents contribute to it. Every rule below exists to keep
+those merges mechanical: our code sits in new files, and the few edits to
+upstream files are small and marked.
 
 The rulebook is `fork/README.md`. Read it before your first change; this skill
-is the procedure and does not repeat its reasoning. Upstream's own rules in
+is the procedure and does not repeat its reasoning. The decision behind it is
+`fork/rfcs/0001-main-and-stable-versions.md`. Upstream's own rules in
 `.claude/rules/` still apply to any code you write here.
 
 ## Before you start
 
 ```bash
-git fetch origin && git checkout fork/v0.1.2 && git pull --ff-only
-python fork/tools/ledger.py list     # the series: id, kind, subject
+git fetch origin --tags && git checkout main && git pull --ff-only
+python fork/tools/ledger.py list     # our commits since the upstream tag: id, kind, subject
 python fork/tools/ledger.py check    # must say "ledger check: ok" before and after your change
 cat fork/patches/README.md           # the changes that have pages
+git checkout -b <topic>              # a work branch off main
 ```
 
-Work on a branch `fork/<tag>-<topic>` off `fork/<tag>`, land it as a
-fast-forward, then delete the work branch. Never merge upstream into a fork
-branch, and never push upstream branches or tags here (the allowed refs are in
-`fork/README.md` "Branches and releases"). If `upstream` is not a remote yet:
+Work on a branch `<topic>` off `main`, land it as a fast-forward, then delete
+the work branch. Never force-push `main`, never move or delete a tag, and never
+push upstream branches or tags here (the allowed refs are in `fork/README.md`
+"Branches, versions and tags"). `fork/v0.1.2` and the `fork-v0.1.2-rN` tags are
+frozen history: don't branch from them. If `upstream` is not a remote yet:
 `git remote add upstream https://github.com/radixark/miles`.
 
 ## Pick the kind of change
@@ -41,10 +44,9 @@ Take the next free number from `ledger.py list` (numbers are never reused).
 | add an extension point upstream lacks | Hook | in place, smallest possible edit | `Fork-Hook: hook-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
-| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `release-fork-<tag>-rN`, or a short name) |
+| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
 
-Prefer the kinds lower in the table: an Ext cannot conflict on a sync, a Fix
-can. If an extension needs upstream to call it somewhere it doesn't, write a
+Prefer Ext and Infra: they cannot conflict on a sync, a Fix or Hook can. If an extension needs upstream to call it somewhere it doesn't, write a
 separate Hook commit; never edit upstream code from an Ext commit.
 
 ## Fix or Hook: editing an upstream file
@@ -64,10 +66,8 @@ separate Hook commit; never edit upstream code from an Ext commit.
    Remove-When: <the upstream condition that makes it unnecessary>
    ```
 
-4. Fixes and hooks come first in the series. On an existing branch, place the
-   new commit after the last fix/hook with
-   `git rebase -i` (or rebuild the series with `git cherry-pick`), then rerun
-   `ledger.py check`, which fails on wrong order.
+4. There is no ordering rule (merges have no replay order): the commit lands
+   on `main` like any other. Never reorder or rewrite `main`.
 5. File it upstream when you can: every fix upstream accepts is one the next
    sync drops.
 
@@ -82,7 +82,7 @@ separate Hook commit; never edit upstream code from an Ext commit.
   `miles_ext/harbor/upstream.py` does, not copied, with a check for the names
   you use.
 - `miles_ext.platform` is an API other services call. Any change to it is
-  caller-facing: say so in the next release note.
+  caller-facing: say so in the next stable version's release note.
 
 ## Porting an upstream file (vendoring)
 
@@ -134,12 +134,12 @@ choice someone may revisit. Optional for a small, obvious fix.
 ## Check before pushing
 
 ```bash
-python fork/tools/ledger.py check      # kinds, trailers, markers, order, touch points, vendored blobs
+python fork/tools/ledger.py check      # kinds, trailers, markers, touch points, vendored blobs
 git log --format='%h %s%n%(trailers:only)' <base>..HEAD | head -40   # eyeball the trailers
 ```
 
-Then run the change: the launcher's dry check builds an image from your
-pushed commit without a release.
+Then run the change: the launcher's dry check builds an image on Modal from
+your pushed work-branch commit, without touching the registry.
 
 ```bash
 export MILES_DATA=<task sets dir> MILES_DOTENV_DIR=<dir with .env> \
@@ -161,41 +161,75 @@ runs: they go to `miles-smoke`. Never log to `miles-swe-rl` (archive). Details:
 
 ## Syncing to a new upstream release
 
+Merge, never rebase. Details: `fork/README.md` "Sync".
+
 ```bash
 git fetch upstream --tags
-python fork/tools/sync.py v0.1.3 --dry-run   # which fixes may conflict; upstream diff of what miles_ext uses
-python fork/tools/sync.py v0.1.3             # new branch fork/v0.1.3, rebase, stack bump, ledger check
+python fork/tools/sync.py v0.1.3 --dry-run   # which fixes and hooks may conflict; upstream diff of what miles_ext uses
+git checkout -b sync-v0.1.3 main
+git merge --no-commit v0.1.3                # resolve conflicts, then:
+git commit -m "sync: merge upstream v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
+# in miles_ext/stack.py set UPSTREAM_TAG, UPSTREAM_BASE and BASE_IMAGE (by digest)
+git commit -am "stack: base image for v0.1.3" --trailer "Fork-Infra: sync-v0.1.3"
+python fork/tools/ledger.py check
 ```
 
-On a conflict (only fixes and hooks can conflict), read the commit message and
-its patch page. If upstream fixed it, `git rebase --skip` and mark the page's
-status as removed. Otherwise re-apply the same intent, keep the markers,
-`git rebase --continue`, then `sync.py v0.1.3 --finish`. Then refresh
-`HARBOR_COMMIT`, recheck vendored files against the new upstream (drop any
-that upstream now ships), and validate as in `fork/README.md` "Sync" before
-releasing.
+Between releases, merge an upstream `main` commit only when we need a change
+there, and only one a published upstream image was built from
+(`radixark/miles:dev`): trailer `sync-<sha9>`, `UPSTREAM_BASE` = that commit,
+`BASE_IMAGE` = that image, `UPSTREAM_TAG` unchanged.
 
-## Cutting a release
+Don't run `sync.py` without `--dry-run`: it still does the old rebase onto a
+`fork/<tag>` branch. On a conflict (only in files fixes and hooks touch), read
+the commit message and its patch page. If upstream fixed it, take upstream's
+side and mark the page's status as removed. Otherwise re-apply the same intent
+and keep the markers. Then refresh `HARBOR_COMMIT`, recheck vendored files
+against the new upstream (drop any that upstream now ships), land, build and
+validate as in `fork/README.md` "Sync".
 
-Follow `fork/README.md` "Releases". In short: ledger check, push, `python
-fork/docker/build.py --release fork-<tag>-rN`, record `FORK_IMAGE` and
-`FORK_RELEASE` in `miles_ext/stack.py` in a `Fork-Infra: release-fork-<tag>-rN`
-commit, annotated tag `fork-<tag>-rN` on that commit, push both, dry check the
-published image.
+## Landing
 
-- The tag message is the release note. Always state whether anything
-  caller-facing changed: the `miles_ext.platform` API, the recipe/run-spec
-  format, the image ref, Modal resource names, teardown.
+Follow `fork/README.md` "Landing". In short: `ledger.py check` on the work
+branch, fast-forward `main` to it, push `main`, delete the work branch, then
+`python fork/docker/build.py --main` (pushes `starlimobius/miles-mobius:<sha10>`
+and moves `:main`, which is `latest`) and the launcher's `--check-only` on the
+new image.
+
+- A PR description follows `.github/pull_request_template.md` (its comment says what to leave out).
+- A doc-only landing skips the build; `latest` stays on the last build.
+- `--main` builds only `origin/main`'s tip. If `main` moved, rebase your own
+  work branch onto it and land again; never force-push `main`.
+- Nothing is committed after the build (no `stack: publish` commit), and
+  `stack.FORK_RELEASE` / `stack.FORK_IMAGE` stay on r6: the platform still
+  reads them until it resolves versions.
 - If you changed the Docker Hub token, delete `<workdir>/docker` before a
   `build.py --workdir` retry; crane keeps the old login there.
-- Release tags start with `fork-`, so they never trigger upstream's
-  `v[0-9]+.*` workflows.
+
+## Marking a version stable
+
+Only after the platform's owner reports that a `latest` build passed staging
+(smoke test on `rl-staging`, then one recipe trained to the end). Follow
+`fork/README.md` "Stable versions":
+
+1. `python fork/docker/build.py --mark-stable stable-YYYY-MM-DD --image docker.io/starlimobius/miles-mobius@sha256:<digest>`
+   (refuses to move an existing tag; a second one that day is `.2`).
+2. An annotated git tag `stable-YYYY-MM-DD` on the image's
+   `MILES_MOBIUS_COMMIT`, whose message is the release note; push the tag.
+3. An entry `{name, commit, image, date, note}` in `miles_ext/stable.json`, in
+   a commit with `Fork-Infra: stable-YYYY-MM-DD`, landed on `main`.
+4. A GitHub Release for the tag with the same note.
+
+- The release note always states whether anything caller-facing changed: the
+  `miles_ext.platform` API, the recipe/run-spec format, the image ref, Modal
+  resource names, teardown. Write "no caller-facing changes" when there are
+  none.
+- `stable-*` tags never match upstream's `v[0-9]+.*` workflows.
 
 ## Don'ts
 
 - Don't edit upstream files from Infra or Ext commits, even "just one line".
 - Don't edit a vendored file; subclass it.
-- Don't merge upstream; rebase onto a tag.
+- Don't rebase `main` onto upstream; merge the tag. Don't force-push `main` or move a tag.
 - Don't add `miles_ext` to upstream's `setup.py`; the image puts
   `/root/miles` on `PYTHONPATH`.
 - Don't commit credentials; the launcher reads `.env` from
