@@ -1196,6 +1196,18 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "for interop. The engine reads the choice from each version's index metadata."
                 ),
             )
+            # [fork hook-001]
+            parser.add_argument(
+                "--custom-weight-quantizer-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a function that turns each converted HF tensor list into the rollout "
+                    "checkpoint's format during a weight sync, replacing the quantizer chosen from "
+                    "quantization_config. Signature: ``def quantize(args, megatron_name, "
+                    "converted_named_params, quantization_config) -> list[tuple[str, torch.Tensor]]``."
+                ),
+            )
             parser.add_argument(
                 "--custom-update-weight-post-write-path",
                 type=str,

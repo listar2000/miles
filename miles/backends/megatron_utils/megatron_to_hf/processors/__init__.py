@@ -1,3 +1,5 @@
+from miles.utils.function_registry import load_function  # [fork hook-001]
+
 from .padding_remover import remove_padding
 from .quantizer_compressed_tensors import quantize_params_compressed_tensors
 from .quantizer_fp8 import quantize_params_fp8
@@ -15,6 +17,11 @@ __all__ = [
 
 
 def quantize_params(args, megatron_name, converted_named_params, quantization_config, packed_weight_basenames=None):
+    # [fork hook-001] a rollout checkpoint layout no built-in quantizer covers (DeepSeek V4.1's FP8 dense
+    # + FP4 experts) brings its own quantizer; it then owns every converted tensor.
+    if getattr(args, "custom_weight_quantizer_path", None):
+        quantizer = load_function(args.custom_weight_quantizer_path)
+        return quantizer(args, megatron_name, converted_named_params, quantization_config)
     if quantization_config is None:
         return converted_named_params
     elif quantization_config["quant_method"] == "fp8":
