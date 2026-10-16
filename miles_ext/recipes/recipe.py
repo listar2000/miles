@@ -65,6 +65,9 @@ DEFAULTS: dict[str, Any] = {
         "timeout": 1800,
         "trial_timeout": 3600,
         "verifier_timeout": 900,
+        # Harbor installs the harness in each trial's sandbox; its own cap (360 s) is too short
+        # for a cold mini-swe-agent install on a busy provider
+        "setup_timeout": 1800,
         "cwd": None,  # None: mini-swe-agent's swebench.yaml (/testbed)
     },
     "sandbox": {
@@ -187,6 +190,7 @@ FIELD_RULES: dict[str, dict] = {
     "agent.timeout": {"type": "int", "min": 1},
     "agent.trial_timeout": {"type": "int", "min": 1},
     "agent.verifier_timeout": {"type": "int", "min": 1},
+    "agent.setup_timeout": {"type": "int", "min": 1},
     "agent.cwd": {"type": "str", "nullable": True},
     "sandbox.provider": {"type": "str", "enum": SANDBOX_PROVIDERS},
     "sandbox.lifetime_secs": {"type": "int", "min": 60},
@@ -463,6 +467,7 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         "AGENT_TRIAL_TIMEOUT": str(agent["trial_timeout"]),
         "HARBOR_AGENT_MAX_ITERATIONS": str(agent["max_steps"]),
         "HARBOR_VERIFIER_TIMEOUT_SEC": str(agent["verifier_timeout"]),
+        "HARBOR_AGENT_SETUP_TIMEOUT_SEC": str(agent["setup_timeout"]),
         "HARBOR_TIMEOUT_MULTIPLIER": "1.0",
         "MSWEA_EXEC_TIMEOUT": str(agent["exec_timeout"]),
         "MSWEA_SILENT_STARTUP": "1",

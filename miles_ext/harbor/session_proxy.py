@@ -22,8 +22,8 @@ _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-aliv
 
 def make_app(upstream_host: str, ports: range, token: str) -> web.Application:
     async def on_startup(app):
-        # one generated turn can take minutes; the agent's own timeout governs
-        app["client"] = ClientSession(timeout=ClientTimeout(total=1800), auto_decompress=False)
+        # one generated turn can take an hour; the agent's own call timeout governs
+        app["client"] = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
 
     async def on_cleanup(app):
         await app["client"].close()
