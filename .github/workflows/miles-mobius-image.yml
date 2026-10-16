@@ -1,0 +1,39 @@
+# Builds main's tip into docker.io/starlimobius/miles-mobius (an immutable per-commit tag, then moves :main).
+# fork/docker/build.py does the work; the deps layer is installed in a Modal container of the base image.
+name: miles-mobius image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miles-mobius-image
+  cancel-in-progress: true  # build.py only builds origin/main's tip, so an older push has nothing left to build
+
+jobs:
+  build:
+    if: github.repository == 'listar2000/miles'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # build.py diffs against stack.UPSTREAM_BASE and checks origin/main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install modal==1.6.2
+      - name: Build and push
+        env:
+          DOCKERHUB_USERNAME: starlimobius
+          DOCKERHUB_TOKEN: ${{ secrets.MILES_MOBIUS_DOCKERHUB_TOKEN }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          python fork/docker/build.py --main --commit "$GITHUB_SHA" | tee build.log
+          tail -n 1 build.log | jq -r '"Pushed `\(.image)` and moved `:\(.moved)` to it."' >> "$GITHUB_STEP_SUMMARY"
