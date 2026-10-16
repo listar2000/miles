@@ -105,6 +105,7 @@ def make_args(**overrides) -> Namespace:
         async_max_concurrent_samples=None,
         async_data_buffer_capacity_factor=1000.0,
         async_unused_samples_handler="drop",
+        async_single_pass=False,  # [fork fix-004]
         custom_async_data_buffer_path=None,
         enable_sample_ownership_checker=False,
         custom_async_data_buffer_path_per_model=None,

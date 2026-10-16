@@ -115,6 +115,11 @@ class DataBuffer(ABC):
     def get_metrics(self, trainer_model_id: str | None = None) -> dict[str, float]:
         """Report the metrics of one policy since its previous call (its window counters reset here)."""
 
+    # [fork fix-004]
+    def num_ready(self, *, current_version: int | None = None, trainer_model_id: str | None = None) -> int:
+        """How many groups a get() could take right now, after the get-time filters (--async-single-pass)."""
+        raise NotImplementedError(f"{type(self).__name__} must implement num_ready() for --async-single-pass")
+
     def state_dict(self) -> Any:
         raise NotImplementedError(f"{type(self).__name__} must implement state_dict() for checkpointing")
 
@@ -241,6 +246,18 @@ class DefaultDataBuffer(DataBuffer):
                 self._record_selected_version_stats(version_stats, current_version)
             return entries
 
+    # [fork fix-004]
+    def num_ready(self, *, current_version: int | None = None, **_) -> int:
+        # the groups get() would not drop as stale; it drops them itself, under the lock
+        limit = self._args.max_weight_staleness
+        return sum(
+            1
+            for entry in self._buffer
+            if limit is None
+            or (staleness := group_staleness(entry.group, current_version)) is None
+            or staleness <= limit
+        )
+
     def _drop_stale(self, current_version: int | None) -> None:
         limit = self._args.max_weight_staleness
         kept: list[DataBufferInput] = []
@@ -359,6 +376,10 @@ class DefaultMultiDataBuffer(DataBuffer):
 
     def get_metrics(self, trainer_model_id: str | None = None) -> dict[str, float]:
         return self._inner_of(trainer_model_id).get_metrics(trainer_model_id=trainer_model_id)
+
+    # [fork fix-004]
+    def num_ready(self, *, trainer_model_id: str | None = None, **context) -> int:
+        return self._inner_of(trainer_model_id).num_ready(trainer_model_id=trainer_model_id, **context)
 
     def state_dict(self) -> Any:
         logger.warning(MULTI_POLICY_CHECKPOINT_UNSUPPORTED)

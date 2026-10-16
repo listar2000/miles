@@ -100,6 +100,13 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         )
         self._retry_buffer: deque[list[Sample]] = deque()
         self._running_tasks: list[_RunningTask] = []
+        # [fork fix-004] begin
+        self._single_pass = input.args.async_single_pass
+        if self._single_pass:
+            self.data_source.epoch_handed_out()  # fails at startup for a source without epochs
+        self._pass_finished = asyncio.Event()  # every prompt handed out, nothing in flight or to retry
+        self._group_recycled = asyncio.Event()
+        # [fork fix-004] end
 
     async def __call__(self, input: RolloutFnInput) -> RolloutFnOutput:
         if input.evaluation:
@@ -175,14 +182,39 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         active: set[asyncio.Task] = set()
         while True:
             await self._producer_resumed.wait()
-            while self._scheduler.has_capacity(pending_groups=len(active), group_budget=self._max_in_flight_groups()):
-                active.add(self._submit_one_group())
-            done, active = await self._scheduler.wait_for_progress(active)
+            # [fork fix-004] begin: once the pass is out, wait on the groups only (the scheduler's
+            # sample wakeup is armed only by a failed capacity check) and then idle until a recycle
+            if self._pass_handed_out():
+                if not active:
+                    await self._wait_for_recycled_group()
+                    continue
+                done, active = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+            else:
+                while not self._pass_handed_out() and self._scheduler.has_capacity(
+                    pending_groups=len(active), group_budget=self._max_in_flight_groups()
+                ):
+                    active.add(self._submit_one_group())
+                done, active = await self._scheduler.wait_for_progress(active)
+            # [fork fix-004] end
             for task in done:
                 prompt_group = next(x.prompt_group for x in self._running_tasks if x.task is task)
                 entry = self._collect_group_result(task, prompt_group)
                 await self._output.put(entry)
                 self._running_tasks = [x for x in self._running_tasks if x.task is not task]
+
+    # [fork fix-004] begin
+    def _pass_handed_out(self) -> bool:
+        """--async-single-pass: every prompt of the data source's current epoch is out and none waits for a retry."""
+        return self._single_pass and not self._retry_buffer and self.data_source.epoch_handed_out()
+
+    async def _wait_for_recycled_group(self) -> None:
+        logger.info("--async-single-pass: every prompt has been handed out once and has finished")
+        self._group_recycled.clear()
+        self._pass_finished.set()
+        await self._group_recycled.wait()
+        self._pass_finished.clear()
+
+    # [fork fix-004] end
 
     def _collect_group_result(self, task: asyncio.Task, prompt_group: list[Sample]) -> DataBufferInput:
         if not task.cancelled():
@@ -211,7 +243,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
 
         assert not self._worker.done(), "the fully-async rollout worker has ended"
         self._worker_error_cancel_targets.add(asyncio.current_task())
-        entries = await self._output.get(
+        get = self._get_from_pass if self._single_pass else self._output.get  # [fork fix-004]
+        entries = await get(
             current_version=input.weight_version,
             num_groups=args.rollout_batch_size,
             trainer_model_id=input.trainer_model_id,
@@ -255,10 +288,37 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
 
         return RolloutFnTrainOutput(samples=data, metrics=self._output.get_metrics(input.trainer_model_id))
 
+    # [fork fix-004] begin
+    async def _get_from_pass(self, *, num_groups: int, **context) -> list[DataBufferInput]:
+        """--async-single-pass: ``num_groups`` groups, or once the pass has finished, the groups it left."""
+        while True:
+            get = asyncio.create_task(self._output.get(num_groups=num_groups, **context))
+            finished = asyncio.create_task(self._pass_finished.wait())
+            try:
+                await asyncio.wait({get, finished}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                finished.cancel()
+                get.cancel()  # no-op once it returned; get() takes its groups without awaiting in between
+                await asyncio.wait({get, finished})
+            if not get.cancelled():
+                return get.result()
+            if not self._pass_finished.is_set():
+                continue  # a recycled group reopened the pass
+            if not (ready := self._output.num_ready(**context)):
+                raise RuntimeError(
+                    "--async-single-pass: every prompt was handed out once and has finished, and no group is "
+                    "left for this rollout step; --num-rollout x --rollout-batch-size exceeds one pass over the data"
+                )
+            logger.info(f"--async-single-pass: the pass has finished; this step takes its last {ready} groups")
+            return await self._output.get(num_groups=ready, **context)
+
+    # [fork fix-004] end
+
     def _recycle(self, prompt_group: list[Sample], reason: UnusedReason) -> None:
         for sample in prompt_group:
             sample.reset_for_retry()
         self._retry_buffer.append(prompt_group)
+        self._group_recycled.set()  # [fork fix-004]
 
     def _drop_unused(self, prompt_group: list[Sample], reason: UnusedReason) -> None:
         SampleOwnershipRecorder.log_dropped_samples(args=self.args, samples=prompt_group, reason=reason.value)
