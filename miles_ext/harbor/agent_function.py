@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import re
+from importlib.metadata import version
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -83,9 +84,11 @@ def _model_call_kwargs(sampling_params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
-    """AgentConfig.kwargs for Harbor's MiniSweAgent: a mini-swe-agent config override."""
+    """AgentConfig.kwargs for Harbor's MiniSweAgent: a mini-swe-agent config override, and the
+    version the sandbox installs pinned to the one in this image (unpinned, Harbor installs the latest)."""
     model_kwargs = {**_model_call_kwargs(sampling_params), "drop_params": True, "parallel_tool_calls": False}
     return {
+        "version": version("mini-swe-agent"),
         "config": {
             "agent": {"step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")), "cost_limit": 0},
             "environment": _shell_config(),
