@@ -5,9 +5,10 @@
 # 16 trainer GPUs on the first two (TP4 PP2 CP2 EP8, one pipeline stage per node, Adam
 # streamed to local disk, bf16 gradients) and two TP8/EP8 engines serving the released
 # FP8 + FP4 checkpoint on the other two. Mini-swe-agent in Sail sandboxes.
-# Design and the reason for each value: the "V4.1 training recipe" design doc.
-# Needs on the weights volume: DeepSeek-V4.1-Flash and DeepSeek-V4.1-Flash-bf16;
-# SAIL_API_KEY and WANDB_API_KEY in the launcher's .env.
+# Design and the reason for each value: Linear MOB-187.
+# Needs: MILES_WEIGHTS_VOLUME=miles-dsv41-ckpt (DeepSeek-V4.1-Flash, the released checkpoint,
+# and DeepSeek-V4.1-bf16, its BF16 cast); MILES_DATA = the host's run4/ dir (Run 4's 52 TB4
+# tasks and prompt files); SAIL_API_KEY and WANDB_API_KEY in the launcher's .env.
 name: dsv41-flash-tb4-overfit16
 model:
   preset: deepseek-v4.1-flash
@@ -34,9 +35,9 @@ rollout:
   max_running_requests: 128
   expert_qat: true
 taskset:
-  # Run 4's TB4 tasks; the prompt file holds only the 16 picked tasks (list in the design doc)
-  tasks_dir: $MILES_DATA/tb4/tasks
-  prompts: $MILES_DATA/tb4/prompts-overfit16.jsonl
+  # Run 4's 52 TB4 tasks; the prompt file keeps the 16 tasks in dsv41-flash-tb4-overfit16.tasks
+  tasks_dir: $MILES_DATA/tasks
+  prompts: $MILES_DATA/prompts/tb4_overfit16.jsonl
   harness: mini-swe-agent-sandbox
 agent:
   max_steps: 256
