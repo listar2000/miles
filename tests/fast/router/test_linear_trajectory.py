@@ -1023,3 +1023,38 @@ def test_mismatch_does_not_resolve_defaults_for_an_empty_committed_record(regist
     registry.comparator = MagicMock(compare_sequences=MagicMock(return_value=[]))
     assert registry.compute_session_mismatch(session) == []
     assert registry.tito_tokenizer.apply_chat_template.call_args.kwargs["template_args"] == {}
+
+
+class TestRollbackDiagnostics:
+    """[fork fix-012] a rollback records its count, dropped tokens and where the request diverged."""
+
+    def test_rollback_records_divergence(self, registry: SessionRegistry):
+        sid = registry.create_session()
+        session = registry.get_session(sid)
+        assert session.session_id == sid and session.rollback_count == 0
+
+        session.update_pretokenized_state([SYS_MSG, USER_MSG], ASSISTANT_MSG_1, [1, 2, 3], [10, 11], max_trim_tokens=0)
+        t2_msgs = [SYS_MSG, USER_MSG, ASSISTANT_MSG_1, TOOL_MSG_1]
+        _prepare_token_ids(session, t2_msgs, tito_tokenizer=registry.tito_tokenizer)
+        session.update_pretokenized_state(
+            t2_msgs, ASSISTANT_MSG_2, [1, 2, 3, 10, 11, 20, 21], [30, 31], max_trim_tokens=0
+        )
+        assert session.rollback_count == 0  # a strict extension is not a rollback
+
+        new_tool = {"role": "tool", "content": '{"temperature": 99}', "tool_call_id": "call_1"}
+        _prepare_token_ids(
+            session, [SYS_MSG, USER_MSG, ASSISTANT_MSG_1, new_tool], tito_tokenizer=registry.tito_tokenizer
+        )
+
+        assert session.rollback_count == 1
+        assert session.rollback_discarded_tokens == 4  # [20, 21, 30, 31]
+        assert session.rollback_events == [
+            dict(
+                checkpoint=0,
+                discarded_tokens=4,
+                index=3,
+                stored_role="tool",
+                request_role="tool",
+                differing_keys=["content"],
+            )
+        ]

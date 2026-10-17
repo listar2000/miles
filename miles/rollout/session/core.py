@@ -263,6 +263,15 @@ class SessionCore:
         if mismatch is not None:
             metadata["tito_session_mismatch"] = mismatch
         metadata["accumulated_token_ids"] = session.token_ids
+        # [fork fix-012] begin: rollbacks drop generated turns from the trained sequence; report them per sample
+        # (always for sessions that count them, so 0 means "none" and a missing key means "not measured")
+        if hasattr(session, "rollback_count"):
+            metadata["session_rollbacks"] = dict(
+                count=session.rollback_count,
+                discarded_tokens=session.rollback_discarded_tokens,
+                events=session.rollback_events,
+            )
+        # [fork fix-012] end
         metadata["max_trim_tokens"] = self.registry.tito_tokenizer.max_trim_tokens
         metadata["turn_args"] = filter_turn_args(session.turn_args)
         return metadata

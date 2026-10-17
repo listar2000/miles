@@ -14,8 +14,13 @@ ASSISTANT = {"role": "assistant", "content": "answer"}
 TOOL = {"role": "tool", "content": "result", "tool_call_id": "call_1"}
 
 
-def _snapshot(session):
-    return deepcopy({key: value for key, value in vars(session).items() if key != "lock"})
+# [fork fix-012] cumulative rollback counters: a rollback does not restore them
+_ROLLBACK_COUNTERS = {"rollback_count", "rollback_discarded_tokens", "rollback_events"}
+
+
+def _snapshot(session, *, with_counters=True):
+    skip = {"lock"} if with_counters else {"lock", *_ROLLBACK_COUNTERS}
+    return deepcopy({key: value for key, value in vars(session).items() if key not in skip})
 
 
 def _commit(session, messages, prompt, completion):
@@ -75,7 +80,7 @@ def test_valid_retry_renders_selected_checkpoint_before_rollback():
     registry = _make_registry()
     session = registry.get_session(registry.create_session())
     _commit(session, [USER], [1], [2])
-    checkpoint = _snapshot(session)
+    checkpoint = _snapshot(session, with_counters=False)
     _commit(session, [USER, ASSISTANT, TOOL], [1, 2, 3], [4])
     before = _snapshot(session)
     retry = [USER, ASSISTANT, {**TOOL, "content": "retry"}]
@@ -93,4 +98,4 @@ def test_valid_retry_renders_selected_checkpoint_before_rollback():
     )
 
     assert prepared.body["input_ids"] == [1, 2, 5]
-    assert _snapshot(session) == checkpoint
+    assert _snapshot(session, with_counters=False) == checkpoint

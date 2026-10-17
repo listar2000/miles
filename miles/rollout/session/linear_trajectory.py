@@ -23,6 +23,28 @@ logger = logging.getLogger(__name__)
 #  raise this limit or make it configurable and remove the restriction.
 MAX_ASSISTANT_ROLLBACK_STEPS = 1
 
+# [fork fix-012] begin: say why a session rolled back, without logging message text
+MAX_RECORDED_ROLLBACKS = 16
+
+
+def describe_divergence(
+    stored: list[dict[str, Any]], request: list[dict[str, Any]], message_matcher: SessionMessageMatcher
+) -> dict[str, Any]:
+    """Where *request* first stops matching *stored*: index, roles, and the keys whose values differ."""
+    for i in range(min(len(stored), len(request))):
+        if not message_matcher(stored[i], request[i]):
+            keys = sorted(set(stored[i]) | set(request[i]))
+            return dict(
+                index=i,
+                stored_role=stored[i].get("role"),
+                request_role=request[i].get("role"),
+                differing_keys=[k for k in keys if stored[i].get(k) != request[i].get(k)],
+            )
+    return dict(index=min(len(stored), len(request)), stored_len=len(stored), request_len=len(request))
+
+
+# [fork fix-012] end
+
 
 def assert_pretokenized_prefix(
     prev: list[int],
@@ -93,6 +115,10 @@ class LinearTrajectory:
     evaluation: bool = False
     sampling_defaults: dict[str, Any] = field(default_factory=dict)
     sampling_support_replay: bool = False
+    session_id: str | None = None  # [fork fix-012]
+    rollback_count: int = 0  # [fork fix-012]
+    rollback_discarded_tokens: int = 0  # [fork fix-012] trajectory tokens (tool + generated) rollbacks dropped
+    rollback_events: list[dict[str, Any]] = field(default_factory=list)  # [fork fix-012]
 
     @property
     def turn_args(self) -> dict[str, Any]:
@@ -147,7 +173,7 @@ class LinearTrajectory:
             tito_tokenizer=tito_tokenizer,
             message_matcher=matcher,
         )
-        self._rollback_to_checkpoint(checkpoint_index)
+        self._rollback_to_checkpoint(checkpoint_index, request_messages, matcher)  # [fork fix-012]
         return prepared
 
     def _render_token_ids(
@@ -337,7 +363,12 @@ class LinearTrajectory:
 
         return checkpoint_index
 
-    def _rollback_to_checkpoint(self, checkpoint_index: int) -> None:
+    def _rollback_to_checkpoint(
+        self,
+        checkpoint_index: int,
+        request_messages: list[dict[str, Any]] | None = None,  # [fork fix-012]
+        message_matcher: SessionMessageMatcher | None = None,  # [fork fix-012]
+    ) -> None:
         """Discard history after the selected checkpoint once preparation succeeds."""
         discard_count = self.num_assistant - (checkpoint_index + 1)
         if discard_count == 0:
@@ -345,14 +376,33 @@ class LinearTrajectory:
         # No generated checkpoint in the matched prefix means the agent is retrying the
         # first turn, so roll back to the empty checkpoint and retain no messages.
         rollback_msg_end = self.generated_checkpoint_message_ends[checkpoint_index] if checkpoint_index >= 0 else 0
+        # [fork fix-012] begin: count what the rollback drops and why, per session
+        kept_tokens = len(self.trajectory_token_ids[checkpoint_index]) if checkpoint_index >= 0 else 0
+        discarded_tokens = len(self.token_ids) - kept_tokens
+        divergence = (
+            describe_divergence(self.messages, request_messages, message_matcher or strict_message_matches)
+            if request_messages is not None
+            else {}
+        )
+        self.rollback_count += 1
+        self.rollback_discarded_tokens += discarded_tokens
+        if len(self.rollback_events) < MAX_RECORDED_ROLLBACKS:
+            self.rollback_events.append(
+                dict(checkpoint=checkpoint_index, discarded_tokens=discarded_tokens, **divergence)
+            )
+        # [fork fix-012] end
         logger.info(
             "Rolling back session: stored %d messages / %d checkpoints -> "
-            "checkpoint %d (messages[:%d]), discarding %d generated checkpoint(s)",
+            "checkpoint %d (messages[:%d]), discarding %d generated checkpoint(s)"
+            " [session=%s discarded_tokens=%d divergence=%s]",  # [fork fix-012]
             len(self.messages),
             self.num_assistant,
             checkpoint_index,
             rollback_msg_end,
             discard_count,
+            self.session_id,  # [fork fix-012]
+            discarded_tokens,  # [fork fix-012]
+            divergence,  # [fork fix-012]
         )
 
         self.messages = self.messages[:rollback_msg_end]
@@ -403,6 +453,7 @@ class SessionRegistry:
             evaluation=evaluation,
             sampling_defaults=dict(sampling_defaults or {}),
             sampling_support_replay=sampling_support_replay,
+            session_id=session_id,  # [fork fix-012]
         )
         return session_id
 
