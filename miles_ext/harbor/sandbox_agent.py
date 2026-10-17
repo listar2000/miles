@@ -1,11 +1,9 @@
-"""Harbor's stock in-sandbox mini-swe-agent, minus the per-trial install.
+"""Harbor's stock in-sandbox mini-swe-agent.
 
-Harbor's ``MiniSweAgent.install`` runs ``apt-get`` and ``uv tool install
-mini-swe-agent`` inside every trial's sandbox, which took ~8 minutes per
-episode on a SWE-Gym image. The task images built by ``make_sandbox_tasks.py``
-already carry the package, so this agent only applies Harbor's two
-runtime patches (output cap, step timing) and falls back to the full install
-when the package is missing.
+Harbor installs mini-swe-agent in each trial's sandbox (``MiniSweAgent.install``:
+``apt-get`` and ``uv tool install mini-swe-agent``). When the package is already
+present, this agent skips that install and only applies Harbor's two runtime
+patches (output cap, step timing).
 
 The pinned Harbor runs agent setup under the task's own network policy, so on a
 no-network task the install cannot reach PyPI or astral.sh. ``setup`` opens
@@ -39,6 +37,7 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
         try:
             await super().setup(environment)
         finally:
+            # failure to restore must abort the trial, never start a solver online
             await environment.set_network_policy(baseline)
 
     async def install(self, environment: BaseEnvironment) -> None:
