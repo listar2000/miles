@@ -202,7 +202,8 @@ def assert_agentic_retry_trajectory_parity(v1: SessionParityRun, v2: SessionPari
     assert v1.samples[0].metadata["max_trim_tokens"] == v2.session_metadata["max_trim_tokens"]
 
     v2_linear_metadata = {key: value for key, value in v2.session_metadata.items() if key not in ("agent", "tree")}
-    _assert_bits_equal(v1.session_metadata, v2_linear_metadata, path="session_metadata")
+    v1_linear_metadata = {k: v for k, v in v1.session_metadata.items() if k != "session_rollbacks"}  # [fork fix-012]
+    _assert_bits_equal(v1_linear_metadata, v2_linear_metadata, path="session_metadata")
     assert_sample_bitwise_equal(
         v1.samples[0],
         v2.samples[0],
@@ -287,6 +288,7 @@ def _training_metadata_projection(metadata: dict[str, Any]) -> dict[str, Any]:
     projected = deepcopy(metadata)
     projected.pop("leaf", None)
     projected.pop("max_trim_tokens", None)
+    projected.pop("session_rollbacks", None)  # [fork fix-012] v1-only rollback diagnostic
     lifecycle = projected.get("lifecycle")
     if lifecycle is not None:
         segments = lifecycle if isinstance(lifecycle, list) else [lifecycle]

@@ -129,6 +129,17 @@ def _compute_metrics_from_samples(args, samples):
     if args.ci_test and args.ci_assert_prefill_lag_max is not None:
         _assert_prefill_lag_metrics(metrics=log_dict, bound=args.ci_assert_prefill_lag_max)
 
+    # [fork fix-012] begin: share of samples whose session rolled back, and the trajectory tokens it dropped
+    # (only over samples whose session server measures it; v2 sessions carry no key and log nothing)
+    rollbacks = [s.metadata["session_rollbacks"] for s in samples if "session_rollbacks" in (s.metadata or {})]
+    if rollbacks:
+        log_dict["session_rollbacks/sample_frac"] = np.mean([int(r["count"] > 0) for r in rollbacks]).item()
+        log_dict["session_rollbacks/mean_count"] = np.mean([r["count"] for r in rollbacks]).item()
+        log_dict["session_rollbacks/mean_discarded_tokens"] = np.mean(
+            [r["discarded_tokens"] for r in rollbacks]
+        ).item()
+    # [fork fix-012] end
+
     tito_vals = [s.metadata.get("tito_session_mismatch") for s in samples]
     tito_vals = [v for v in tito_vals if v is not None]
     if tito_vals:
