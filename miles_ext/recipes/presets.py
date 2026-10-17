@@ -71,11 +71,12 @@ PRESETS: dict[str, Preset] = {
         shapes=(("H200", 1, "fsdp"),),
     ),
     # scripts/run_deepseek_v4_1.py (train) and docs/models/deepseek/deepseek-v4-1-flash.md.
-    # The engines serve the released checkpoint (FP8 dense, FP4 experts; Run 4); the trainer
-    # loads the BF16 cast of it through mbridge.
+    # The engines serve the released checkpoint (FP8 dense, FP4 experts); the trainer loads the
+    # BF16 cast of it through mbridge. 1017 is a weights-only update of the first V4.1-Flash
+    # release (same config, index and tokenizer).
     "deepseek-v4.1-flash": Preset(
-        hf_repo="deepseek-ai/DeepSeek-V4.1-Flash",
-        train_dir_name="DeepSeek-V4.1-bf16",  # the BF16 cast's directory name under /models
+        hf_repo="deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        train_dir_name="DeepSeek-V4.1-Flash-1017-bf16",  # the BF16 cast's directory name under /models
         tito_model="deepseekv41",
         tool_call_parser="deepseekv41",
         reasoning_parser="deepseek-v41",

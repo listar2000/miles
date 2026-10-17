@@ -6,12 +6,13 @@
 # streamed to local disk, bf16 gradients) and two TP8/EP8 engines serving the released
 # FP8 + FP4 checkpoint on the other two. Mini-swe-agent in Sail sandboxes.
 # Design and the reason for each value: Linear MOB-187.
-# Needs: MILES_WEIGHTS_VOLUME=miles-dsv41-ckpt (DeepSeek-V4.1-Flash, the released checkpoint,
-# and DeepSeek-V4.1-bf16, its BF16 cast); MILES_DATA = the host's run4/ dir (Run 4's 52 TB4
+# Needs: MILES_WEIGHTS_VOLUME=miles-dsv41-ckpt (the released checkpoint from prepare_weights at
+# model.revision, and DeepSeek-V4.1-Flash-1017-bf16, its BF16 cast); MILES_DATA = the host's run4/ dir (Run 4's 52 TB4
 # tasks and prompt files); SAIL_API_KEY and WANDB_API_KEY in the launcher's .env.
 name: dsv41-flash-tb4-overfit16
 model:
   preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
 cluster:
   gpu: B300
   nodes: 4

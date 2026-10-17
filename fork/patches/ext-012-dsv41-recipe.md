@@ -42,6 +42,10 @@ stack end to end before a run on the full task set. The reason for each value: L
   use); SGLang's `--language-model-only` (the DSV4 model never reads it: the VL bias is gated on
   `vision_n_layers` alone, `models/deepseek_v4.py`).
 - No colocated V4.1 settings (engram host table, CPU peak device): these engines never sleep.
+- **The preset serves DeepSeek-V4.1-Flash-1017**, a weights-only update of the first release:
+  its `config.json`, `model.safetensors.index.json` and tokenizer files are byte-identical
+  and every shard has the same size. The overfit config pins the HF commit (`model.revision`),
+  so the engines read the `prepare_weights` snapshot; the BF16 cast is `DeepSeek-V4.1-Flash-1017-bf16`.
 - **Engine weight checksum audit off in `miles_args`, not in the recipe.** `--save` derives an
   event dir, which defaults `--log-inference-engine-weight-checksums` on; the post-sync checksum
   crashed the FP8 + FP4 engines (dsv41-tb4-overfit16-1). Every launch passes the `--no-` flag, so a
