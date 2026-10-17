@@ -1,5 +1,5 @@
 # DeepSeek V4.1-Flash, full-parameter RL "overfitting run": the same 16 TB4 tasks every
-# step, picked from Run 4 (dsv41-tb4-pass4-2) for trajectories that stayed at or under 256k.
+# step, picked from Run 4 (dsv41-tb4-pass4-2) for mixed results (see the .tasks file).
 # Not a hero run: it checks the whole V4.1 training stack end to end (weight sync, QAT, R3,
 # fully async, 256k memory) and that reward on the trained tasks climbs. Four B300:8 nodes:
 # 16 trainer GPUs on the first two (TP4 PP2 CP2 EP8, one pipeline stage per node, Adam
