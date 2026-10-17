@@ -29,6 +29,8 @@ baseline, which would also leave them open to the agent and a shared verifier.
 `miles_ext/tests/test_no_network_tasks.py`. Needs a provider with
 `dynamic_network_policy` and hostname allowlists (Sail has both, ext-003). The host harness
 (`mini-swe-agent-host`) needs neither and is unchanged.
+When "recipe harness = any Harbor agent" lands, move this into a wrapper over every
+in-sandbox agent instead of this one subclass.
 
 ## Remove when
 Harbor gives agent setup its own network phase. Upstream status: not filed.

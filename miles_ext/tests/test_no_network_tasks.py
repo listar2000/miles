@@ -61,8 +61,11 @@ def test_public_task_is_set_up_unchanged(monkeypatch):
 
 
 def _upstream_config(metadata, session_url, request_kwargs):
-    return SimpleNamespace(agent=SimpleNamespace(name=metadata["agent_name"], import_path=None,
-                                                 override_setup_timeout_sec=None, extra_allowed_hosts=[]))
+    return SimpleNamespace(
+        agent=SimpleNamespace(
+            name=metadata["agent_name"], import_path=None, override_setup_timeout_sec=None, extra_allowed_hosts=[]
+        )
+    )
 
 
 def test_agent_phase_allows_the_session_tunnel_host(monkeypatch):
