@@ -15,19 +15,47 @@ from miles.kernels.quant.fake_quant import fake_quant_fp4
 from miles.utils.replay_base import indexer_replay_manager
 from miles_plugins.models.deepseek_v4.ops.norm import RMSNorm
 
+CANDIDATE_NONE = 0xFFFF  # [fork fix-007] unused slot in a candidate block id list
+
 
 def select_candidate_blocks(
     logits: torch.Tensor, compress_lens: torch.Tensor, topk_blocks: int, block_size: int
 ) -> torch.Tensor:
+    # [fork fix-007] returns kept block ids [..., k] as uint16 bits in int16; CANDIDATE_NONE marks an unused slot
     width = logits.size(-1)
-    scores = F.pad(logits, (0, -width % block_size), value=-torch.inf)
-    scores = scores.unflatten(-1, (-1, block_size)).amax(dim=-1)
+    full = width - width % block_size
+    scores = logits[..., :full].unflatten(-1, (-1, block_size)).amax(dim=-1)
+    if full < width:  # the partial last block, as if padded with -inf
+        scores = torch.cat([scores, logits[..., full:].amax(dim=-1, keepdim=True)], dim=-1)
     num_blocks = scores.size(-1)
+    assert num_blocks < CANDIDATE_NONE, f"{num_blocks} candidate blocks do not fit uint16 ids"
     last = (compress_lens - 1) // block_size
     scores = scores.masked_fill(torch.arange(num_blocks, device=logits.device) == last, torch.inf)
     top = scores.topk(min(topk_blocks, num_blocks), dim=-1)
-    keep = torch.zeros_like(scores, dtype=torch.bool).scatter_(-1, top.indices, top.values > -torch.inf)
-    return keep.repeat_interleave(block_size, dim=-1)[..., :width]
+    ids = torch.where(top.values > -torch.inf, top.indices, CANDIDATE_NONE)
+    return ids.to(torch.int32).to(torch.int16)  # wraps 32768..65535 into int16 bits; read with candidate_ids
+
+
+def candidate_ids(candidates: torch.Tensor) -> torch.Tensor:
+    """[fork fix-007] uint16 block ids stored as int16 bits -> int64, CANDIDATE_NONE for unused slots."""
+    return candidates.to(torch.int64) & 0xFFFF
+
+
+def mask_to_candidates_(scores: torch.Tensor, candidates: torch.Tensor, block_size: int) -> None:
+    """[fork fix-007] sets scores [b, q, n_kv] (a view is fine) to -inf outside the candidate blocks [b, q, k]."""
+    n_kv = scores.size(-1)
+    num_blocks = -(-n_kv // block_size)
+    ids = candidate_ids(candidates)
+    ids = torch.where(ids == CANDIDATE_NONE, num_blocks, ids)  # unused slots go to a spare column
+    keep = torch.zeros(*ids.shape[:-1], num_blocks + 1, dtype=torch.bool, device=scores.device)
+    keep.scatter_(-1, ids, torch.ones_like(ids, dtype=torch.bool))
+    drop = ~keep[..., :num_blocks]
+    full = n_kv - n_kv % block_size
+    if full:
+        blocks = scores[..., :full].unflatten(-1, (-1, block_size))
+        blocks.masked_fill_(drop[..., : full // block_size, None], -torch.inf)
+    if full < n_kv:
+        scores[..., full:].masked_fill_(drop[..., -1:], -torch.inf)
 
 
 INDEXER_QUERY_CHUNK = int(os.environ.get("MILES_DSV41_INDEXER_QUERY_CHUNK", "8192"))
@@ -93,7 +121,7 @@ def indexer_select(
             cand_parts.append(cand)
         elif uses_candidates:
             assert candidates is not None
-            scores[..., :n_kv].masked_fill_(~candidates[:, s:e], -torch.inf)
+            mask_to_candidates_(scores[..., :n_kv], candidates[:, s:e], candidate_block_size)  # [fork fix-007]
         if deep_selecting:
             flat = scores.reshape(bsz * (e - s), scores.size(-1))
             row_end = lens.to(torch.int32).repeat(bsz)
