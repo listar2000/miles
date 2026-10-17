@@ -69,7 +69,7 @@ algorithm:
   tis_clip_low: 0.5
   max_weight_staleness: 4
   sglang_mem_fraction: 0.75
-  routing_replay: true
+  routing_replay: false  # R3 off: the FP4 engine runs MoE on flashinfer_mxfp4, which skips the topk capture R3 needs (all-zero routed_experts killed dsv41-tb4-overfit16-2)
   group_filter: nonzero_std
 async:
   max_concurrent_samples: 256
