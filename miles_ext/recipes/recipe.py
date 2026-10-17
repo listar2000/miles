@@ -83,6 +83,8 @@ DEFAULTS: dict[str, Any] = {
         # sandbox app = app_prefix + run_id; callers that scope cleanup by name
         # (the platform's mdev-/mrl- prefixes) set their own prefix
         "app_prefix": DEFAULT_APP_PREFIX,
+        # multiplies each task's image build limit (Harbor's default 600 s); None: 1
+        "build_timeout_multiplier": None,
         # set by a target with a short name id (rl-<env>-<id>-sbx); None: app_prefix + run_id
         "app_name": None,
     },
@@ -100,6 +102,12 @@ DEFAULTS: dict[str, Any] = {
         "eps_clip": 0.2,
         "eps_clip_high": 0.28,
         "tis_clip": 2.0,
+        "tis_clip_low": 0.0,
+        # MoE: replay the rollout's expert routing in training (R3)
+        "routing_replay": False,
+        # which finished groups train: "no_aborted", or "nonzero_std" (also drops groups whose
+        # samples all scored the same; aborted groups are dropped before either filter)
+        "group_filter": "no_aborted",
         "max_weight_staleness": 2,
         "sglang_mem_fraction": None,  # None: 0.85 fully async, 0.7 colocated
         # tokens packed per training micro-batch (a longer sample gets one of its own). FSDP holds
@@ -114,15 +122,28 @@ DEFAULTS: dict[str, Any] = {
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default or, for
     # max_concurrent_samples, rollout_batch_size * n_samples. single_pass: hand each prompt out
     # once and let a step wait for every group (evals: num_rollout 1, rollout_batch_size = tasks)
+    # rollout engines: GPUs per engine (one SGLang server), the format they serve (a key of
+    # the preset's precisions), context_length (None: the model's; set, a reply that would
+    # overflow it is shortened), max_running_requests (None: SGLang's). expert_qat: the trainer
+    # keeps its FP4 experts on the engine's grid (fp8_fp4 only, needs optimizer.offload disk)
+    "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
+                "expert_qat": False},
+    # Megatron only. offload "disk": stream Adam's state to node-local disk between steps
+    # (disk_dir on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
+    # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
+    "optimizer": {"offload": None, "disk_dir": "/tmp/miles-optimizer", "moment_dtype": None, "grad_dtype": "fp32"},
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
               "pause_generation": "in_place", "single_pass": False},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
-    "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False},
+    # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
+    "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
+                   "save_optimizer": True},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
-    # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated)
-    "parallel": {"tp": 1, "pp": 1, "cp": 1},
+    # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
+    # ep: expert parallel size for MoE models (None: Miles' default)
+    "parallel": {"tp": 1, "pp": 1, "cp": 1, "ep": None},
     # W&B: one project per campaign, named by the recipe (fork/README.md, "W&B projects")
     # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
     "tracking": {"wandb_project": None, "wandb_entity": "mobiuslab", "wandb_name": None, "tags": []},
@@ -169,6 +190,11 @@ GPU_TYPES = ("H100", "H200", "B200", "B300")
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
 ADVANTAGE_ESTIMATORS = ("grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline")
 UNUSED_SAMPLES = ("drop", "retry")
+GROUP_FILTERS = {
+    "no_aborted": "miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted",
+    "nonzero_std": "miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std",
+}
+FP8_FP4 = "fp8_fp4"  # the released DeepSeek V4.1 format: FP8 dense, MXFP4 experts (ext-007)
 PAUSE_GENERATION = ("in_place", "retract")
 
 # path -> rule; every other leaf takes its type from DEFAULTS. Keys: type ("int", "number", "str",
@@ -197,6 +223,7 @@ FIELD_RULES: dict[str, dict] = {
     "sandbox.lifetime_secs": {"type": "int", "min": 60},
     "sandbox.idle_secs": {"type": "int", "min": 1},
     "sandbox.resource_policy": {"type": "str", "enum": ("limit", "request")},
+    "sandbox.build_timeout_multiplier": {"type": "number", "nullable": True, "min": 1},
     "algorithm.mode": {"type": "str", "enum": ("fully_async", "sync")},
     "algorithm.num_rollout": {"type": "int", "min": 1},
     "algorithm.rollout_batch_size": {"type": "int", "min": 1},
@@ -209,6 +236,16 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.eps_clip": {"type": "number", "min": 0},
     "algorithm.eps_clip_high": {"type": "number", "min": 0},
     "algorithm.tis_clip": {"type": "number", "min": 0},
+    "algorithm.tis_clip_low": {"type": "number", "min": 0},
+    "algorithm.group_filter": {"type": "str", "enum": tuple(GROUP_FILTERS)},
+    "rollout.gpus_per_engine": {"type": "int", "min": 1, "max": 8},
+    "rollout.precision": {"type": "str", "nullable": True},
+    "rollout.context_length": {"type": "int", "nullable": True, "min": 1},
+    "rollout.max_running_requests": {"type": "int", "nullable": True, "min": 1},
+    "optimizer.offload": {"type": "str", "nullable": True, "enum": ("disk",)},
+    "optimizer.disk_dir": {"type": "str"},
+    "optimizer.moment_dtype": {"type": "str", "nullable": True, "enum": ("bf16",)},
+    "optimizer.grad_dtype": {"type": "str", "enum": ("fp32", "bf16")},
     "algorithm.max_weight_staleness": {"type": "int", "min": 0},
     "algorithm.sglang_mem_fraction": {"type": "number", "nullable": True, "min": 0.05, "max": 0.95},
     "algorithm.max_tokens_per_gpu": {"type": "int", "min": 1},
@@ -225,6 +262,7 @@ FIELD_RULES: dict[str, dict] = {
     "parallel.tp": {"type": "int", "min": 1},
     "parallel.pp": {"type": "int", "min": 1},
     "parallel.cp": {"type": "int", "min": 1},
+    "parallel.ep": {"type": "int", "nullable": True, "min": 1},
     "tracking.wandb_project": {"type": "str", "nullable": True},
     "tracking.wandb_entity": {"type": "str", "nullable": True},
     "tracking.wandb_name": {"type": "str", "nullable": True},
@@ -306,6 +344,7 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if aio["single_pass"] and algo["mode"] != "fully_async":
         raise ValueError("async.single_pass needs algorithm.mode fully_async (Miles asserts it)")
     _validate_trainer(recipe)
+    _validate_rollout(recipe)
     if local_inputs and (not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]):
         raise ValueError("taskset.tasks_dir and taskset.prompts are required")
     ckpt = recipe["checkpoint"]
@@ -319,6 +358,38 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
         raise ValueError(f"tracking.wandb_project must name the campaign as miles-<campaign>, got {project!r}")
     if project in ARCHIVED_PROJECTS or project == SMOKE_PROJECT:
         raise ValueError(f"tracking.wandb_project {project!r} is reserved (archive or smoke runs)")
+
+
+def rollout_precision(recipe: dict) -> str:
+    return recipe["rollout"]["precision"] or next(iter(PRESETS[recipe["model"]["preset"]].precisions))
+
+
+def _validate_rollout(recipe: dict) -> None:
+    preset, roll, cluster = PRESETS[recipe["model"]["preset"]], recipe["rollout"], recipe["cluster"]
+    precision, gpus = rollout_precision(recipe), int(roll["gpus_per_engine"])
+    if precision not in preset.precisions:
+        raise ValueError(f"rollout.precision must be one of {list(preset.precisions)} for this model, got {precision!r}")
+    if GPUS_PER_NODE % gpus:
+        raise ValueError(f"rollout.gpus_per_engine {gpus} must divide {GPUS_PER_NODE} so an engine stays inside a node")
+    if recipe["algorithm"]["mode"] == "fully_async" and (cluster["nodes"] * GPUS_PER_NODE - cluster["train_gpus"]) % gpus:
+        raise ValueError(f"the rollout GPUs (all GPUs minus cluster.train_gpus) must split into engines of {gpus}")
+    if precision == FP8_FP4 and (backend(recipe) != "megatron" or not preset.train_dir_name):
+        raise ValueError(f"rollout.precision {FP8_FP4} needs the Megatron trainer and a BF16 train copy in the preset")
+    if precision == FP8_FP4 and recipe["checkpoint"]["save_hf"]:
+        # Megatron's HF export writes under --hf-checkpoint's config, which here is the quantized one
+        raise ValueError(f"checkpoint.save_hf is not supported with rollout.precision {FP8_FP4}")
+    if roll["expert_qat"]:
+        if precision != FP8_FP4 or recipe["optimizer"]["offload"] != "disk":
+            raise ValueError(f"rollout.expert_qat needs rollout.precision {FP8_FP4} and optimizer.offload disk "
+                             "(Miles projects the experts in the disk-streamed Adam)")
+        par = megatron_parallel(recipe)
+        if expert_parallel(recipe) != par["tp"] * par["cp"] * par["dp"]:
+            raise ValueError("rollout.expert_qat needs expert data parallel size 1: parallel.ep = tp * cp * dp")
+
+
+def expert_parallel(recipe: dict) -> int:
+    """--expert-model-parallel-size: parallel.ep, or Miles' default of 1."""
+    return int(recipe["parallel"]["ep"] or 1)
 
 
 def backend(recipe: dict) -> str:
@@ -343,9 +414,9 @@ def trainer_layout(recipe: dict) -> tuple[int, int]:
 
 
 def megatron_parallel(recipe: dict) -> dict[str, int]:
-    """tp, pp, cp from the recipe, and dp: the trainer GPUs they leave."""
-    par = {k: int(v) for k, v in recipe["parallel"].items()}
-    return {**par, "dp": trainer_gpus(recipe) // (par["tp"] * par["pp"] * par["cp"])}
+    """tp, pp, cp and ep (None: Miles' default) from the recipe, and dp: the trainer GPUs they leave."""
+    par = {k: int(v) for k, v in recipe["parallel"].items() if k != "ep"}
+    return {**par, "ep": recipe["parallel"]["ep"], "dp": trainer_gpus(recipe) // (par["tp"] * par["pp"] * par["cp"])}
 
 
 def _model_dims(model_type: str) -> dict[str, int]:
@@ -365,6 +436,8 @@ def _validate_trainer(recipe: dict) -> None:
     if name != "megatron":
         if recipe["parallel"] != DEFAULTS["parallel"]:
             raise ValueError("parallel.* applies to model.backend: megatron only")
+        if recipe["optimizer"] != DEFAULTS["optimizer"] or not recipe["checkpoint"]["save_optimizer"]:
+            raise ValueError("optimizer.* and checkpoint.save_optimizer apply to model.backend: megatron only")
         return
     model_type = PRESETS[recipe["model"]["preset"]].megatron_model_type
     if not model_type:
@@ -381,6 +454,9 @@ def _validate_trainer(recipe: dict) -> None:
         (dims.get("--num-attention-heads", tp) % tp == 0, f"tp {tp} must divide the attention heads"),
         (dims.get("--num-query-groups", tp) % tp == 0, f"tp {tp} must divide the KV groups"),
         (dims.get("--num-layers", pp) % pp == 0, f"pp {pp} must divide the {dims.get('--num-layers')} layers"),
+        # Megatron builds expert groups inside one pipeline stage
+        ((tp * cp * dp) % expert_parallel(recipe) == 0,
+         f"ep {expert_parallel(recipe)} must divide the {tp * cp * dp} GPUs of a pipeline stage"),
     ]
     for ok, message in checks:
         if not ok:
@@ -476,6 +552,8 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         "MSWEA_SILENT_STARTUP": "1",
         "MSWEA_COST_TRACKING": "ignore_errors",
     }
+    if multiplier := recipe["sandbox"]["build_timeout_multiplier"]:
+        env["HARBOR_ENV_BUILD_TIMEOUT_MULTIPLIER"] = str(multiplier)
     if agent["cwd"]:
         env["MSWEA_CWD"] = agent["cwd"]
     return env
@@ -560,7 +638,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --rollout-max-response-len {algo["max_response_len"]} --max-seq-len {algo["max_seq_len"]}
 
         --advantage-estimator {algo["advantage_estimator"]}
-        --use-tis --tis-clip {algo["tis_clip"]} --tis-clip-low 0.0
+        --use-tis --tis-clip {algo["tis_clip"]} --tis-clip-low {algo["tis_clip_low"]}
+        {"--use-rollout-routing-replay" if algo["routing_replay"] else ""}
         --kl-coef 0 --entropy-coef {algo["entropy_coef"]}
         {f"--use-kl-loss --kl-loss-coef {algo['kl_loss_coef']}" if kl_loss else ""}
         {f"--ref-load {model_dir(recipe)}" if kl_loss and backend(recipe) != "megatron" else ""}
@@ -574,19 +653,21 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --custom-agent-function-path miles_ext.harbor.agent_function.run
         --custom-agent-function-mode inline
         --custom-rm-path miles_ext.harbor.reward.reward_func
-        --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted
+        --dynamic-sampling-filter-path {GROUP_FILTERS[algo["group_filter"]]}
         --tito-model {preset.tito_model}
         --use-session-server --session-server-port {SESSION_PORT} --session-server-workers {SESSION_WORKERS}
         --no-namespaced-radix-cache
         --pin-rollout-manager-to-head
 
-        --rollout-num-gpus-per-engine 1
+        --rollout-num-gpus-per-engine {recipe["rollout"]["gpus_per_engine"]}
+        {_rollout_args(recipe)}
         --sglang-tool-call-parser {preset.tool_call_parser} --sglang-reasoning-parser {preset.reasoning_parser}
         --sglang-mem-fraction-static {mem_fraction}
         --sglang-decode-log-interval 1000
         --update-weight-buffer-size 536870912
-        {_backend_args(recipe)}
-        --use-dynamic-batch-size --max-tokens-per-gpu {algo["max_tokens_per_gpu"]}
+        {_backend_args(recipe, resume)}
+        {"--use-dynamic-batch-size" if preset.packed_batches else "--micro-batch-size 1"}
+        --max-tokens-per-gpu {algo["max_tokens_per_gpu"]}
         {placement}
 
         --use-wandb --wandb-project {wandb_project(recipe, run_id)} --wandb-group {run_id}
@@ -600,13 +681,55 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
 
 
 def trainer_env(recipe: dict) -> dict[str, str]:
-    """Env the Miles driver and trainer workers need before Miles starts (Ray workers
-    inherit the raylet's env). Megatron's argument validation requires
-    CUDA_DEVICE_MAX_CONNECTIONS=1 for TP or CP, in every process that parses args."""
-    return {"CUDA_DEVICE_MAX_CONNECTIONS": "1"} if backend(recipe) == "megatron" else {}
+    """Env the Miles driver, trainer workers and engines need before Miles starts (Ray workers
+    inherit the raylet's env): the model's, its rollout precision's, and for Megatron
+    CUDA_DEVICE_MAX_CONNECTIONS=1, which its argument validation requires for TP or CP in
+    every process that parses args."""
+    preset = PRESETS[recipe["model"]["preset"]]
+    env = {**preset.env, **preset.precisions[rollout_precision(recipe)]}
+    if backend(recipe) == "megatron":
+        env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+    return env
 
 
-def _backend_args(recipe: dict) -> str:
+def train_dir(recipe: dict) -> Path:
+    """The weights the trainer loads: the preset's BF16 copy when the engines serve a quantized
+    checkpoint, else the engines' own."""
+    preset = PRESETS[recipe["model"]["preset"]]
+    if rollout_precision(recipe) == FP8_FP4:
+        return MODELS / preset.train_dir_name
+    return model_dir(recipe)
+
+
+def _rollout_args(recipe: dict) -> str:
+    preset, roll = PRESETS[recipe["model"]["preset"]], recipe["rollout"]
+    args = preset.sglang_args.format(gpus=roll["gpus_per_engine"])
+    if roll["context_length"]:
+        # a reply that would overflow the context is shortened to fit instead of refused
+        args += f" --sglang-context-length {roll['context_length']} --sglang-allow-auto-truncate"
+    if roll["max_running_requests"]:
+        args += f" --sglang-max-running-requests {roll['max_running_requests']}"
+    if rollout_precision(recipe) == FP8_FP4:
+        # ext-007: weight sync re-encodes each tensor in the format --hf-checkpoint stores it
+        args += " --custom-weight-quantizer-path miles_ext.lowprec.checkpoint_quantizer.quantize_like_checkpoint"
+    if roll["expert_qat"]:
+        args += " --mxfp4-qat-routed-experts"  # fix-006
+    return args
+
+
+def _optimizer_args(recipe: dict, resume: bool) -> str:
+    opt, ckpt = recipe["optimizer"], recipe["checkpoint"]
+    args = ""
+    if opt["offload"] == "disk":
+        args += f" --stream-optimizer-state-to-disk --offload-train-disk-dir {opt['disk_dir']}"
+        if opt["moment_dtype"]:
+            args += f" --stream-optimizer-state-moment-dtype {opt['moment_dtype']}"
+    if not ckpt["save_optimizer"]:
+        args += " --no-save-optim" + (" --no-load-optim" if resume else "")
+    return args
+
+
+def _backend_args(recipe: dict, resume: bool) -> str:
     if backend(recipe) != "megatron":
         return "--gradient-checkpointing --attn-implementation flash_attention_2"
     # A fresh run loads from --ref-load when --load holds no Megatron checkpoint
@@ -616,17 +739,23 @@ def _backend_args(recipe: dict) -> str:
     # matches the checkpoint's, so a run extended past its first num_rollout could
     # not resume. --override-opt_param-scheduler: this launch's schedule wins over
     # the checkpoint's (the recipes use a constant LR, so nothing else changes).
-    par = megatron_parallel(recipe)
+    par, preset = megatron_parallel(recipe), PRESETS[recipe["model"]["preset"]]
     return f"""
-        {load_model_args(PRESETS[recipe["model"]["preset"]].megatron_model_type)}
-        --ref-load {model_dir(recipe)}
+        {load_model_args(preset.megatron_model_type)}
+        --ref-load {train_dir(recipe)}
         --tensor-model-parallel-size {par["tp"]} {"--sequence-parallel" if par["tp"] > 1 else ""}
         --pipeline-model-parallel-size {par["pp"]} --context-parallel-size {par["cp"]}
+        {preset.megatron_cp_args if par["cp"] > 1 else ""}
+        {f"--expert-model-parallel-size {par['ep']} --expert-tensor-parallel-size 1" if par["ep"] else ""}
         --recompute-granularity full --recompute-method uniform --recompute-num-layers 1
-        --attention-backend flash --attention-softmax-in-fp32 --accumulate-allreduce-grads-in-fp32
+        {f"--attention-backend {preset.attention_backend}" if preset.attention_backend else ""}
+        --attention-softmax-in-fp32
+        {"--grad-reduce-in-bf16" if recipe["optimizer"]["grad_dtype"] == "bf16" else "--accumulate-allreduce-grads-in-fp32"}
         --attention-dropout 0.0 --hidden-dropout 0.0
         --log-probs-chunk-size 4096
         --override-opt_param-scheduler
+        {preset.megatron_args}
+        {_optimizer_args(recipe, resume)}
         """
 
 
