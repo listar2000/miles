@@ -105,7 +105,7 @@ def test_room_left_queries_normally(agent_module):
 def test_full_window_exits_before_the_call(agent_module):
     default, exc = agent_module
     model = _Model(_turn(0, 0))
-    # 700 + 900 chars / 3 + 100 reserve > 1000
+    # 700 + 900 chars / 2 + 100 reserve > 1000
     agent = default.DefaultAgent(model, [_turn(600, 100), {"role": "tool", "content": "y" * 900}])
     with pytest.raises(exc.LimitsExceeded) as e:
         agent.query()

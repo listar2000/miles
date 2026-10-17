@@ -9,7 +9,7 @@ turns the run exits ``RepeatedFormatError``. In dsv41-tb4-overfit16-4 that was 5
 output-cap and step-timing patches). It edits ``minisweagent/agents/default.py`` so that ``query``:
 
 - before calling the model, exits ``ContextExhausted`` when the last turn's ``prompt + completion`` tokens
-  plus an estimate of the observations since (chars / 3) leave less than ``MSWEA_CONTEXT_MIN_REPLY`` tokens
+  plus an estimate of the observations since (chars / 2) leave less than ``MSWEA_CONTEXT_MIN_REPLY`` tokens
   (default 4096) of ``MSWEA_CONTEXT_TOKENS``;
 - when the model call fails to parse and that response filled the window (``prompt + completion`` within 64
   tokens of ``MSWEA_CONTEXT_TOKENS``), exits ``ContextExhausted`` instead of nagging, without appending the
@@ -54,7 +54,7 @@ def _mswea_usage(message):
 
 
 def _mswea_ctx_full(messages):
-    # no room for a useful reply: last turn's tokens + observations since (chars / 3) + the reply reserve
+    # no room for a useful reply: last turn's tokens + observations since (chars / 2) + the reply reserve
     import os
 
     limit = _mswea_ctx_limit()
@@ -64,7 +64,7 @@ def _mswea_ctx_full(messages):
         if messages[i].get("role") == "assistant" and _mswea_usage(messages[i]):
             after = sum(len(str(x.get("content") or "")) for x in messages[i + 1:])
             reserve = int(os.environ.get("MSWEA_CONTEXT_MIN_REPLY") or 4096)
-            return _mswea_usage(messages[i]) + after // 3 + reserve > limit
+            return _mswea_usage(messages[i]) + after // 2 + reserve > limit
     return False
 
 
