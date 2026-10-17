@@ -34,6 +34,10 @@ stack end to end before a run on the full task set. The reason for each value: L
 - **Task list as a file next to the config** (`dsv41-flash-tb4-overfit16.tasks`): the ids are
   the source, the prompt file is derived from Run 4's with the command in its header.
 - No colocated V4.1 settings (engram host table, CPU peak device): these engines never sleep.
+- **Engine weight checksum audit off in `miles_args`, not in the recipe.** `--save` derives an
+  event dir, which defaults `--log-inference-engine-weight-checksums` on; the post-sync checksum
+  crashed the FP8 + FP4 engines (dsv41-tb4-overfit16-1). Every launch passes the `--no-` flag, so a
+  recipe's `extra_args` may not repeat it (reserved-flag check).
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,
