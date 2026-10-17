@@ -16,7 +16,9 @@ mini-swe-agent-sandbox
     Its model calls reach the session server through the launcher's Modal
     tunnel: ``MILES_SESSION_PUBLIC_URL`` is ``<tunnel-url>/<token>`` and each
     session URL ``http://<head-ip>:<port>/...`` becomes ``<public>/<port>/...``
-    (``session_proxy.py`` maps it back).
+    (``session_proxy.py`` maps it back). The tunnel host joins the agent phase's
+    allowlist, so the harness reaches the model on a no-network task and the
+    agent gets no other network; Harbor ignores the entry on a public task.
 mini-swe-agent-host
     The mini-swe-agent loop runs in this process and executes each command in
     the sandbox (``host_agent.HostMiniSweAgent``); no tunnel needed.
@@ -42,6 +44,7 @@ import logging
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
@@ -150,6 +153,8 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     if harness == SANDBOX_HARNESS:
         session_url = public_session_url(session_url)
     config = hf.build_trial_config({**metadata, "agent_name": harness}, session_url, request_kwargs)
+    if harness == SANDBOX_HARNESS:
+        config.agent.extra_allowed_hosts = [*config.agent.extra_allowed_hosts, urlsplit(session_url).hostname]
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path
