@@ -23,7 +23,7 @@ import modal
 from miles_ext.platform.progress import call_running, delete_keys, progress_dict, progress_dict_name
 from miles_ext.platform.progress import keys as progress_keys
 from miles_ext.platform.secrets import delete_run_secret, run_secret_exists
-from miles_ext.platform.target import Target, gpu_app_is_per_run, run_secret_name
+from miles_ext.platform.target import Target, compile_cache_volume_name, gpu_app_is_per_run, run_secret_name
 from miles_ext.recipes import recipe as R
 
 
@@ -105,6 +105,7 @@ def resource_names(recipe: dict, run_id: str, target: Target | dict | None) -> d
         "results_volume": target.results_volume,
         "results_dir": f"{run_id}/",
         "weights_volume": target.weights_volume,
+        "compile_cache_volume": compile_cache_volume_name(target),  # shared by the environment's runs
         "progress_dict": progress_dict_name(target),
         "progress_keys": sorted(progress_keys(run_id).values()),
     }

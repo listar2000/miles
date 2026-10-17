@@ -113,6 +113,12 @@ def completion_queue_name(target: Target) -> str:
     return check_own_name(f"{scope_of(target)}completion", "queue") if target.name_id else "miles-fork-completion"
 
 
+def compile_cache_volume_name(target: Target) -> str:
+    """The volume that keeps compiled kernels between runs (``compile_cache``): ``rl-<env>-compile-cache``
+    with a name id, else ``miles-compile-cache``. Shared by every run of the environment."""
+    return check_own_name(f"{scope_of(target)}compile-cache", "volume") if target.name_id else "miles-compile-cache"
+
+
 def run_secret_name(run_id: str, target: Target) -> str:
     """The per-run secret: ``target.secret_name``, or ``<app_name>-secret`` with a name id,
     else ``<namespace of app_name>secret-<run_id>``."""

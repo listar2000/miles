@@ -19,7 +19,8 @@ app ``miles-fork`` (``MILES_APP_NAME``), volumes ``miles-fork-results``
 Final checkpoint retention runs after a successful run unless a per-run secret is
 used (platform runs retain themselves); ``MILES_FINAL_RETENTION=1/0`` overrides.
 Other names:
-queue ``miles-fork-completion``, sandbox app (Modal or
+queue ``miles-fork-completion``, compiled-kernel cache volume ``miles-compile-cache``
+(``miles_ext.platform.compile_cache``), sandbox app (Modal or
 Sail, per the recipe's sandbox.provider) ``<sandbox.app_prefix><run_id>``,
 default ``miles-mobius-<run_id>`` (``miles-fork-sbx-<run_id>`` before 2026-10-15;
 exit cleanup checks both).
@@ -42,9 +43,10 @@ import time
 import modal
 
 from miles_ext import stack
+from miles_ext.platform import compile_cache
 from miles_ext.platform.checkpoints import apply_retention_local
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
-from miles_ext.platform.target import completion_queue_name
+from miles_ext.platform.target import compile_cache_volume_name, completion_queue_name
 from miles_ext.platform.layout import read_tracker
 from miles_ext.platform.target import Target
 from miles_ext.platform.teardown import sandbox_adapter
@@ -111,6 +113,7 @@ else:
 app = modal.App(TARGET.app_name)
 models_volume = modal.Volume.from_name(TARGET.weights_volume, create_if_missing=True)
 results_volume = modal.Volume.from_name(TARGET.results_volume, create_if_missing=True, version=2)
+cache_volume = modal.Volume.from_name(compile_cache_volume_name(TARGET), create_if_missing=True, version=2)
 if TARGET.secret_name:
     secrets = [modal.Secret.from_name(TARGET.secret_name)]
 else:
@@ -229,7 +232,7 @@ def _image_info() -> dict:
     memory=SHAPE["memory_gib"] * 1024,
     ephemeral_disk=SHAPE["disk_gib"] * 1024 if SHAPE.get("disk_gib") else None,
     secrets=secrets,
-    volumes={R.MODELS: models_volume, R.RESULTS: results_volume},
+    volumes={R.MODELS: models_volume, R.RESULTS: results_volume, compile_cache.MOUNT: cache_volume},
     timeout=int(SHAPE["timeout_hours"] * HOURS),
     single_use_containers=True,
 )
@@ -263,6 +266,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):
         print(f"{run_id} is already complete (checkpoint {read_tracker(run_dir)}); nothing to train", flush=True)
         return _complete_at_launch(recipe, run_id, run_dir, backend) if rank == 0 else None
+    compile_cache.restore(_compile_cache_key())
     env = _ray_env(recipe, run_id, head_ip, node_ip)
     start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
     if rank != 0:
@@ -293,11 +297,18 @@ def _complete_at_launch(recipe: dict, run_id: str, run_dir, backend: str) -> dic
     return record
 
 
+def _compile_cache_key() -> str:
+    from importlib.metadata import version
+
+    return compile_cache.key(SHAPE["gpu"], version("sglang"))
+
+
 def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
     # Ray workers inherit the raylet's environment, so everything rollout workers
     # read (Harbor, the tunnel URL) is in env before `ray start`
     return {
         **os.environ,
+        **compile_cache.env(),
         **R.harbor_env(recipe, run_id),
         **R.trainer_env(recipe),
         "PYTHONPATH": _pythonpath(),
@@ -322,6 +333,7 @@ def _worker(run_id: str, rank: int, head_ip: str, env: dict, start: list[str]) -
     from miles_ext.platform import shards
 
     stop = threading.Event()
+    saver = compile_cache.Saver(_compile_cache_key(), cache_volume.commit, node=rank).start()
     threading.Thread(target=shards.worker_commits, daemon=True, args=(
         run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
@@ -333,6 +345,7 @@ def _worker(run_id: str, rank: int, head_ip: str, env: dict, start: list[str]) -
     finally:
         stop.set()
         results_volume.commit()
+        saver.stop()
 
 
 def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | None, head_ip: str, env: dict,
@@ -350,6 +363,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
     succeeded = False
     record = supervisor = None
     stack_ctx = contextlib.ExitStack()
+    # kernels compiled and tuned by this segment reach the volume while it runs and at exit
+    stack_ctx.callback(compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start().stop)
     try:
         resume = read_tracker(run_dir) is not None
         args = R.miles_args(recipe, run_id, resume) + ["--save-trigger-sentinel", SENTINEL]

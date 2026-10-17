@@ -87,7 +87,6 @@ PRESETS: dict[str, Preset] = {
             "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
             "NCCL_CUMEM_ENABLE": "1",
             "SGLANG_HEALTH_CHECK_TIMEOUT": "900",
-            "SGLANG_DG_CACHE_DIR_PER_PROCESS": "1",
             # online weight updates cannot refresh weights these fusions derive (upstream launcher)
             "SGLANG_OPT_FP8_WO_A_GEMM": "0",
             "SGLANG_OPT_DEEPGEMM_HC_PRENORM": "0",
