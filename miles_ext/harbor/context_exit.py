@@ -8,12 +8,13 @@ turns the run exits ``RepeatedFormatError``. In dsv41-tb4-overfit16-4 that was 5
 ``PATCH`` is a script run with the sandbox's mini-swe-agent interpreter at install time (like Harbor's own
 output-cap and step-timing patches). It edits ``minisweagent/agents/default.py`` so that ``query``:
 
-- before calling the model, exits ``ContextExhausted`` when the last turn's ``prompt + completion`` tokens
+- before calling the model, exits ``ContextExhausted`` when the last call's ``prompt + completion`` tokens
   plus an estimate of the observations since (chars / 2) leave less than ``MSWEA_CONTEXT_MIN_REPLY`` tokens
   (default 4096) of ``MSWEA_CONTEXT_TOKENS``;
 - when the model call fails to parse and that response filled the window (``prompt + completion`` within 64
-  tokens of ``MSWEA_CONTEXT_TOKENS``), exits ``ContextExhausted`` instead of nagging, without appending the
-  cut-off turn.
+  tokens of ``MSWEA_CONTEXT_TOKENS``; in dsv41-tb4-overfit16-4 such turns ended 2-6 tokens short), exits
+  ``ContextExhausted`` instead of nagging, without appending the cut-off turn. A reply cut by the per-turn
+  ``max_tokens`` far from the window still gets the nag.
 
 The exit is an ordinary ``LimitsExceeded`` flow, so Harbor still runs the verifier and the sample is scored
 normally (not aborted). With ``MSWEA_CONTEXT_TOKENS`` unset the patched code does nothing.
@@ -54,14 +55,15 @@ def _mswea_usage(message):
 
 
 def _mswea_ctx_full(messages):
-    # no room for a useful reply: last turn's tokens + observations since (chars / 2) + the reply reserve
+    # no room for a useful reply: last call's tokens + observations since (chars / 2) + the reply reserve.
+    # The last call may be a format-error nag (role user), which carries its response's usage too.
     import os
 
     limit = _mswea_ctx_limit()
     if not limit:
         return False
     for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "assistant" and _mswea_usage(messages[i]):
+        if _mswea_usage(messages[i]):
             after = sum(len(str(x.get("content") or "")) for x in messages[i + 1:])
             reserve = int(os.environ.get("MSWEA_CONTEXT_MIN_REPLY") or 4096)
             return _mswea_usage(messages[i]) + after // 2 + reserve > limit

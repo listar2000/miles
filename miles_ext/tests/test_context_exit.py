@@ -123,6 +123,17 @@ def test_cut_off_turn_exits_instead_of_nagging(agent_module):
     assert len(agent.messages) == 1  # the cut-off turn is not appended
 
 
+def test_call_after_a_nag_at_the_wall_exits(agent_module):
+    default, exc = agent_module
+    model = _Model(_turn(0, 0))
+    # a nag already appended (as before this patch, or a FormatError that was not at the wall) carries the usage
+    nag = {"role": "user", "content": "reached the output token limit", "extra": {"response": {"usage": {"prompt_tokens": 950, "completion_tokens": 0}}}}
+    agent = default.DefaultAgent(model, [_turn(400, 100), {"role": "tool", "content": "y"}, nag])
+    with pytest.raises(exc.LimitsExceeded):
+        agent.query()
+    assert model.calls == 0
+
+
 def test_ordinary_format_error_still_nags(agent_module):
     default, exc = agent_module
     nag = {"role": "user", "content": "no tool call", "extra": {"response": {"usage": {"prompt_tokens": 100, "completion_tokens": 20}}}}
