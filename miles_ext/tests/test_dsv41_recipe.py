@@ -57,6 +57,7 @@ def test_dsv41_argv():
         "--sglang-allow-auto-truncate",
         "--moe-router-freeze-gate",
         "--no-save-optim",
+        "--no-log-inference-engine-weight-checksums",
     ):
         assert flag in argv, flag
     assert _value(argv, "--dynamic-sampling-filter-path").endswith("check_reward_nonzero_std")

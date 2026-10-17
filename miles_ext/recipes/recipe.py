@@ -657,11 +657,15 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --actor-num-nodes {cluster["nodes"]} --actor-num-gpus-per-node {GPUS_PER_NODE} --colocate
         """
     tracking = recipe["tracking"]
+    # Miles turns the post-sync engine weight checksum audit on whenever an
+    # event dir is set (--save gives one). It crashed the DSV4.1 FP8+FP4
+    # engines (CUDA illegal address) in dsv41-tb4-overfit16-1, so it stays off.
     args = shlex.split(
         f"""
         --train-backend {backend(recipe)}
         --hf-checkpoint {model_dir(recipe)}
         --save {ckpt_dir} --save-interval {recipe["checkpoint"]["save_interval"]}
+        --no-log-inference-engine-weight-checksums
         {f"--save-hf {RESULTS / run_id / 'hf' / 'iter_{rollout_id:07d}'}" if recipe["checkpoint"]["save_hf"] else ""}
         {f"--load {ckpt_dir}" if resume else ""}
 
