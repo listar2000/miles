@@ -319,6 +319,7 @@ class NVMeOptimizerStateStore:
         self._rank = torch.distributed.get_rank()
         self._instance = distrib_optimizer.distributed_optimizer_instance_id
         self.dir = os.path.join(dir_root, self.relative_dir)
+        self._main_ready = False  # [fork fix-010] the mains are filled by the load path, not here
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir, exist_ok=True)
         atexit.register(shutil.rmtree, self.dir, ignore_errors=True)
@@ -515,6 +516,7 @@ class NVMeOptimizerStateStore:
         read = written = 0
         clip_grad = self.dist_opt.config.clip_grad
         grad_norm, self._grad_norm = self._grad_norm, None
+        self._ensure_main()  # [fork fix-010]
         assert clip_grad <= 0.0 or grad_norm is not None, "the chain's grad norm was not recorded before step()"
         for bucket in self.buckets:
             read += bucket.fetch()
@@ -550,7 +552,18 @@ class NVMeOptimizerStateStore:
             written += bucket.flush(segments=("main",))
             os.fdatasync(bucket.fd)
             os.posix_fadvise(bucket.fd, 0, bucket.offsets["exp_avg"][0], os.POSIX_FADV_DONTNEED)
+        self._main_ready = True  # [fork fix-010]
         return written
+
+    # [fork fix-010] begin
+    def _ensure_main(self) -> None:
+        """Fill the mains from the model params if no load path did (load_checkpoint always does)."""
+        if self._main_ready:
+            return
+        written = self.initialize_main_from_model_params()
+        logger.warning(f"NVMe optimizer: no checkpoint load filled the fp32 mains; wrote {written / 1024**3:.1f} GB")
+
+    # [fork fix-010] end
 
     @torch.no_grad()
     def refresh_main_from_model_params(self, copy_fn) -> None:
@@ -559,9 +572,11 @@ class NVMeOptimizerStateStore:
         copy_fn()
         for bucket in self.buckets:
             bucket.flush(segments=("main",))
+        self._main_ready = True  # [fork fix-010]
 
     @torch.no_grad()
     def save_to(self, base_dir: str) -> None:
+        self._ensure_main()  # [fork fix-010]
         dirpath = os.path.join(base_dir, self.relative_dir)
         os.makedirs(dirpath, exist_ok=True)
         manifest = {
@@ -623,6 +638,7 @@ class NVMeOptimizerStateStore:
                 if step:
                     group["step"] = step
             bucket.allocate_moments()
+        self._main_ready = True  # [fork fix-010]
         fp32_state = os.path.join(dirpath, "fp32_resident_optimizer.pt")
         if self._fp32_adam is not None and os.path.isfile(fp32_state):
             self._fp32_adam.load_state_dict(torch.load(fp32_state))
@@ -634,8 +650,9 @@ def setup_optimizer_state_streaming(args, optimizer) -> None:
     """Give every DistributedOptimizer in ``optimizer``'s chain a store and route it there.
 
     Must run before load_checkpoint: Megatron constructs stable fp32 main-param handles with
-    deferred storage, this function populates them directly into final bucket files, and the
-    bindings keep the load path from writing into evicted storage.
+    deferred storage, and the bindings keep the load path from writing into evicted storage.
+    [fork fix-010] The load path writes the mains (reload_model_params or load_from);
+    step() and save_to() fill them if no load path did.
     """
     from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer
 
@@ -661,11 +678,7 @@ def setup_optimizer_state_streaming(args, optimizer) -> None:
             # [fork fix-006]
             mxfp4_qat_group_size=MXFP4_GROUP_SIZE if getattr(args, "mxfp4_qat_routed_experts", False) else None,
         )
-        written = store.initialize_main_from_model_params()
-        logger.info(
-            f"NVMe optimizer main-param initialization: wrote {written / 1024**3:.1f} GB " f"directly to {store.dir}"
-        )
-        _bind(dist_opt, store)
+        _bind(dist_opt, store)  # [fork fix-010]
         stores.append(store)
     _record_grad_norm_into(optimizer, stores)
 
@@ -766,7 +779,8 @@ def _bind(dist_opt: "DistributedOptimizer", store: NVMeOptimizerStateStore) -> N
 
     def reload_model_params(self, state_dict=None) -> None:
         if state_dict is None:
-            store.initialize_main_from_model_params()
+            written = store.initialize_main_from_model_params()
+            logger.info(f"NVMe optimizer main-param initialization: wrote {written / 1024**3:.1f} GB to {store.dir}")
         else:
             store.refresh_main_from_model_params(
                 lambda: DistributedOptimizer.reload_model_params(self, state_dict=state_dict)
