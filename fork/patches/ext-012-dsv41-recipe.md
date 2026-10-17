@@ -20,7 +20,8 @@ stack end to end before a run on the full task set. The reason for each value: L
   moment dtype, gradient dtype: `bf16` emits upstream's `--grad-reduce-in-bf16`), `parallel.ep`,
   `algorithm.tis_clip_low`, `algorithm.routing_replay`,
   `algorithm.group_filter` (`nonzero_std` drops groups that all scored the same),
-  `checkpoint.save_optimizer`, `sandbox.build_timeout_multiplier`.
+  `checkpoint.save_optimizer`, `sandbox.build_timeout_multiplier`, `cluster.disk_gib` (Modal's
+  `ephemeral_disk`; required with disk streaming, since the default 512 GiB quota is too small).
 - **Validation** refuses: a precision the preset lacks; engines that cross a node or don't
   split the rollout GPUs; FP8 + FP4 without Megatron or a BF16 copy, or with `save_hf`
   (the HF export would use the quantized config); expert QAT without disk streaming or

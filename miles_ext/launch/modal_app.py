@@ -227,6 +227,7 @@ def _image_info() -> dict:
     gpu=f"{SHAPE['gpu']}:{R.GPUS_PER_NODE}",
     cpu=SHAPE["cpu"],
     memory=SHAPE["memory_gib"] * 1024,
+    ephemeral_disk=SHAPE["disk_gib"] * 1024 if SHAPE.get("disk_gib") else None,
     secrets=secrets,
     volumes={R.MODELS: models_volume, R.RESULTS: results_volume},
     timeout=int(SHAPE["timeout_hours"] * HOURS),

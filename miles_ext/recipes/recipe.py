@@ -57,7 +57,10 @@ DEFAULTS: dict[str, Any] = {
     # shared cache key (miles_ext.platform.weights), unset from the preset's directory
     "model": {"preset": None, "backend": None, "revision": None},
     # cpu/memory are requests (Modal bills max(request, usage)); timeout caps a hung run
-    "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6},
+    # disk_gib: node-local disk per container (None: Modal's default quota, 512 GiB); needed when
+    # optimizer.offload disk streams Adam's state to optimizer.disk_dir on that disk
+    "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6,
+                "disk_gib": None},
     "taskset": {"tasks_dir": None, "prompts": None, "harness": HARNESS_SANDBOX},
     "agent": {
         "max_steps": 50,
@@ -208,6 +211,7 @@ FIELD_RULES: dict[str, dict] = {
     "cluster.cpu": {"type": "number", "min": 1},
     "cluster.memory_gib": {"type": "int", "min": 1},
     "cluster.timeout_hours": {"type": "number", "min": 0.1, "max": 24},
+    "cluster.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},  # Modal's ephemeral_disk cap
     "model.preset": {"type": "str", "enum": tuple(sorted(PRESETS))},
     "model.backend": {"type": "str", "nullable": True, "enum": BACKENDS},
     "model.revision": {"type": "str", "nullable": True},
@@ -439,6 +443,9 @@ def _validate_trainer(recipe: dict) -> None:
         if recipe["optimizer"] != DEFAULTS["optimizer"] or not recipe["checkpoint"]["save_optimizer"]:
             raise ValueError("optimizer.* and checkpoint.save_optimizer apply to model.backend: megatron only")
         return
+    if recipe["optimizer"]["offload"] == "disk" and not recipe["cluster"]["disk_gib"]:
+        # Modal's default per-container quota (512 GiB) is far below a large model's Adam state
+        raise ValueError("optimizer.offload disk needs cluster.disk_gib (node-local disk for Adam's state)")
     model_type = PRESETS[recipe["model"]["preset"]].megatron_model_type
     if not model_type:
         raise ValueError(f"preset {recipe['model']['preset']!r} has no megatron_model_type")
@@ -478,7 +485,7 @@ def wandb_tags(recipe: dict) -> list[str]:
             *recipe["tracking"]["tags"]]
 
 
-SHAPE_KEYS = ("gpu", "nodes", "cpu", "memory_gib", "timeout_hours")
+SHAPE_KEYS = ("gpu", "nodes", "cpu", "memory_gib", "timeout_hours", "disk_gib")
 
 
 def shape(recipe: dict) -> dict[str, Any]:
