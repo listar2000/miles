@@ -101,12 +101,16 @@ PRESETS: dict[str, Preset] = {
             "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
         },
+        # Text-only engines (vision_n_layers 0): with the vision tower loaded, every MoE layer routes through
+        # SGLang's vision_topk, which never captures routed experts, so R3 gets all-zero routing; the loader
+        # then skips the vision tensors. RL here is text-only and the trainer's BF16 cast has no vision tensors.
         sglang_args="""
             --sglang-ep-size {gpus} --sglang-dp-size 1
             --sglang-attention-backend dsv4 --sglang-moe-runner-backend auto
             --sglang-cuda-graph-max-bs-decode 128
             --router-health-success-threshold 1 --router-health-check-interval-secs 15
             --router-health-failure-threshold 40
+            --sglang-json-model-override-args '{{"vision_n_layers": 0}}'
         """,
         megatron_args="""
             --dsv4-impl miles --model-name deepseekv41 --qkv-format bshd --transformer-impl transformer_engine --bf16
