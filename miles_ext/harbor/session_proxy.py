@@ -14,7 +14,7 @@ session-server port range is forwarded (never the SGLang engines or Ray).
 
 import argparse
 
-from aiohttp import ClientSession, ClientTimeout, web
+from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
 # hop-by-hop headers and the ones aiohttp recomputes
 _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
@@ -22,8 +22,11 @@ _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-aliv
 
 def make_app(upstream_host: str, ports: range, token: str) -> web.Application:
     async def on_startup(app):
-        # one generated turn can take an hour; the agent's own call timeout governs
-        app["client"] = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
+        # one generated turn can take an hour; the agent's own call timeout governs.
+        # limit=0: each in-flight turn holds a connection; --async-max-concurrent-samples bounds them
+        app["client"] = ClientSession(
+            connector=TCPConnector(limit=0), timeout=ClientTimeout(total=None), auto_decompress=False
+        )
 
     async def on_cleanup(app):
         await app["client"].close()
