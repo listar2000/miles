@@ -188,6 +188,10 @@ green on the head and red on `$BASE` the same way before you report it.
   no claude.ai links (sessions, threads, artifacts). These are should-fix.
 - Every claim matches the diff and the checks you ran (for example "fails
   without the fix": did it fail, and how?).
+- Authors update a body from a file. `gh pr edit N --body-file <file>` fails
+  on this repo with a GraphQL "Projects (classic)" deprecation error; use
+  `gh api -X PATCH repos/listar2000/miles/pulls/N -F body=@<file>`, or the
+  GitHub MCP `update_pull_request` tool.
 
 ## Severity
 
