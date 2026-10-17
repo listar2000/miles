@@ -1,23 +1,24 @@
 # The 16 TB4 tasks of dsv41-flash-tb4-overfit16.yaml, one instance_id per line (the source of
-# truth). From Run 4 (dsv41-tb4-pass4-2): every trial stayed <= 256k context except one
-# fin-saccr-rwa trial at 268k. Note per task: Run 4 solves of 4, peak context.
+# truth). Picked from Run 4 (dsv41-tb4-pass4-2) for difficulty, not length: 12 tasks V4.1 solved
+# sometimes, plus 4 it always solved. Some trials of 6 tasks ran past 256k, so the cap makes those
+# harder. Note per task: Run 4 solves of scored trials.
 # The prompt file is derived from Run 4's prompt file, keeping only these tasks' rows:
 #   python3 -c 'import json,sys; ids={l.split()[0] for l in open(sys.argv[1]) if l.strip() and l[0]!="#"}; \
 #     [sys.stdout.write(r) for r in open(sys.argv[2]) if json.loads(r)["metadata"]["instance_id"] in ids]' \
 #     dsv41-flash-tb4-overfit16.tasks $MILES_DATA/prompts/tb4_cpu52.jsonl > $MILES_DATA/prompts/tb4_overfit16.jsonl
-atrx-vep-crispr          3/4, 260k
-embedding-drift-monitor  3/4, 186k
-wal-recovery-ordering    3/4, 159k
-fin-saccr-rwa            2/4, 268k
-mvcc-lsm-compaction      4/4, 103k
-react-lead-form          4/4, 155k
-bun-sourcemap-leak       0/4, 171k
-cargo-flight-dispatch    0/4, 145k
-data-anonymization       0/4, 186k
-distributed-dedup        0/4, 260k
-freecad-impeller         0/4, 230k
-glycan-ms2-elucidation   0/4, 240k
-gsea-proteomics          0/4, 231k
-html-js-filter           0/4, 205k
-roy-polymorph-cn         0/4, 188k
-session-window-debug     0/4, 154k
+atrx-vep-crispr              3/4
+embedding-drift-monitor      3/4
+wal-recovery-ordering        3/4
+batched-eval-parity          2/4
+coq-block-bound              2/4
+fin-saccr-rwa                2/4
+risk-scorer-replay           2/3
+pretrain-shard-corruption    1/3
+biped-contact-dynamics       1/2
+mp-checkpoint-consolidation  1/2
+shadow-relay                 1/2
+telecom-entity-resolution    1/2
+mvcc-lsm-compaction          4/4
+react-lead-form              4/4
+protein-autointerp-disulfide 4/4
+uefi-bootkit                 3/3
