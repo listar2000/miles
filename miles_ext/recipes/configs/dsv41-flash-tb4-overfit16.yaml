@@ -77,10 +77,6 @@ checkpoint:
   save_interval: 10  # weights only (Adam's ~4.4 TB is not saved)
   keep: 3
   save_optimizer: false
-# Miles turns on per-sync engine weight checksums whenever an event dir is set (the launcher sets one). On the
-# FP8 + FP4 engines the checksum dequantizes every expert and hit a CUDA illegal memory access right after the
-# first weight sync (dsv41-tb4-overfit16-1, 2026-10-17), killing both engines. It is an audit, not training.
-extra_args: ["--no-log-inference-engine-weight-checksums"]
 tracking:
   wandb_project: miles-dsv41
   wandb_entity: mobiuslab
