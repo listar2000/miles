@@ -81,11 +81,10 @@ def base_ref() -> str:
 
 
 def require_full_history():
-    """A shallow clone's boundary commit diffs as the whole tree, and its parents' trailers are missing."""
+    """Exit with the command to run when the clone is shallow or lacks the upstream tag."""
     if git("rev-parse", "--is-shallow-repository").strip() == "true":
         raise SystemExit("ledger: shallow clone; run `git fetch --unshallow --tags origin` first")
-    if subprocess.run(["git", "-C", str(ROOT), "rev-parse", "-q", "--verify", f"refs/tags/{base_tag()}"],
-                      capture_output=True).returncode:
+    if not git("tag", "--list", base_tag()).strip():
         raise SystemExit(f"ledger: tag {base_tag()} missing; run `git fetch --tags origin` first")
 
 
