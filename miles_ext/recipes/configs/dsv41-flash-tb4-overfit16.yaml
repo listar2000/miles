@@ -1,0 +1,79 @@
+# DeepSeek V4.1-Flash, full-parameter RL "overfitting run": the same 16 TB4 tasks every
+# step, picked from Run 4 (dsv41-tb4-pass4-2) for trajectories that stayed at or under 256k.
+# Not a hero run: it checks the whole V4.1 training stack end to end (weight sync, QAT, R3,
+# fully async, 256k memory) and that reward on the trained tasks climbs. Four B300:8 nodes:
+# 16 trainer GPUs on the first two (TP4 PP2 CP2 EP8, one pipeline stage per node, Adam
+# streamed to local disk, bf16 gradients) and two TP8/EP8 engines serving the released
+# FP8 + FP4 checkpoint on the other two. Mini-swe-agent in Sail sandboxes.
+# Design and the reason for each value: the "V4.1 training recipe" design doc.
+# Needs on the weights volume: DeepSeek-V4.1-Flash and DeepSeek-V4.1-Flash-bf16;
+# SAIL_API_KEY and WANDB_API_KEY in the launcher's .env.
+name: dsv41-flash-tb4-overfit16
+model:
+  preset: deepseek-v4.1-flash
+cluster:
+  gpu: B300
+  nodes: 4
+  train_gpus: 16
+  cpu: 32
+  memory_gib: 768
+  timeout_hours: 24
+parallel:
+  tp: 4
+  pp: 2
+  cp: 2
+  ep: 8
+optimizer:
+  offload: disk
+  moment_dtype: bf16
+  grad_dtype: bf16  # halves the grad buffer; frees room for longer context (Miles' MiMo, Inkling do the same)
+rollout:
+  gpus_per_engine: 8
+  precision: fp8_fp4
+  context_length: 262144
+  max_running_requests: 128
+  expert_qat: true
+taskset:
+  # Run 4's TB4 tasks; the prompt file holds only the 16 picked tasks (list in the design doc)
+  tasks_dir: $MILES_DATA/tb4/tasks
+  prompts: $MILES_DATA/tb4/prompts-overfit16.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 256
+  exec_timeout: 300
+  timeout: 7200
+  trial_timeout: 10800
+  verifier_timeout: 3600
+  setup_timeout: 1800
+  cwd: /app
+sandbox:
+  provider: sail
+  lifetime_secs: 14400
+  idle_secs: 3600
+  build_timeout_multiplier: 3  # 600 s task default -> 1,800 s
+algorithm:
+  mode: fully_async
+  num_rollout: 30  # 30 passes over the same 16 tasks
+  rollout_batch_size: 16  # = the task count; fully async may take a fast task twice in a step
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 32768
+  max_seq_len: 262144
+  lr: 1.0e-6
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0
+  tis_clip_low: 0.5
+  max_weight_staleness: 4
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  group_filter: nonzero_std
+async:
+  max_concurrent_samples: 256
+checkpoint:
+  save_interval: 10  # weights only (Adam's ~4.4 TB is not saved)
+  keep: 3
+  save_optimizer: false
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab

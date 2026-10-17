@@ -14,3 +14,4 @@ One row per change important enough for its own page (rules: fork/README.md,
 | ext-007 | Ext | DeepSeek V4.1 rollout in its released FP8 dense + FP4 expert format: weight sync writes each tensor as the rollout checkpoint stores it | active | [ext-007-lowprec-rollout.md](ext-007-lowprec-rollout.md) |
 | hook-001 | Hook | `--custom-weight-quantizer-path`: a rollout checkpoint layout brings its own weight-sync quantizer | active | [hook-001-custom-weight-quantizer.md](hook-001-custom-weight-quantizer.md) |
 | fix-006 | Fix (port) | `--mxfp4-qat-routed-experts` and the EVEN E8M0 scale rule from upstream branch `jiajun/mimo26-mxfp4-qat` | active; remove when upstream main has them | [fix-006-mxfp4-qat.md](fix-006-mxfp4-qat.md) |
+| ext-012 | Ext | DeepSeek V4.1-Flash training recipe: model flags in the preset, 8-GPU engines, FP8 + FP4 rollout, CP/EP, disk-streamed Adam, R3, expert QAT as recipe fields | active | [ext-012-dsv41-recipe.md](ext-012-dsv41-recipe.md) |
