@@ -11,6 +11,7 @@ FlashMLA's is converted to. Which forward runs and how both kernels are tiled is
 measured rows live in _TUNED, keyed by (arch major, RoPE tail, TP-local heads); callers may pass their own.
 """
 
+import os  # [fork fix-008]
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -28,6 +29,7 @@ _FLASH_MLA_TOPK_MULTIPLE = 128
 _FLASH_MLA_HEADS = (64, 128)
 _FLASH_MLA_HEAD_DIMS = (512, 576)
 _FLASH_MLA_ARCH_MAJORS = (9, 10)
+_FLASH_MLA_ROW_CHUNK = int(os.environ.get("MILES_FLASH_MLA_ROW_CHUNK", "16384"))  # [fork fix-008] 0 = one call
 
 
 @dataclass(frozen=True)
@@ -95,7 +97,6 @@ def _flash_mla_forward(q, kv, indices, attn_sink, sm_scale):
     q = q.reshape(batch * seq_len, heads, -1)
     sink = attn_sink
     if padded_heads != heads:
-        q = torch.nn.functional.pad(q, (0, 0, 0, padded_heads - heads))
         sink = None if attn_sink is None else torch.nn.functional.pad(attn_sink, (0, padded_heads - heads))
     indices = _pad_topk_block(indices, _FLASH_MLA_TOPK_MULTIPLE)
     if batch == 1:
@@ -103,10 +104,24 @@ def _flash_mla_forward(q, kv, indices, attn_sink, sm_scale):
     else:
         offsets = torch.arange(batch, device=indices.device, dtype=indices.dtype).view(batch, 1, 1, 1) * seq_len_kv
         flat_indices = torch.where(indices >= 0, indices + offsets, -1).view(batch * seq_len, 1, -1)
-    out, _, lse = flash_mla_sparse_fwd(
-        q, kv.reshape(batch * seq_len_kv, 1, -1), flat_indices, sm_scale, d_v=512, attn_sink=sink
-    )
-    out, lse = out[:, :heads].contiguous(), lse[:, :heads] * _LOG2_E
+    # [fork fix-008] query rows in chunks: the head padding (16 TP-local heads -> 64) made the padded q and out
+    # 4x the real ones, 6 GiB each at 192k context (dsv41-tb4-overfit16-4); rows are independent, so the result
+    # is the same bit for bit
+    kv_flat = kv.reshape(batch * seq_len_kv, 1, -1)
+    rows = q.shape[0]
+    chunk = _FLASH_MLA_ROW_CHUNK if _FLASH_MLA_ROW_CHUNK > 0 else rows
+    out = q.new_empty(rows, heads, 512)
+    lse = torch.empty(rows, heads, dtype=torch.float32, device=q.device)
+    for s in range(0, rows, chunk):
+        e = min(s + chunk, rows)
+        q_rows = q[s:e]
+        if padded_heads != heads:
+            q_rows = torch.nn.functional.pad(q_rows, (0, 0, 0, padded_heads - heads))
+        chunk_out, _, chunk_lse = flash_mla_sparse_fwd(
+            q_rows, kv_flat, flat_indices[s:e], sm_scale, d_v=512, attn_sink=sink
+        )
+        out[s:e] = chunk_out[:, :heads]
+        lse[s:e] = chunk_lse[:, :heads] * _LOG2_E
     if attn_sink is not None:
         lse = torch.logaddexp2(lse, attn_sink.float().view(1, heads) * _LOG2_E)
     return out.reshape(batch, seq_len, heads, -1), lse.reshape(batch, seq_len, heads).contiguous()
