@@ -49,7 +49,7 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import upstream
+from miles_ext.harbor import context_exit, upstream
 from miles_ext.recipes import recipe as R
 
 hf = upstream.harbor_agent_function()
@@ -158,6 +158,9 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     config = hf.build_trial_config({**metadata, "agent_name": harness}, session_url, request_kwargs)
     if harness == SANDBOX_HARNESS:
         config.agent.extra_allowed_hosts = [*config.agent.extra_allowed_hosts, urlsplit(session_url).hostname]
+        # ContextExitAgent's window (context_exit.py)
+        if max_seq_len := config.agent.kwargs.get("max_seq_len"):
+            config.agent.env = {**config.agent.env, context_exit.ENV_TOKENS: str(max_seq_len)}
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path
@@ -196,6 +199,9 @@ async def run(
         return hf._failed("AgentError")
 
     out = hf.trial_result_to_metadata(result)
+    # Harbor says "Submitted" whenever the verifier ran; keep the agent's ContextExhausted so filters can tell it apart
+    if out["exit_status"] == "Submitted" and out["agent_metrics"].get("mswea_exit_status") == context_exit.EXIT_STATUS:
+        out["exit_status"] = context_exit.EXIT_STATUS
     out["trial_dir"] = str(trial.paths.trial_dir)
     logger.info(f"Harbor trial {instance_id}: exit_status={out['exit_status']} reward={out['reward']}")
     return out

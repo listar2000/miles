@@ -3,7 +3,9 @@
 Harbor installs mini-swe-agent in each trial's sandbox (``MiniSweAgent.install``:
 ``apt-get`` and ``uv tool install mini-swe-agent``). When the package is already
 present, this agent skips that install and only applies Harbor's two runtime
-patches (output cap, step timing).
+patches (output cap, step timing). Either way it then adds the ContextExhausted
+agent class (context_exit.py) to the agent's environment and runs mini-swe-agent
+with it, and records mini-swe-agent's exit status in the agent metadata.
 
 The pinned Harbor runs agent setup under the task's own network policy, so on a
 no-network task the install cannot reach PyPI or astral.sh. ``setup`` opens
@@ -14,10 +16,15 @@ is set up unchanged.
 """
 
 import base64
+import json
+from pathlib import Path
 
 from harbor.agents.installed import mini_swe_agent as stock
 from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import NetworkMode, NetworkPolicy
+
+from miles_ext.harbor import context_exit
 
 _PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)
 
@@ -43,16 +50,45 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         probe = await environment.exec(command=_UV_PATH + "command -v mini-swe-agent")
         if probe.return_code != 0:
-            return await super().install(environment)
-        output_cap_b64 = base64.b64encode(
-            stock._OUTPUT_CAP_PATCH.format(cap_bytes=stock.MAX_COMMAND_OUTPUT_BYTES).encode()
-        ).decode()
-        step_timing_b64 = base64.b64encode(stock._STEP_TIMING_PATCH.encode()).decode()
+            await super().install(environment)
+        else:
+            output_cap_b64 = base64.b64encode(
+                stock._OUTPUT_CAP_PATCH.format(cap_bytes=stock.MAX_COMMAND_OUTPUT_BYTES).encode()
+            ).decode()
+            step_timing_b64 = base64.b64encode(stock._STEP_TIMING_PATCH.encode()).decode()
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    + _UV_PATH
+                    + f'echo {output_cap_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" - && '
+                    + f'echo {step_timing_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" -'
+                ),
+            )
+        # the ContextExhausted agent class, as a module of the agent's own environment (selected in build_cli_flags)
+        module_b64 = base64.b64encode(Path(context_exit.__file__).read_bytes()).decode()
         await self.exec_as_agent(
             environment,
             command=(
-                "set -euo pipefail; " + _UV_PATH
-                + f'echo {output_cap_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" - && '
-                + f'echo {step_timing_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" -'
+                "set -euo pipefail; "
+                + _UV_PATH
+                + 'py="$(uv tool dir)/mini-swe-agent/bin/python"; '
+                + """site="$("$py" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; """
+                + f'echo {module_b64} | base64 -d > "$site/{context_exit.AGENT_MODULE}.py" && '
+                + f'"$py" -c "import {context_exit.AGENT_MODULE}"'
             ),
         )
+
+    def build_cli_flags(self) -> str:
+        return " ".join(f for f in (super().build_cli_flags(), f"--agent-class={context_exit.AGENT_CLASS}") if f)
+
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        super().populate_context_post_run(context)
+        # mini-swe-agent's own exit status, as the host harness records it (agent_function reads it)
+        path = self.logs_dir / "mini-swe-agent.trajectory.json"
+        try:
+            exit_status = (json.loads(path.read_text()).get("info") or {}).get("exit_status")
+        except (OSError, ValueError):
+            return
+        if exit_status:
+            context.metadata = {**(context.metadata or {}), "mswea_exit_status": exit_status}
