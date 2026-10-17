@@ -73,6 +73,15 @@ def base_ref() -> str:
     return _stack_value("UPSTREAM_BASE")
 
 
+def require_full_history():
+    """A shallow clone's boundary commit diffs as the whole tree, and its parents' trailers are missing."""
+    if git("rev-parse", "--is-shallow-repository").strip() == "true":
+        raise SystemExit("ledger: shallow clone; run `git fetch --unshallow --tags origin` first")
+    if subprocess.run(["git", "-C", str(ROOT), "rev-parse", "-q", "--verify", f"refs/tags/{base_tag()}"],
+                      capture_output=True).returncode:
+        raise SystemExit(f"ledger: tag {base_tag()} missing; run `git fetch --tags origin` first")
+
+
 def own(path: str) -> bool:
     return path.startswith(OWN_PATHS)
 
@@ -226,6 +235,7 @@ def main():
     args = ap.parse_args()
     if args.command == "markers":
         sys.exit(cmd_markers())
+    require_full_history()
     base = args.base or base_ref()
     if args.command == "list":
         cmd_list(base)
