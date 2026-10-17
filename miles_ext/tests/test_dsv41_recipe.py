@@ -105,6 +105,7 @@ def test_qwen_recipes_keep_their_defaults():
         ({"rollout": {"precision": "fp4"}}, "rollout.precision must be one of"),
         ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
         ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
+        ({"cluster": {"disk_gib": None}}, "cluster.disk_gib"),
     ],
 )
 def test_dsv41_refuses(over, message):

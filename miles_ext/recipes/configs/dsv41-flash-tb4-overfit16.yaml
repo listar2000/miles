@@ -18,6 +18,7 @@ cluster:
   train_gpus: 16
   cpu: 32
   memory_gib: 768
+  disk_gib: 3072  # Modal's max; Adam's state is ~2.0 TiB per trainer node (8 B/param, bf16 moments)
   timeout_hours: 24
 parallel:
   tp: 4
