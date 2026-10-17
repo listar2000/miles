@@ -32,7 +32,7 @@ optimizer:
 rollout:
   gpus_per_engine: 8
   precision: fp8_fp4
-  context_length: 262144
+  context_length: 196608  # 192k: the trainer's indexer candidate mask is dense [local q x kv] bool; at 256k it is 32 GiB and OOMed step 0 of dsv41-tb4-overfit16-3 (18 GiB here)
   max_running_requests: 128
   expert_qat: true
 taskset:
@@ -61,7 +61,7 @@ algorithm:
   n_samples: 8
   temperature: 1.0
   max_response_len: 32768
-  max_seq_len: 262144
+  max_seq_len: 196608  # = rollout.context_length (see there)
   lr: 1.0e-6
   eps_clip: 0.2
   eps_clip_high: 0.28
