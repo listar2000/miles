@@ -7,7 +7,9 @@ and ``harbor_env`` into the env vars the rollout workers read.
 Paths in ``taskset`` may use environment variables (``$MILES_DATA``: where the
 task sets live, outside this repo) and are otherwise relative to the recipe file. Container paths are fixed:
 tasks at /inputs/tasks, the prompt file at /inputs/prompts.jsonl, weights at
-/models/<repo name>, run outputs at /results/<run_id>.
+/models/<repo name>, run outputs at /results/<run_id>. ``taskset.tasks_volume``
+(``<volume>:/<path>``) reads the tasks from a Modal volume instead of ``tasks_dir``,
+mounted read-only at /datasets, so the launching machine holds only the prompt file.
 """
 
 import copy
@@ -41,6 +43,7 @@ MODELS = Path("/models")
 RESULTS = Path("/results")
 TASKS = Path("/inputs/tasks")
 PROMPTS = Path("/inputs/prompts.jsonl")
+DATASETS = Path("/datasets")  # taskset.tasks_volume's volume, read-only
 
 DEFAULT_APP_PREFIX = "miles-mobius-"  # sandbox app = <prefix><run_id>
 LEGACY_APP_PREFIXES = ("miles-fork-sbx-",)  # default before 2026-10-15; cleanup still looks there
@@ -61,7 +64,8 @@ DEFAULTS: dict[str, Any] = {
     # optimizer.offload disk streams Adam's state to optimizer.disk_dir on that disk
     "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6,
                 "disk_gib": None},
-    "taskset": {"tasks_dir": None, "prompts": None, "harness": HARNESS_SANDBOX},
+    # tasks_volume "<volume>:/<path>": the task dirs on a Modal volume, instead of tasks_dir
+    "taskset": {"tasks_dir": None, "tasks_volume": None, "prompts": None, "harness": HARNESS_SANDBOX},
     "agent": {
         "max_steps": 50,
         "exec_timeout": 60,
@@ -216,6 +220,7 @@ FIELD_RULES: dict[str, dict] = {
     "model.backend": {"type": "str", "nullable": True, "enum": BACKENDS},
     "model.revision": {"type": "str", "nullable": True},
     "taskset.tasks_dir": {"type": "str", "nullable": True},
+    "taskset.tasks_volume": {"type": "str", "nullable": True},
     "taskset.prompts": {"type": "str", "nullable": True},
     "taskset.harness": {"type": "str", "enum": HARNESSES},
     "agent.max_steps": {"type": "int", "min": 1},
@@ -351,8 +356,12 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
         raise ValueError("async.single_pass needs algorithm.mode fully_async (Miles asserts it)")
     _validate_trainer(recipe)
     _validate_rollout(recipe)
-    if local_inputs and (not recipe["taskset"]["tasks_dir"] or not recipe["taskset"]["prompts"]):
-        raise ValueError("taskset.tasks_dir and taskset.prompts are required")
+    taskset = recipe["taskset"]
+    if taskset["tasks_dir"] and taskset["tasks_volume"]:
+        raise ValueError("taskset: set tasks_dir or tasks_volume, not both")
+    tasks_volume(recipe)  # its format
+    if local_inputs and (not (taskset["tasks_dir"] or taskset["tasks_volume"]) or not taskset["prompts"]):
+        raise ValueError("taskset.prompts and one of taskset.tasks_dir, taskset.tasks_volume are required")
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
@@ -539,12 +548,31 @@ def sandbox_app_names_for_cleanup(recipe: dict, run_id: str) -> list[str]:
     return names
 
 
+def tasks_volume(recipe: dict) -> tuple[str, str] | None:
+    """``taskset.tasks_volume`` as (volume name, path in it), or None when the tasks come from tasks_dir."""
+    spec = recipe["taskset"].get("tasks_volume")
+    if not spec:
+        return None
+    m = re.fullmatch(r"([A-Za-z0-9._-]+):(/[A-Za-z0-9._/-]*)", spec)
+    if not m or ".." in m[2].split("/"):
+        raise ValueError(f"taskset.tasks_volume must be <volume>:/<path>, got {spec!r}")
+    if not m[1].startswith(OWN_APP_NAMESPACES):
+        raise ValueError(f"taskset.tasks_volume: volume {m[1]!r} must start with one of {OWN_APP_NAMESPACES}")
+    return m[1], m[2]
+
+
+def tasks_path(recipe: dict) -> Path:
+    """Where the task dirs are in the container."""
+    volume = tasks_volume(recipe)
+    return DATASETS / volume[1].lstrip("/") if volume else TASKS
+
+
 def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
     """What every Harbor trial reads (header of upstream's harbor_agent_function)."""
     agent = recipe["agent"]
     env = {
         **_sandbox_env(recipe, run_id),
-        "HARBOR_TASKS_DIR": str(TASKS),
+        "HARBOR_TASKS_DIR": str(tasks_path(recipe)),
         "HARBOR_TRIALS_DIR": str(RESULTS / run_id / "trials"),
         "MILES_EXT_HARNESS": recipe["taskset"]["harness"],
         "AGENT_MODEL_NAME": "model",

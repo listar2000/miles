@@ -36,8 +36,9 @@ rollout:
   max_running_requests: 128
   expert_qat: true
 taskset:
-  # Run 4's 52 TB4 tasks; the prompt file keeps the 16 tasks in dsv41-flash-tb4-overfit16.tasks
-  tasks_dir: $MILES_DATA/tasks
+  # Run 4's 52 TB4 tasks, uploaded once to the miles-datasets volume; the prompt file keeps the
+  # 16 tasks in dsv41-flash-tb4-overfit16.tasks
+  tasks_volume: miles-datasets:/tb4/v1/tasks
   prompts: $MILES_DATA/prompts/tb4_overfit16.jsonl
   harness: mini-swe-agent-sandbox
 agent:
