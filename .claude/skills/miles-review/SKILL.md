@@ -1,0 +1,222 @@
+---
+name: miles-review
+description: Review or simplify a listar2000/miles PR for fork conventions, sloppy comments, verbose tests and PR-body rules, with evidence for every finding. Use for every independent reviewer pass and before marking your own PR ready.
+---
+
+# Reviewing a miles-mobius PR
+
+One review procedure, so every reviewer checks the same things and reports them
+the same way. It removes clutter without changing behavior: unneeded comments,
+tests that cannot catch a regression, PR-body noise, and convention breaks that
+would make the next upstream sync harder.
+
+The rules themselves live elsewhere; this skill only says how to check them:
+
+- `fork/README.md` (rulebook) and `.claude/skills/miles-fork/SKILL.md` (procedure)
+  for kinds, trailers, markers, patch pages and landing;
+  `fork/rfcs/0001-main-and-stable-versions.md` wins where they disagree.
+- `.github/pull_request_template.md` for the PR body.
+- `.claude/rules/*.md` (upstream's) for any code under `miles/`, notably
+  `general-code-style.md` and `single-source-of-truth.md`.
+
+Fork PRs run no CI (GitHub Actions only builds the image after a merge), so
+the checks below are the only gate before a merge.
+
+It has two users:
+
+- **Authors** apply it while they work and run the full pass before asking for
+  a merge: fix what it finds, keep one commit per fork id, re-run every
+  check, and push their own topic branch.
+- **The independent reviewer** enforces it on every open PR. The reviewer
+  reports only: never push to the PR branch and never comment on GitHub unless
+  asked; the PR's owner applies fixes.
+
+The reviewer's job is workflow and best practice: comments, tests, PR hygiene
+and fork conventions. It is never technical depth (whether the algorithm,
+memory math or recipe is right); that belongs to the PR's owner and its
+technical reviewers. A technical doubt noticed in passing goes under Handoffs,
+not into the verdict.
+
+## Setup
+
+Work in a separate worktree so the PR head never replaces your own checkout.
+
+```bash
+git fetch --unshallow --tags origin 2>/dev/null || git fetch --tags origin
+git fetch origin main "pull/$N/head:pr$N"
+git worktree add "$SCRATCH/pr$N" "pr$N"
+cd "$SCRATCH/pr$N"
+BASE=$(git merge-base origin/main HEAD)
+git log --format='%h %s%n%(trailers:only)' $BASE..HEAD
+git diff --stat $BASE HEAD
+```
+
+`ledger.py` needs the full history and the upstream tags: in a shallow clone it
+fails with a git error, which is a setup problem, not a finding.
+
+## Required checks
+
+Run all of them on the PR head; run the tests on `$BASE` too.
+
+| Check | Command | Pass |
+| --- | --- | --- |
+| Ledger | `python fork/tools/ledger.py check` | `ledger check: ok` |
+| Lint and format | `pre-commit run --files $(git diff --name-only $BASE HEAD)` | no hook fails on a line the PR adds |
+| Extension tests | `python -m pytest miles_ext/tests -q -p no:cacheprovider` | same or better than on `$BASE` |
+| Upstream tests | `python -m pytest tests/fast/<area touched by a fix or hook> -q` | passes (needs torch; add `--noconftest` if conftest pulls GPU deps) |
+
+- `pre-commit` runs ruff (E, F, B, UP), autoflake, isort and black at 119
+  columns. It also rewrites untouched lines of a touched file: a failure that
+  `$BASE` already has is pre-existing, so note it and don't count it against
+  the PR. Revert the hooks' edits afterwards (`git checkout -- .`).
+- `ruff check --extend-select RUF100 <files>` lists `# noqa` markers that
+  suppress nothing.
+- A cloud container lacks harbor, mini-swe-agent and torch, so a few
+  `miles_ext/tests` files fail to collect there (install `pytest aiohttp modal
+  pyyaml` for the rest). Only a difference between `$BASE` and the head counts.
+- Never launch GPUs or Modal apps for a review. For a red GPU check on an
+  upstream-style PR, follow `.claude/rules/ci-failure-triage.md`.
+
+Out of scope: files listed in `fork/vendored.json` (byte-for-byte copies),
+prompt and template literals a model sees, and upstream code the PR does not
+touch.
+
+## 1. Fork conventions
+
+Each break is **blocking** unless marked otherwise.
+
+- **Fits the fork.** Ask "does training import or need this?" Data prep,
+  taskset QA and one-off campaign scripts belong elsewhere, however well written.
+- **One topic, one commit per fork id.** Squash work-in-progress commits: the
+  PR is one commit on top of `main` (it lands by fast-forward), whose subject
+  is the PR title, `type(scope): what`, with `[fork fix-NNN]` / `[fork
+  hook-NNN]` at the end for a fix or hook. The ledger alone may force more: a
+  fix or hook plus the infra commit that adds its patch page, or two fix ids of
+  one topic. Then each commit carries one id, and the PR body's first line says
+  "Merge with rebase, not squash".
+- **Ledger shape.** One `Fork-*` trailer per commit. A fix or hook commit
+  touches only upstream files, and its id is used by that one commit. An ext or
+  infra commit touches only the fork's own paths (`OWN_PATHS` in
+  `fork/tools/ledger.py`). Two topics (say a fix and an unrelated extension)
+  are two PRs: split them.
+- **Ids.** New ids are the next free number from `python fork/tools/ledger.py
+  list`; numbers are never reused (retired ones included). An ext id may span
+  several commits of the same extension.
+- **Upstream edits.** The smallest possible insertion, a `[fork fix-NNN]`
+  marker at every touched spot, and the `Touches:`, `Evidence:`,
+  `Upstream-Status:` and `Remove-When:` trailers.
+- **Extensions.** New files under `miles_ext/`, plugged in through Miles' flags
+  or Harbor's `import_path`. A vendored file is never edited; adaptations go in
+  a subclass next to it.
+- **Patch page.** Required for every hook, vendored file, and change with a
+  design choice someone may revisit. The commit body and the PR body both carry
+  `Patch page: fork/patches/<file>`, or `Patch page: none (small, obvious fix)`.
+  A change to a patched area updates its page in the same commit. A missing line
+  is should-fix.
+- **Evidence a reader can open.** Commit and PR evidence points at GitHub,
+  W&B, Linear or files in the repo. Host-only paths (`investigations/...`) and
+  scripts that are not in the repo are should-fix: quote the numbers instead.
+- **Caller-facing changes** (the `miles_ext.platform` API, recipe or run-spec
+  fields and defaults, image refs, Modal names, teardown) are listed under
+  Contract.
+
+## 2. Comments and docstrings
+
+Find every full-line comment block of three or more lines in the changed
+Python files, then read the diff for docstrings:
+
+```bash
+awk 'function f(){if(n>=3)print p":"s": "n"-line comment block";n=0}
+     FNR==1{f();p=FILENAME} /^[ \t]*#/{if(!n)s=FNR;n++;next} {f()} END{f()}' \
+    $(git diff --name-only $BASE HEAD -- '*.py')
+```
+
+**Cut** (should-fix): history ("used to", run ids, "this fixed X"),
+counterfactuals, claims about tests, narration of the next line, a rule stated
+again where it is already stated, statistics from one run, design essays and
+deferred plans, stale cross-references, commented-out code.
+
+**Keep**: at most one intent comment per logical block, two lines or fewer,
+stating a constraint the code cannot express and whose omission would cause
+misuse. It sits at the declaration. History belongs in the commit message,
+rationale in the patch page or PR body. A module docstring is one purpose
+sentence, plus a contract table only when the module owns that contract.
+Function docstrings are short imperative prose; trivial helpers need none.
+
+Give the replacement text for every comment you cut or shorten.
+
+## 3. Tests
+
+**Is it worth having?** A test earns its place when it pins behavior a caller
+relies on and would go red on a realistic regression. Flag (should-fix):
+
+- *declaration pinning*: asserting a constant, default or kwarg equals what the
+  code literally says;
+- *fake-only*: only a mock or stub is exercised, never the code under review;
+- *duplicate*: an existing test already goes red for the same bug;
+- *implementation coupling*: private attributes, call order, or a library's
+  internals (for example `site._server.sockets`) instead of its public API;
+- *bookkeeping*: counters or assertions that the main assertion already implies.
+
+**Right place.** Extension code is tested in `miles_ext/tests/` on CPU in
+seconds; upstream code touched by a fix or hook in `tests/fast/`, in upstream's
+style. No GPU tests in a review.
+
+**Right shape.** The smallest test that goes red on the bug. Prefer the
+library's test helpers (`aiohttp.test_utils.TestServer`, pytest's
+`monkeypatch` and `tmp_path`) over hand-built servers and fixtures. Red must
+come fast: a test that only fails by hanging until a timeout or a slow cleanup
+is should-fix.
+
+**Ratios** are flags to look closer, not findings: added test lines over 1.5x
+added production lines, or comments over 15% of added non-blank lines.
+
+**Prove it.** Run each new test on the head (green), then copy the `$BASE`
+version of the production files it covers into the worktree and run it again:
+it must go red, quickly. Record both results and times, then restore
+(`git checkout -- .`). When you propose a smaller test, write it, and prove it
+green on the head and red on `$BASE` the same way before you report it.
+
+## 4. PR body and commit message
+
+- Sections follow `.github/pull_request_template.md`: Outcome (before and
+  after), Contract (or "No caller-facing changes."), Side-effects (upstream
+  files touched with their markers; delete the section if it would say "none"),
+  Done, Verification with the exact commands and counts. "Stacked on #N." is
+  the first line when it applies.
+- No "Requested by" header or attribution marker, no generated-by footer, and
+  no claude.ai links (sessions, threads, artifacts). These are should-fix.
+- Every claim matches the diff and the checks you ran (for example "fails
+  without the fix": did it fail, and how?).
+
+## Severity
+
+- **Blocking**: a broken hard rule (ledger fails, wrong kind or paths, unmarked
+  upstream edit, edited vendored file, a secret, lint failing on added lines),
+  or a test that cannot go red.
+- **Should-fix**: a convention or clarity problem the author fixes before merge.
+- **Nit**: optional.
+
+Problems outside the PR's topic are handoffs to their owner, not fixes for
+this PR.
+
+## Report
+
+Write the review to `/mnt/project-files/reviews/pr<N>-<slug>-review.md` when
+that folder exists (otherwise put it in your reply):
+
+1. Verdict on the first line: ready / ready after the should-fixes / blocked.
+2. Findings by severity, each with `file:line`, the evidence (command and
+   output), and the exact fix (replacement text or a diff).
+3. Any proposed rewrite (comment or test) in full, with its green and red proof.
+4. The checks you ran, with counts and times, head against `$BASE`.
+5. Handoffs, each naming its owner.
+
+Then remove the worktree: `git worktree remove "$SCRATCH/pr$N"`.
+
+## Done means
+
+Every required check ran on the head and on `$BASE`; every finding carries
+evidence and a concrete fix; every proposed test was proven green on the head
+and red on `$BASE`; and the PR's branch is untouched (reviewer) or holds
+one commit per fork id that passes every check (author).

@@ -44,7 +44,7 @@ Take the next free number from `ledger.py list` (numbers are never reused).
 | add an extension point upstream lacks | Hook | in place, smallest possible edit | `Fork-Hook: hook-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
-| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
+| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
 
 Prefer Ext and Infra: they cannot conflict on a sync, a Fix or Hook can. If an extension needs upstream to call it somewhere it doesn't, write a
 separate Hook commit; never edit upstream code from an Ext commit.
@@ -196,6 +196,7 @@ and moves `:main`, which is `latest`) and the launcher's `--check-only` on the
 new image.
 
 - A PR description follows `.github/pull_request_template.md` (its comment says what to leave out).
+- Before asking for a merge, run `.claude/skills/miles-review/SKILL.md` on the PR as its author.
 - A doc-only landing skips the build; `latest` stays on the last build.
 - `--main` builds only `origin/main`'s tip. If `main` moved, rebase your own
   work branch onto it and land again; never force-push `main`.

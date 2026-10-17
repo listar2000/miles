@@ -51,7 +51,7 @@ Every fork commit has exactly one trailer saying what it is.
 | --- | --- | --- | --- |
 | **Fix** (`Fork-Fix: fix-NNN`) | a bug fix to upstream code | in place, in the upstream file | yes: it is the only thing that can (with hooks) |
 | **Hook** (`Fork-Hook: hook-NNN`) | an extension point upstream lacks, so an extension can plug in | in place, in the upstream file | yes |
-| **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/` | no (new files only) |
+| **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | no (new files only) |
 | **Ext** (`Fork-Ext: ext-NNN`) | new capability: harnesses, recipes, algorithms, sandbox providers | `miles_ext/` | no (new files only) |
 
 Rules for **fixes and hooks** (enforced by `ledger.py check`):
@@ -122,6 +122,7 @@ fork/
   vendored.json         upstream files carried verbatim in miles_ext/ (blob-checked)
   deps/harbor/          offline Harbor patches (task-set generation only; see Harbor)
 .claude/skills/miles-fork/  the workflow for agents changing this fork
+.claude/skills/miles-review/  the review checklist every fork PR goes through
 miles_ext/              extensions (top-level package next to miles/, on PYTHONPATH in the image)
   stack.py              pins: upstream tag, base image digest, Harbor commit, mini-swe-agent, Sail SDK; image repo
   stable.json           the stable versions: name, commit, image digest, date, note
