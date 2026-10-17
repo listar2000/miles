@@ -15,8 +15,9 @@ real run:
 Errors come back as ``{path, message}``: ``path`` is the dotted recipe key when
 known, ``argv`` for Miles' parser, otherwise the check's name. Inputs are read
 where a run reads them: ``<results_volume>/<run_id>/inputs/{tasks/,prompts.jsonl}``
-(the platform copies the taskset there first), or ``/inputs`` when the caller
-mounts them itself (the test launcher).
+(the platform copies the taskset there first; no ``tasks/`` with ``taskset.tasks_volume``,
+whose task dirs are mounted at /datasets), or ``/inputs`` when the caller mounts them itself
+(the test launcher).
 """
 
 import json
@@ -25,6 +26,7 @@ import re
 import subprocess
 import sys
 import traceback
+from pathlib import Path
 
 from miles_ext.platform.schema import reserved_flag_errors
 from miles_ext.platform.target import Target
@@ -113,15 +115,33 @@ def validate(recipe: dict, run_id: str, target: Target | dict | None = None, *, 
     return out
 
 
-def _inputs(run_id: str) -> None:
-    """Make /inputs the run's inputs on the results volume, unless the caller mounted them."""
+def _inputs(run_id: str, tasks: bool = True) -> None:
+    """Make /inputs the run's inputs on the results volume, unless the caller mounted them.
+    ``tasks=False``: the tasks come from taskset.tasks_volume, so only the prompt file is required."""
     inputs = R.TASKS.parent
     if inputs.exists():
         return
     src = R.RESULTS / run_id / "inputs"
-    if not (src / R.TASKS.name).is_dir() or not (src / R.PROMPTS.name).is_file():
+    if (tasks and not (src / R.TASKS.name).is_dir()) or not (src / R.PROMPTS.name).is_file():
         raise FileNotFoundError(f"no taskset at {src}/{{{R.TASKS.name}/,{R.PROMPTS.name}}} (copy it there first)")
     inputs.symlink_to(src)
+
+
+def _task_dirs_for_prompts(tasks_dir: Path, prompts: Path) -> tuple[list[str], list[str]]:
+    """The task dirs and the prompt rows' instance ids; every id must have a task dir."""
+    tasks = sorted(os.listdir(tasks_dir))
+    if not tasks:
+        raise ValueError(f"taskset: no tasks in {tasks_dir}")
+    ids = []
+    for n, line in enumerate(prompts.read_text().splitlines(), 1):
+        if line.strip():
+            instance_id = (json.loads(line).get("metadata") or {}).get("instance_id")
+            if not instance_id:
+                raise ValueError(f"taskset: prompt row {n} has no metadata.instance_id")
+            ids.append(instance_id)
+    if missing := sorted(set(ids) - set(tasks)):
+        raise ValueError(f"taskset: {len(missing)} prompt ids have no task dir in {tasks_dir}: {missing[:10]}")
+    return tasks, ids
 
 
 def _parse_args(recipe: dict, run_id: str, libcuda_stub: bool) -> dict:
@@ -174,7 +194,7 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
 
     os.environ.update({**R.harbor_env(recipe, run_id), **R.trainer_env(recipe)})
     os.environ.setdefault("MILES_SESSION_PUBLIC_URL", "https://tunnel.invalid/token")
-    step("inputs", lambda: _inputs(run_id), "taskset")
+    step("inputs", lambda: _inputs(run_id, tasks=R.tasks_volume(recipe) is None), "taskset")
     step("fork_markers", lambda: subprocess.run(
         [sys.executable, str(stack.MILES_SRC / "fork/tools/ledger.py"), "markers"], cwd=stack.MILES_SRC, check=True,
         capture_output=True, text=True))
@@ -192,18 +212,15 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
 
         from miles_ext.harbor import agent_function
 
-        tasks = sorted(os.listdir(R.TASKS))
-        if not tasks:
-            raise ValueError(f"taskset: no tasks in {R.TASKS}")
+        tasks, ids = _task_dirs_for_prompts(R.tasks_path(recipe), R.PROMPTS)
         config = agent_function.build_trial_config(
             {"instance_id": tasks[0]}, "http://10.0.0.1:30003/sessions/abc/v1", {"temperature": 1.0})
         env_cfg = config.environment
         EnvironmentFactory.run_preflight(env_cfg.type, env_cfg.import_path)
         EnvironmentFactory.validate_resource_policies(env_cfg)
-        rows = len(R.PROMPTS.read_text().splitlines())
         return {"agent": config.agent.import_path or str(config.agent.name), "environment": str(env_cfg.type),
                 "environment_import_path": env_cfg.import_path, "environment_kwargs": env_cfg.kwargs,
-                "tasks": len(tasks), "prompt_rows": rows}
+                "tasks": len(tasks), "prompt_rows": len(ids)}
 
     result["trial_config"] = step("trial_config", trial, "sandbox")
     result["parsed"] = step("parse_args", lambda: _parse_args(recipe, run_id, libcuda_stub), "argv")

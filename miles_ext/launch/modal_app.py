@@ -55,6 +55,7 @@ from miles_ext.recipes import recipe as R
 _SHAPE_ENV = "MILES_EXT_SHAPE"
 _LAUNCH_ENV = "MILES_EXT_LAUNCH"  # set by miles_ext.platform.launch only
 _INPUTS_ENV = "MILES_EXT_INPUTS"  # "volume": the taskset is at <results>/<run_id>/inputs, not in the image
+_TASKS_VOLUME_ENV = "MILES_EXT_TASKS_VOLUME"  # the recipe's taskset.tasks_volume volume, mounted at /datasets
 DEFAULT_RECIPE = "miles_ext/recipes/configs/qwen35-9b-swegym8-sandbox.yaml"
 LAUNCH = json.loads(os.environ[_LAUNCH_ENV]) if modal.is_local() and os.environ.get(_LAUNCH_ENV) else None
 
@@ -138,11 +139,16 @@ image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "
                                   _RETENTION_ENV: "1" if FINAL_RETENTION else "0"})
 INPUTS_ON_VOLUME = ((LAUNCH or {}).get("inputs") == "volume") if modal.is_local() else \
     os.environ.get(_INPUTS_ENV) == "volume"
-image = image.env({_INPUTS_ENV: "volume" if INPUTS_ON_VOLUME else "image"})
-if RECIPE is not None and not INPUTS_ON_VOLUME:
-    image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS)).add_local_file(
-        RECIPE["taskset"]["prompts"], str(R.PROMPTS)
-    )
+# taskset.tasks_volume: every function mounts that volume read-only (the container gets its name back
+# through the image env, as SHAPE)
+TASKS_VOLUME = ((R.tasks_volume(RECIPE) or ("",))[0] if RECIPE is not None else "") if modal.is_local() else \
+    os.environ.get(_TASKS_VOLUME_ENV, "")
+input_volumes = {R.DATASETS: modal.Volume.from_name(TASKS_VOLUME).read_only()} if TASKS_VOLUME else {}
+image = image.env({_INPUTS_ENV: "volume" if INPUTS_ON_VOLUME else "image", _TASKS_VOLUME_ENV: TASKS_VOLUME})
+if RECIPE is not None and not INPUTS_ON_VOLUME:  # local files last: Modal adds them at container start
+    if RECIPE["taskset"]["tasks_dir"]:
+        image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS))
+    image = image.add_local_file(RECIPE["taskset"]["prompts"], str(R.PROMPTS))
 
 
 def _image_commit() -> str:
@@ -187,7 +193,8 @@ def _check_shape(recipe: dict):
         raise RuntimeError(f"recipe shape {R.shape(recipe)} != the function's {SHAPE}; relaunch with the same recipe")
 
 
-@app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume}, gpu="H100", cpu=4, memory=32768,
+@app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume, **input_volumes}, gpu="H100", cpu=4,
+              memory=32768,
               timeout=1800)
 def check(recipe: dict, run_id: str):
     """Dry run inside the fork image: the platform's deep check (miles_ext.platform.validate) on one GPU."""
@@ -204,7 +211,8 @@ def check(recipe: dict, run_id: str):
     print("check: ok")
 
 
-@app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume}, cpu=4, memory=16384, timeout=900)
+@app.function(image=image, secrets=secrets, volumes={R.MODELS: models_volume, **input_volumes}, cpu=4, memory=16384,
+              timeout=900)
 def check_cpu(recipe: dict, run_id: str):
     """Miles' argument validation without a GPU: FSDP as is, Megatron with the CUDA toolkit's libcuda stub."""
     from miles_ext.platform.validate import _parse_args
@@ -232,7 +240,7 @@ def _image_info() -> dict:
     memory=SHAPE["memory_gib"] * 1024,
     ephemeral_disk=SHAPE["disk_gib"] * 1024 if SHAPE.get("disk_gib") else None,
     secrets=secrets,
-    volumes={R.MODELS: models_volume, R.RESULTS: results_volume, compile_cache.MOUNT: cache_volume},
+    volumes={R.MODELS: models_volume, R.RESULTS: results_volume, compile_cache.MOUNT: cache_volume, **input_volumes},
     timeout=int(SHAPE["timeout_hours"] * HOURS),
     single_use_containers=True,
 )
@@ -260,7 +268,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     models_volume.reload()
     results_volume.reload()  # see checkpoints committed by an earlier container
     if INPUTS_ON_VOLUME:
-        _inputs(run_id)
+        _inputs(run_id, tasks=R.tasks_volume(recipe) is None)
     # a relaunch of a finished run (the caller's timer fired after the final save): every
     # rank returns before Ray starts, so it costs a container start, not a cluster start
     if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):
