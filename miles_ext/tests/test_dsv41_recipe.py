@@ -11,6 +11,7 @@ from miles_ext.recipes import recipe as R
 
 ROOT = Path(__file__).resolve().parents[2]
 DSV41 = "dsv41-flash-tb4-overfit16.yaml"
+RELEASED = "/models/deepseek-ai--DeepSeek-V4.1-Flash-1017/1bae0e1088993b9b82de08f59de5be5a34e42170"
 
 
 def _recipe(name: str = DSV41, **over) -> dict:
@@ -28,8 +29,8 @@ def test_dsv41_argv():
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
     # the engines serve the released FP8 + FP4 checkpoint, the trainer loads the BF16 cast
-    assert _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash"
-    assert _value(argv, "--ref-load") == "/models/DeepSeek-V4.1-bf16"
+    assert _value(argv, "--hf-checkpoint") == RELEASED
+    assert _value(argv, "--ref-load") == "/models/DeepSeek-V4.1-Flash-1017-bf16"
     assert argv.count("--ref-load") == 1
     assert _value(argv, "--custom-weight-quantizer-path").endswith("quantize_like_checkpoint")
     assert _value(argv, "--custom-placement-hook-path") == "miles_ext.obs.gpu_telemetry.start"
@@ -77,7 +78,7 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
     r = _recipe(rollout={"precision": "bf16", "expert_qat": False})
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash"
+    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == RELEASED
     assert "--custom-weight-quantizer-path" not in argv
     assert R.trainer_env(r)["SGLANG_DSV4_FP4_EXPERTS"] == "0"
 
