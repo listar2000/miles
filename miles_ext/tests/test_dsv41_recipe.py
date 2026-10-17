@@ -1,6 +1,7 @@
 """The DeepSeek V4.1 overfitting-run recipe (ext-012): the argv and env it resolves to, and the
 layouts it refuses. The Qwen recipes' argv is unchanged by the new fields (defaults)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,8 @@ def test_dsv41_argv():
         "--no-save-optim",
     ):
         assert flag in argv, flag
+    # text-only engines, so R3 capture runs (vision_topk skips it)
+    assert json.loads(_value(argv, "--sglang-json-model-override-args")) == {"vision_n_layers": 0}
     assert _value(argv, "--dynamic-sampling-filter-path").endswith("check_reward_nonzero_std")
     for flag in ("--use-dynamic-batch-size", "--attention-backend", "--wandb-key", "--no-load-optim"):
         assert flag not in argv, flag
