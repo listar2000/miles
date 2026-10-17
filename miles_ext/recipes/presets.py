@@ -75,7 +75,7 @@ PRESETS: dict[str, Preset] = {
     # loads the BF16 cast of it through mbridge.
     "deepseek-v4.1-flash": Preset(
         hf_repo="deepseek-ai/DeepSeek-V4.1-Flash",
-        train_dir_name="DeepSeek-V4.1-Flash-bf16",
+        train_dir_name="DeepSeek-V4.1-bf16",  # the BF16 cast's directory name under /models
         tito_model="deepseekv41",
         tool_call_parser="deepseekv41",
         reasoning_parser="deepseek-v41",

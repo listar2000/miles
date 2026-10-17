@@ -28,21 +28,36 @@ def test_dsv41_argv():
     argv = R.miles_args(r, "run1", resume=False)
     # the engines serve the released FP8 + FP4 checkpoint, the trainer loads the BF16 cast
     assert _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash"
-    assert _value(argv, "--ref-load") == "/models/DeepSeek-V4.1-Flash-bf16"
+    assert _value(argv, "--ref-load") == "/models/DeepSeek-V4.1-bf16"
     assert argv.count("--ref-load") == 1
     assert _value(argv, "--custom-weight-quantizer-path").endswith("quantize_like_checkpoint")
     assert "--mxfp4-qat-routed-experts" in argv and "--stream-optimizer-state-to-disk" in argv
     assert _value(argv, "--stream-optimizer-state-moment-dtype") == "bf16"
     assert "--grad-reduce-in-bf16" in argv and "--accumulate-allreduce-grads-in-fp32" not in argv
-    for flag, value in (("--tensor-model-parallel-size", "4"), ("--pipeline-model-parallel-size", "2"),
-                        ("--context-parallel-size", "2"), ("--expert-model-parallel-size", "8"),
-                        ("--rollout-num-gpus-per-engine", "8"), ("--sglang-ep-size", "8"),
-                        ("--actor-num-nodes", "2"), ("--rollout-num-gpus", "16"),
-                        ("--micro-batch-size", "1"), ("--tis-clip-low", "0.5"), ("--max-weight-staleness", "4"),
-                        ("--sglang-context-length", "262144"), ("--max-seq-len", "262144"), ("--tito-model", "deepseekv41")):
+    for flag, value in (
+        ("--tensor-model-parallel-size", "4"),
+        ("--pipeline-model-parallel-size", "2"),
+        ("--context-parallel-size", "2"),
+        ("--expert-model-parallel-size", "8"),
+        ("--rollout-num-gpus-per-engine", "8"),
+        ("--sglang-ep-size", "8"),
+        ("--actor-num-nodes", "2"),
+        ("--rollout-num-gpus", "16"),
+        ("--micro-batch-size", "1"),
+        ("--tis-clip-low", "0.5"),
+        ("--max-weight-staleness", "4"),
+        ("--sglang-context-length", "262144"),
+        ("--max-seq-len", "262144"),
+        ("--tito-model", "deepseekv41"),
+    ):
         assert _value(argv, flag) == value, flag
-    for flag in ("--allgather-cp", "--use-rollout-routing-replay", "--sglang-allow-auto-truncate",
-                 "--moe-router-freeze-gate", "--no-save-optim"):
+    for flag in (
+        "--allgather-cp",
+        "--use-rollout-routing-replay",
+        "--sglang-allow-auto-truncate",
+        "--moe-router-freeze-gate",
+        "--no-save-optim",
+    ):
         assert flag in argv, flag
     assert _value(argv, "--dynamic-sampling-filter-path").endswith("check_reward_nonzero_std")
     for flag in ("--use-dynamic-batch-size", "--attention-backend", "--wandb-key", "--no-load-optim"):
@@ -68,20 +83,30 @@ def test_qwen_recipes_keep_their_defaults():
     assert _value(argv, "--attention-backend") == "flash" and "--use-dynamic-batch-size" in argv
     assert _value(argv, "--dynamic-sampling-filter-path").endswith("check_no_aborted")
     assert "--accumulate-allreduce-grads-in-fp32" in argv
-    for flag in ("--grad-reduce-in-bf16", "--expert-model-parallel-size", "--stream-optimizer-state-to-disk", "--no-save-optim",
-                 "--use-rollout-routing-replay", "--sglang-context-length", "--micro-batch-size"):
+    for flag in (
+        "--grad-reduce-in-bf16",
+        "--expert-model-parallel-size",
+        "--stream-optimizer-state-to-disk",
+        "--no-save-optim",
+        "--use-rollout-routing-replay",
+        "--sglang-context-length",
+        "--micro-batch-size",
+    ):
         assert flag not in argv, flag
     assert R.trainer_env(_recipe("qwen35-9b-swegym8-sail.yaml")) == {}
 
 
-@pytest.mark.parametrize("over, message", [
-    ({"optimizer": {"offload": None}}, "optimizer.offload disk"),
-    ({"parallel": {"ep": 4}}, "expert data parallel size 1"),
-    ({"parallel": {"ep": 16}}, "ep 16 must divide"),
-    ({"rollout": {"precision": "fp4"}}, "rollout.precision must be one of"),
-    ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
-    ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
-])
+@pytest.mark.parametrize(
+    "over, message",
+    [
+        ({"optimizer": {"offload": None}}, "optimizer.offload disk"),
+        ({"parallel": {"ep": 4}}, "expert data parallel size 1"),
+        ({"parallel": {"ep": 16}}, "ep 16 must divide"),
+        ({"rollout": {"precision": "fp4"}}, "rollout.precision must be one of"),
+        ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
+        ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
+    ],
+)
 def test_dsv41_refuses(over, message):
     with pytest.raises(ValueError, match=message):
         R.validate(_recipe(**over), local_inputs=False)
@@ -92,12 +117,24 @@ def test_rollout_gpus_split_into_engines():
         R.validate(_recipe("qwen35-9b-swegym8-sail.yaml", rollout={"gpus_per_engine": 8}), local_inputs=False)
 
 
-@pytest.mark.parametrize("over", [
-    {"rollout": {"precision": "fp8_fp4"}},
-    {"optimizer": {"offload": "disk"}},
-    {"optimizer": {"grad_dtype": "bf16"}},
-    {"checkpoint": {"save_optimizer": False}},
-])
-def test_fsdp_refuses_megatron_only_fields(over):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "over, message",
+    [
+        (
+            {"rollout": {"precision": "fp8_fp4"}},
+            "rollout.precision must be one of",
+        ),  # the Qwen presets serve bf16 only
+        ({"optimizer": {"offload": "disk"}}, "megatron only"),
+        ({"optimizer": {"grad_dtype": "bf16"}}, "megatron only"),
+        ({"checkpoint": {"save_optimizer": False}}, "megatron only"),
+    ],
+)
+def test_fsdp_refuses_megatron_only_fields(over, message):
+    with pytest.raises(ValueError, match=message):
         R.validate(_recipe("qwen35-9b-swegym8-sail.yaml", **over), local_inputs=False)
+
+
+def test_overfit_task_list_fills_a_step():
+    tasks = (ROOT / "miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.tasks").read_text().splitlines()
+    ids = [line.split()[0] for line in tasks if line.strip() and not line.startswith("#")]
+    assert len(set(ids)) == len(ids) == _recipe()["algorithm"]["rollout_batch_size"]
