@@ -13,7 +13,7 @@ import pytest
 # modules by import_module: the package re-exports functions named like its modules (validate, teardown, schema)
 C, S, SEC, T, V, W = (importlib.import_module(f"miles_ext.platform.{m}")
                       for m in ("checkpoints", "schema", "secrets", "teardown", "validate", "weights"))
-from miles_ext.platform.target import Target, run_secret_name
+from miles_ext.platform.target import Target, compile_cache_volume_name, run_secret_name
 from miles_ext.recipes import recipe as R
 
 ROOT = Path(inspect.getfile(R)).parents[2]
@@ -86,6 +86,7 @@ def test_resource_names_option_a():
     assert names["sandbox_apps"] == ["rl-dev-0bebf81d-sbx"]
     assert names["secret"] == "rl-dev-0bebf81d-secret"
     assert names["progress_dict"] == "rl-dev-progress"
+    assert names["compile_cache_volume"] == "rl-dev-compile-cache"
     assert names["results_dir"] == f"{RUN}/" and f"run:{RUN}" in names["progress_keys"]
     recipe = Target.of(OPTION_A).apply(_recipe())
     R.validate(recipe, local_inputs=False)
@@ -110,6 +111,11 @@ def test_option_a_helper_and_queue_names():
     assert helper_app_name(t) == "rl-dev-helpers" and completion_queue_name(t) == "rl-dev-completion"
     assert helper_app_name(Target.of(DEV)) == "miles-platform"  # dev keeps its names until cleanup
     assert completion_queue_name(Target.of(DEV)) == "miles-fork-completion"
+
+
+def test_compile_cache_volume_names():
+    assert compile_cache_volume_name(Target.of(OPTION_A)) == "rl-dev-compile-cache"
+    assert compile_cache_volume_name(Target.of(DEV)) == compile_cache_volume_name(Target()) == "miles-compile-cache"
 
 
 def test_wandb_project_and_name():
