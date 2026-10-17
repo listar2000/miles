@@ -19,6 +19,8 @@ from harbor.agents.installed import mini_swe_agent as stock
 from harbor.environments.base import BaseEnvironment
 from harbor.models.task.config import NetworkMode, NetworkPolicy
 
+from miles_ext.harbor import context_exit
+
 _PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)
 
 _UV_PATH = 'if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; else export PATH="$HOME/.local/bin:$PATH"; fi; '
@@ -43,16 +45,20 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         probe = await environment.exec(command=_UV_PATH + "command -v mini-swe-agent")
         if probe.return_code != 0:
-            return await super().install(environment)
-        output_cap_b64 = base64.b64encode(
-            stock._OUTPUT_CAP_PATCH.format(cap_bytes=stock.MAX_COMMAND_OUTPUT_BYTES).encode()
-        ).decode()
-        step_timing_b64 = base64.b64encode(stock._STEP_TIMING_PATCH.encode()).decode()
+            await super().install(environment)
+        else:
+            output_cap_b64 = base64.b64encode(
+                stock._OUTPUT_CAP_PATCH.format(cap_bytes=stock.MAX_COMMAND_OUTPUT_BYTES).encode()
+            ).decode()
+            step_timing_b64 = base64.b64encode(stock._STEP_TIMING_PATCH.encode()).decode()
+            await self._run_patches(environment, output_cap_b64, step_timing_b64)
+        # after Harbor's step-timing patch, whose query line it wraps
+        await self._run_patches(environment, base64.b64encode(context_exit.PATCH.encode()).decode())
+
+    async def _run_patches(self, environment: BaseEnvironment, *scripts_b64: str) -> None:
+        python = '"$(uv tool dir)/mini-swe-agent/bin/python"'
         await self.exec_as_agent(
             environment,
-            command=(
-                "set -euo pipefail; " + _UV_PATH
-                + f'echo {output_cap_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" - && '
-                + f'echo {step_timing_b64} | base64 -d | "$(uv tool dir)/mini-swe-agent/bin/python" -'
-            ),
+            command="set -euo pipefail; " + _UV_PATH
+            + " && ".join(f"echo {b64} | base64 -d | {python} -" for b64 in scripts_b64),
         )

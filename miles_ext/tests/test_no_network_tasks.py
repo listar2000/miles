@@ -63,7 +63,8 @@ def test_public_task_is_set_up_unchanged(monkeypatch):
 def _upstream_config(metadata, session_url, request_kwargs):
     return SimpleNamespace(
         agent=SimpleNamespace(
-            name=metadata["agent_name"], import_path=None, override_setup_timeout_sec=None, extra_allowed_hosts=[]
+            name=metadata["agent_name"], import_path=None, override_setup_timeout_sec=None, extra_allowed_hosts=[],
+            kwargs={"max_seq_len": 196608}, env={},
         )
     )
 
@@ -74,6 +75,7 @@ def test_agent_phase_allows_the_session_tunnel_host(monkeypatch):
     monkeypatch.setenv("MILES_SESSION_PUBLIC_URL", "https://abc123.r9.modal.host/tok")
     config = af.build_trial_config({"instance_id": "x"}, "http://10.0.0.1:30000/sessions/s/v1", {})
     assert config.agent.extra_allowed_hosts == ["abc123.r9.modal.host"]
+    assert config.agent.env == {"MSWEA_CONTEXT_TOKENS": "196608"}
 
 
 def test_host_harness_adds_no_allowlist(monkeypatch):

@@ -49,7 +49,7 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import upstream
+from miles_ext.harbor import context_exit, upstream
 from miles_ext.recipes import recipe as R
 
 hf = upstream.harbor_agent_function()
@@ -158,6 +158,9 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     config = hf.build_trial_config({**metadata, "agent_name": harness}, session_url, request_kwargs)
     if harness == SANDBOX_HARNESS:
         config.agent.extra_allowed_hosts = [*config.agent.extra_allowed_hosts, urlsplit(session_url).hostname]
+        # the in-sandbox agent ends "ContextExhausted" at the window instead of three cut-off turns (context_exit.py)
+        if max_seq_len := config.agent.kwargs.get("max_seq_len"):
+            config.agent.env = {**config.agent.env, context_exit.ENV_TOKENS: str(max_seq_len)}
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path
