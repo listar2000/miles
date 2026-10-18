@@ -23,8 +23,9 @@ decided to keep the one cut-off turn the Miles session records, as on-policy dat
 - `SandboxMiniSweAgent.install` copies `context_exit.py` (self-contained: it imports only mini-swe-agent) into the
   sandbox's mini-swe-agent environment as `miles_mswea_context.py` and imports it once, after Harbor's patches;
   `build_cli_flags` adds `--agent-class=miles_mswea_context.ContextExitAgent`.
-- `build_trial_config` sets the agent env `MSWEA_CONTEXT_TOKENS` = the agent's `max_seq_len` (Harbor applies agent env to
-  every agent exec). Unset, the class behaves like `InteractiveAgent`. `MSWEA_CONTEXT_MIN_REPLY` (default 4096) is the
+- `build_trial_config` sets the agent env `MSWEA_CONTEXT_LIMIT` = the agent's `max_seq_len` (Harbor applies agent env to
+  every agent exec; the name avoids the words Harbor treats as secret, whose values it replaces with `[REDACTED]` in
+  every trial file). Unset, the class behaves like `InteractiveAgent`. `MSWEA_CONTEXT_MIN_REPLY` (default 4096) is the
   reply reserve.
 - `populate_context_post_run` records mini-swe-agent's exit status as agent metadata `mswea_exit_status` (as the host
   harness does).
