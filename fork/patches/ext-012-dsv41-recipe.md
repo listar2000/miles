@@ -53,7 +53,7 @@ stack end to end before a run on the full task set. The reason for each value: L
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,
-`miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.yaml` and `.tasks`, tests in
+`miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.yaml` and `.tasks`, `dsv41-flash-overfit8.yaml` and `.tasks` (8 tasks x 8 samples, 3 nodes, 2 x TP4 engines), tests in
 `miles_ext/tests/test_dsv41_recipe.py`. Verify with `--check-only` on the host before the
 launch. On a sync, diff the preset against `scripts/run_deepseek_v4_1.py` (`_train`).
 

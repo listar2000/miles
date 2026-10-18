@@ -1,0 +1,93 @@
+# DeepSeek V4.1-Flash-1017, full-parameter RL "overfitting run" on 8 tasks: the same 8 tasks every
+# step, 8 samples each (64 trials per step), picked from the 1017 pass@3 eval for mixed results (see
+# the .tasks file). It checks the whole V4.1 training stack end to end at 256k (weight sync, QAT, R3,
+# fully async, memory) and that reward on the trained tasks climbs. Three B300:8 nodes: 16 trainer
+# GPUs on the first two (TP4 PP2 CP2 EP8, one pipeline stage per node, Adam streamed to local disk,
+# bf16 gradients) and two TP4/EP4 engines on the third, serving the released FP8 + FP4 checkpoint
+# text-only. 2 x TP4 decoded 1.4-1.6x faster than 1 x TP8 at the same load in the 1017 eval.
+# Mini-swe-agent in Sail sandboxes, started in each task's own working directory.
+# Needs: MILES_WEIGHTS_VOLUME=miles-dsv41-ckpt (the 1017 snapshot from prepare_weights at
+# model.revision and DeepSeek-V4.1-Flash-1017-bf16, its BF16 cast); MILES_DATA = a dir holding
+# prompts/overfit8.jsonl (the .tasks file says how it is made); SAIL_API_KEY and WANDB_API_KEY in the
+# launcher's .env.
+name: dsv41-flash-overfit8
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 3
+  train_gpus: 16
+  cpu: 32
+  # the layer-input checkpoints sit in pinned host memory (ckpt_offload below): 758 GiB peak per
+  # trainer node at 256k in the trainer's 2-node replay
+  memory_gib: 1024
+  disk_gib: 3072  # Modal's max; Adam's state is ~2.0 TiB per trainer node (8 B/param, bf16 moments)
+  timeout_hours: 24
+parallel:
+  tp: 4
+  pp: 2
+  cp: 2
+  ep: 8
+optimizer:
+  offload: disk
+  moment_dtype: bf16
+  grad_dtype: bf16
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 262144
+  max_running_requests: 128
+  expert_qat: true
+taskset:
+  tasks_volume: miles-datasets:/tb4t-20261016/tasks
+  prompts: $MILES_DATA/prompts/overfit8.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  # the 1017 eval's agent, so its pass rates carry over
+  max_steps: 256
+  exec_timeout: 300
+  timeout: 7200
+  trial_timeout: 10800
+  verifier_timeout: 3600
+  setup_timeout: 1800
+sandbox:
+  provider: sail
+  lifetime_secs: 14400
+  idle_secs: 3600
+  build_timeout_multiplier: 3  # 600 s task default -> 1,800 s
+algorithm:
+  mode: fully_async
+  num_rollout: 2  # two steps, then stop and analyze
+  rollout_batch_size: 8  # = the task count
+  n_samples: 8  # global batch 64 = one optimizer step per rollout, which --skip-actor-forward-only needs
+  temperature: 1.0
+  max_response_len: 32768
+  max_seq_len: 262144
+  lr: 1.0e-6
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0
+  tis_clip_low: 0.5
+  max_weight_staleness: 4
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  # context-exhausted reward-0 samples stay in as failures; only all-equal groups are dropped
+  group_filter: nonzero_std
+async:
+  max_concurrent_samples: 128  # two batches in flight
+checkpoint:
+  save_interval: 2  # weights only, at the last step (Adam's ~4.4 TB is not saved)
+  keep: 1
+  save_optimizer: false
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab
+extra_args:
+  # old log-probs from the training forward (one optimizer step per rollout), saving the ~15 min
+  # forward-only pass; TIS still compares trainer and rollout log-probs
+  - --skip-actor-forward-only
+  # each layer's checkpointed input waits in pinned host memory between forward and backward
+  # (ext-020); with fix-011 this is what fits 256k on two trainer nodes
+  - --custom-megatron-init-path
+  - miles_ext.memory.ckpt_offload.install

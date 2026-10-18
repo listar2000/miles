@@ -145,3 +145,19 @@ def test_overfit_task_list_fills_a_step():
     tasks = (ROOT / "miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.tasks").read_text().splitlines()
     ids = [line.split()[0] for line in tasks if line.strip() and not line.startswith("#")]
     assert len(set(ids)) == len(ids) == _recipe()["algorithm"]["rollout_batch_size"]
+
+
+def test_overfit8_one_step_per_rollout_at_256k():
+    r = _recipe("dsv41-flash-overfit8.yaml")
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    tasks = (ROOT / "miles_ext/recipes/configs/dsv41-flash-overfit8.tasks").read_text().splitlines()
+    ids = [line.split()[0] for line in tasks if line.strip() and not line.startswith("#")]
+    assert len(set(ids)) == len(ids) == r["algorithm"]["rollout_batch_size"]
+    # --skip-actor-forward-only needs exactly one optimizer step per rollout
+    assert int(_value(argv, "--global-batch-size")) == r["algorithm"]["rollout_batch_size"] * r["algorithm"]["n_samples"]
+    assert "--skip-actor-forward-only" in argv
+    assert _value(argv, "--custom-megatron-init-path") == "miles_ext.memory.ckpt_offload.install"
+    for flag, value in (("--rollout-num-gpus", "8"), ("--rollout-num-gpus-per-engine", "4"),
+                        ("--actor-num-nodes", "2"), ("--max-seq-len", "262144")):
+        assert _value(argv, flag) == value, flag
