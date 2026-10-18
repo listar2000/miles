@@ -205,6 +205,8 @@ async def run(
     # Harbor says "Submitted" whenever the verifier ran; keep the agent's ContextExhausted so filters can tell it apart
     if out["exit_status"] == "Submitted" and out["agent_metrics"].get("mswea_exit_status") == context_exit.EXIT_STATUS:
         out["exit_status"] = context_exit.EXIT_STATUS
+        if os.environ.get("MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO") == "1":
+            out["reward"] = 0.0
     out["trial_dir"] = str(trial.paths.trial_dir)
     logger.info(f"Harbor trial {instance_id}: exit_status={out['exit_status']} reward={out['reward']}")
     return out

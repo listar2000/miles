@@ -28,7 +28,9 @@ def test_exit_status_reaches_agent_metadata(tmp_path):
     assert context.metadata["mswea_exit_status"] == context_exit.EXIT_STATUS
 
 
-def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):
+def _run(monkeypatch, tmp_path, agent_status):
+    """af.run on a stand-in trial the verifier scored 1.0 and whose agent ended with agent_status."""
+
     class _Trial:
         paths = SimpleNamespace(trial_dir=tmp_path)
 
@@ -42,16 +44,26 @@ def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):
     monkeypatch.setattr("harbor.trial.trial.Trial", _Trial)
     monkeypatch.setattr(af, "build_trial_config", lambda *a: SimpleNamespace(task=SimpleNamespace(path=None)))
     monkeypatch.setattr(af.hf, "_ensure_provider_key", lambda: None)
-    for agent_status, expected in [(context_exit.EXIT_STATUS, context_exit.EXIT_STATUS), ("Submitted", "Submitted")]:
-        monkeypatch.setattr(
-            af.hf,
-            "trial_result_to_metadata",
-            lambda r, s=agent_status: {
-                "reward": 0.0,
-                "exit_status": "Submitted",
-                "eval_report": {},
-                "agent_metrics": {"mswea_exit_status": s},
-            },
-        )
-        out = asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
-        assert out["exit_status"] == expected
+    monkeypatch.setattr(
+        af.hf,
+        "trial_result_to_metadata",
+        lambda r: {
+            "reward": 1.0,
+            "exit_status": "Submitted",
+            "eval_report": {},
+            "agent_metrics": {"mswea_exit_status": agent_status},
+        },
+    )
+    return asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
+
+
+def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):
+    for agent_status in (context_exit.EXIT_STATUS, "Submitted"):
+        out = _run(monkeypatch, tmp_path, agent_status)
+        assert out["exit_status"] == agent_status and out["reward"] == 1.0
+
+
+def test_context_exhausted_scores_zero_when_switched_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO", "1")
+    assert _run(monkeypatch, tmp_path, context_exit.EXIT_STATUS)["reward"] == 0.0
+    assert _run(monkeypatch, tmp_path, "Submitted")["reward"] == 1.0
