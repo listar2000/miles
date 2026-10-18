@@ -75,7 +75,7 @@ DEFAULTS: dict[str, Any] = {
         # Harbor installs the harness in each trial's sandbox; its own cap (360 s) is too short
         # for a cold mini-swe-agent install on a busy provider
         "setup_timeout": 1800,
-        "cwd": None,  # None: mini-swe-agent's swebench.yaml (/testbed)
+        "cwd": None,  # None: where Harbor starts the agent (task.toml workdir, else the image WORKDIR)
     },
     "sandbox": {
         "provider": "modal",  # or "sail"

@@ -31,8 +31,8 @@ import path, for providers the pinned Harbor lacks, e.g.
 ``miles_ext.harbor.sail:SailEnvironment``). Upstream's ``_environment_config``
 only knows the first, so this module replaces it on the loaded upstream
 module; with no import path set it delegates unchanged.
-Both mini-swe-agent harnesses use the same settings: mini.yaml templates,
-swebench.yaml shell env (cwd ``MSWEA_CWD`` or /testbed), ``HARBOR_AGENT_MAX_ITERATIONS``
+Both mini-swe-agent harnesses use the same settings: mini.yaml templates, swebench.yaml shell env (in-sandbox cwd
+``MSWEA_CWD``, else where Harbor starts the agent; the host harness keeps swebench.yaml's /testbed), ``HARBOR_AGENT_MAX_ITERATIONS``
 steps, ``MSWEA_EXEC_TIMEOUT`` seconds per command, sampling params from the rollout.
 Harbor installs the harness in each trial's sandbox; ``HARBOR_AGENT_SETUP_TIMEOUT_SEC``
 (the recipe's ``agent.setup_timeout``) caps that install instead of Harbor's 360 s.
@@ -69,8 +69,9 @@ def _shell_config() -> dict[str, Any]:
 
     env_cfg = load_builtin_config("benchmarks/swebench.yaml").get("environment", {})
     return {
-        # SWE-Gym images work in /testbed; Terminal-Bench tasks in /app
-        "cwd": os.getenv("MSWEA_CWD") or env_cfg.get("cwd") or "/testbed",
+        # "": mini-swe-agent runs commands where Harbor started it, the task's task.toml workdir
+        # or else its image's WORKDIR; swebench.yaml's /testbed fits only SWE-bench images
+        "cwd": os.getenv("MSWEA_CWD") or "",
         "env": dict(env_cfg.get("env") or {}),
         "timeout": int(os.getenv("MSWEA_EXEC_TIMEOUT") or env_cfg.get("timeout", 60)),
     }
