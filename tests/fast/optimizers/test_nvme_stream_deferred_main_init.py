@@ -1,4 +1,5 @@
-"""[fork fix-010] The NVMe store's fp32 mains are written once, by whichever load path runs, and filled before use if none did."""
+"""[fork fix-010] [fork fix-021] The NVMe store's fp32 mains: written once by a load path,
+or built by the first step on a fresh start."""
 
 import os
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ def _store(tmp_path, name: str):
     store._fp32_adam, store._allow_fresh_state = None, False
     store._rank, store._instance, store.uid = 0, 0, 0
     store._main_ready = False
+    store._main_from_model = False
     return store, params, bucket
 
 
@@ -106,3 +108,73 @@ def test_resume_from_saved_state_does_not_rewrite_the_mains(tmp_path, monkeypatc
         assert torch.equal(main, param.detach().float())
     os.close(saved_bucket.fd)
     os.close(bucket.fd)
+
+
+# [fork fix-021] begin
+def _steppable(store, bucket):
+    """step() with Megatron's grad and copy-back plumbing stubbed; Adam adds 1 to every main and records what it saw."""
+    seen = []
+
+    def adam_step():
+        seen.append([e.main_param.clone() for e in bucket.entries])
+        for entry in bucket.entries:
+            entry.main_param.add_(1)
+            state = bucket.adam.state.setdefault(entry.main_param, {})
+            for segment in ("exp_avg", "exp_avg_sq"):  # created by the first step, like Adam's
+                state.setdefault(segment, torch.zeros_like(entry.main_param))
+
+    bucket.adam.step = adam_step
+    store.dist_opt.config = SimpleNamespace(clip_grad=0.0)
+    store._grad_norm = None
+    for name in ("_sync_lr_wd", "_attach_grads", "_detach_grads", "_copy_main_to_model_params"):
+        setattr(store, name, lambda *args: None)
+    return seen
+
+
+def _reads(monkeypatch) -> list[int]:
+    read, real = [0], os.preadv
+
+    def counting(fd, buffers, offset):
+        read[0] += (n := real(fd, buffers, offset))
+        return n
+
+    monkeypatch.setattr(nvme_stream.os, "preadv", counting)
+    return read
+
+
+def test_the_first_step_builds_the_mains_from_the_model_params_without_reading_them(tmp_path, monkeypatch):
+    eager, _, eager_bucket = _store(tmp_path, "a")
+    eager.initialize_main_from_model_params()
+    eager_seen = _steppable(eager, eager_bucket)
+    eager.step()
+    lazy, params, lazy_bucket = _store(tmp_path, "b")
+    lazy.defer_main_to_model_params()
+    lazy_seen = _steppable(lazy, lazy_bucket)
+    read = _reads(monkeypatch)
+
+    lazy.step()
+
+    assert read[0] == 0
+    assert all(torch.equal(a, b) for a, b in zip(lazy_seen[0], eager_seen[0], strict=True))
+    assert all(
+        torch.equal(a, b) for a, b in zip(_mains_on_disk(lazy_bucket), _mains_on_disk(eager_bucket), strict=True)
+    )
+    lazy.step()  # the second step reads what the first one wrote
+    assert read[0] > 0
+    assert all(torch.equal(main, param.detach().float() + 1) for main, param in zip(lazy_seen[1], params, strict=True))
+    os.close(eager_bucket.fd)
+    os.close(lazy_bucket.fd)
+
+
+def test_a_save_before_the_first_step_writes_the_mains(tmp_path):
+    store, params, bucket = _store(tmp_path, "a")
+    store.defer_main_to_model_params()
+
+    store.save_to(str(tmp_path / "ckpt"))
+
+    for main, param in zip(_mains_on_disk(bucket), params, strict=True):
+        assert torch.equal(main, param.detach().float())
+    os.close(bucket.fd)
+
+
+# [fork fix-021] end
