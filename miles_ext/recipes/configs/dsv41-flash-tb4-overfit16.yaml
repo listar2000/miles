@@ -49,7 +49,6 @@ agent:
   trial_timeout: 10800
   verifier_timeout: 3600
   setup_timeout: 1800
-  cwd: /app
 sandbox:
   provider: sail
   lifetime_secs: 14400
