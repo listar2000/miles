@@ -1230,6 +1230,20 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "``def hook(args, pgs: dict[str, PlacementGroupInfo]) -> None``."
                 ),
             )
+            # [fork hook-003]
+            parser.add_argument(
+                "--custom-pre-trainer-hook-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to an async function train_async.py awaits after the rollout components exist and "
+                    "before it reaches the trainer, e.g. to start rollout 0 while a separately deployed trainer is "
+                    "still starting. It returns that rollout's task, or None to keep the default order; with a "
+                    "task, the driver skips the initial weight push (the engines serve the --hf-checkpoint the "
+                    "trainer starts from). Signature: ``async def hook(args, inference_controller, "
+                    "rollout_executor) -> asyncio.Task | None``."
+                ),
+            )
             parser.add_argument(
                 "--p2p-transfer-timeout",
                 type=float,

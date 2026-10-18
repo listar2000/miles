@@ -13,6 +13,7 @@ from miles.utils.arguments import parse_args, validate_async_off_policy_correcti
 from miles.utils.async_utils import Disposer, eager_create_task, with_disposer
 from miles.utils.data import remove_rollout_data_refs, remove_train_output_refs
 from miles.utils.ft_utils.mini_ft_controller import maybe_start_mini_ft_controller
+from miles.utils.function_registry import load_function  # [fork hook-003]
 from miles.utils.misc import should_run_periodic_action
 from miles.utils.orchestration_utils import init_orchestration_script
 
@@ -30,6 +31,12 @@ async def train(args, *, disposer: Disposer):
     inference_controller, rollout_executor, num_rollout_per_epoch = await create_rollout_components(args)
     disposer.add(inference_controller, rollout_executor)
 
+    early_rollout = None  # [fork hook-003]
+    if args.custom_pre_trainer_hook_path:  # [fork hook-003]
+        early_rollout = await load_function(args.custom_pre_trainer_hook_path)(
+            args, inference_controller, rollout_executor
+        )
+
     # create the actor and critic models
     actor_model, critic_model = await create_training_models(args, rollout_executor)
     disposer.add(critic_model, actor_model)
@@ -38,7 +45,8 @@ async def train(args, *, disposer: Disposer):
     maybe_start_mini_ft_controller(args)
 
     # always update weight first so that sglang has the loaded weights from training.
-    await update_weights(args, actor_model, rollout_executor, inference_controller)
+    if early_rollout is None:  # [fork hook-003]
+        await update_weights(args, actor_model, rollout_executor, inference_controller)
 
     if args.check_weight_update_equal:
         await inference_controller.check_weights(
@@ -78,7 +86,9 @@ async def train(args, *, disposer: Disposer):
         return await rollout_executor.get(rollout_id)
 
     # async train loop.
-    rollout_data_next_future = await eager_create_task(prepare_and_generate(args.start_rollout_id))
+    rollout_data_next_future = early_rollout or await eager_create_task(  # [fork hook-003]
+        prepare_and_generate(args.start_rollout_id)
+    )
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # Sync the last generation
         if rollout_data_next_future is not None:
