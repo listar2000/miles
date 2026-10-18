@@ -40,7 +40,7 @@ def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):
             return "result"
 
     monkeypatch.setattr("harbor.trial.trial.Trial", _Trial)
-    monkeypatch.setattr(af, "build_trial_config", lambda *a: None)
+    monkeypatch.setattr(af, "build_trial_config", lambda *a: SimpleNamespace(task=SimpleNamespace(path=None)))
     monkeypatch.setattr(af.hf, "_ensure_provider_key", lambda: None)
     for agent_status, expected in [(context_exit.EXIT_STATUS, context_exit.EXIT_STATUS), ("Submitted", "Submitted")]:
         monkeypatch.setattr(
