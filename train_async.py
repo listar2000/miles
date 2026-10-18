@@ -3,8 +3,10 @@ import logging
 import os
 
 from miles.ray.placement_group import (
+    connect_training_models,  # [fork fix-022]
     create_rollout_components,
     create_training_models,
+    init_training_models,  # [fork fix-022]
     maybe_start_api_server,
     update_weights,
 )
@@ -25,14 +27,25 @@ async def train(args, *, disposer: Disposer):
     validate_async_off_policy_correction(args)
     _worker_manager = init_orchestration_script(args, disposer=disposer)
 
-    # create the rollout manager, with sglang engines inside.
-    # need to initialize rollout manager first to calculate num_rollout
-    inference_controller, rollout_executor, num_rollout_per_epoch = await create_rollout_components(args)
-    disposer.add(inference_controller, rollout_executor)
+    # [fork fix-022] begin
+    if args.trainer_init_with_rollout:
+        # --num-rollout is given, so the trainer needs nothing from the rollout side until it connects.
+        (inference_controller, rollout_executor, num_rollout_per_epoch), (actor_model, critic_model) = (
+            await asyncio.gather(create_rollout_components(args), init_training_models(args))
+        )
+        disposer.add(inference_controller, rollout_executor)
+        disposer.add(critic_model, actor_model)
+        await connect_training_models(args, actor_model, rollout_executor)
+    else:
+        # create the rollout manager, with sglang engines inside.
+        # need to initialize rollout manager first to calculate num_rollout
+        inference_controller, rollout_executor, num_rollout_per_epoch = await create_rollout_components(args)
+        disposer.add(inference_controller, rollout_executor)
 
-    # create the actor and critic models
-    actor_model, critic_model = await create_training_models(args, rollout_executor)
-    disposer.add(critic_model, actor_model)
+        # create the actor and critic models
+        actor_model, critic_model = await create_training_models(args, rollout_executor)
+        disposer.add(critic_model, actor_model)
+    # [fork fix-022] end
 
     maybe_start_api_server(args, trainer_models={"actor": actor_model}, inference_controller=inference_controller)
     maybe_start_mini_ft_controller(args)

@@ -272,3 +272,37 @@ class TestTerminalLifecycle:
             events.index(event) < events.index("manager_shutdown") for event in events if event.endswith("_dispose")
         )
         assert events.index("manager_shutdown") < events.index("manager_kill")
+
+
+# [fork fix-022]
+class TestTrainerInitWithRollout:
+    async def test_the_trainer_initializes_while_the_rollout_side_starts(self, monkeypatch: pytest.MonkeyPatch):
+        """With the flag the trainer init starts before the engines are up, and connects only once both are done."""
+        events: list[str] = []
+        args = _make_args(trainer_init_with_rollout=True)
+        components = _install_driver_fakes(monkeypatch, args, events)
+        trainer_started = asyncio.Event()
+
+        async def create_rollout_components(_args: SimpleNamespace) -> tuple[Any, Any, int]:
+            await asyncio.sleep(0)
+            assert trainer_started.is_set(), "the trainer init did not start while the rollout side started"
+            events.append("rollout_ready")
+            return components.inference_controller, components.rollout_executor, 4
+
+        async def init_training_models(_args: SimpleNamespace) -> tuple[Any, Any]:
+            trainer_started.set()
+            events.append("trainer_ready")
+            return components.actor_model, None
+
+        async def connect_training_models(_args: SimpleNamespace, model: Any, executor: Any) -> None:
+            assert (model, executor) == (components.actor_model, components.rollout_executor)
+            events.append("connected")
+
+        monkeypatch.setattr(train_async_driver, "create_rollout_components", create_rollout_components)
+        monkeypatch.setattr(train_async_driver, "init_training_models", init_training_models)
+        monkeypatch.setattr(train_async_driver, "connect_training_models", connect_training_models)
+
+        await asyncio.wait_for(with_disposer(train_async_driver.train, args), timeout=10)
+
+        assert events[:3] == ["trainer_ready", "rollout_ready", "connected"]
+        assert events.index("connected") < events.index("update_weights:None")
