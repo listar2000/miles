@@ -43,6 +43,7 @@ REVIEW_PATHS = [
     "miles/rollout/filter_hub/dynamic_sampling_filters.py",
     "miles/utils/arguments.py",  # every flag recipe.py emits
     "miles/utils/chat_template_utils/tito_tokenizer.py",  # parsers in presets.py
+    "miles/utils/tracking_utils/wandb_utils.py",  # gpu_telemetry mirrors init_wandb_secondary, imports its helpers
     "train_async.py",
     "train.py",
 ]
