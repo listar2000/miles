@@ -92,6 +92,45 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
     )
 
 
+# [fork fix-011] begin
+def _release_recompute_inputs() -> None:
+    """Free each full-recompute checkpoint's detached inputs and their .grad once its backward is done.
+
+    Module state from the recompute (dispatcher probs, mHC mlp_norm_manager) otherwise keeps them alive via
+    AccumulateGrad. Grads are unchanged. MILES_RECOMPUTE_RELEASE=0 turns this off. See fork/patches/fix-011.
+    """
+    if os.environ.get("MILES_RECOMPUTE_RELEASE", "1") == "0":
+        return
+    checkpoint_fn = tensor_parallel.random.CheckpointFunction
+    original = checkpoint_fn.backward
+    if getattr(original, "miles_release", False):
+        return
+
+    def backward(ctx, *grad_outputs):
+        run_function, inputs = ctx.run_function, []
+
+        def recompute(*args):
+            inputs.extend(a for a in args if isinstance(a, torch.Tensor) and a.requires_grad)
+            return run_function(*args)
+
+        ctx.run_function = recompute
+        try:
+            return original(ctx, *grad_outputs)
+        finally:
+            ctx.run_function = run_function
+            # Rebind rather than resize the storage: an input passed to several checkpoints still
+            # backs their saved copies, which keep their own reference.
+            for t in inputs:
+                t.grad = None
+                t.data = torch.empty(0, dtype=t.dtype, device=t.device)
+
+    backward.miles_release = True
+    checkpoint_fn.backward = staticmethod(backward)
+
+
+# [fork fix-011] end
+
+
 def init(
     args,
     indep_dp_store_addr: str | None = None,
@@ -123,6 +162,7 @@ def init(
 
     # Random seeds for reproducibility.
     set_random_seed_from_args(args)
+    _release_recompute_inputs()  # [fork fix-011]
     register_hf_config_aliases()
     _build_tokenizer(args)
     # We won't use this. initialize to pass some validation in megatron.

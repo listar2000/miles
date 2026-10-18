@@ -124,3 +124,87 @@ def test_non_last_pp_stage_is_not_main_rank(monkeypatch):
     """A pp rank that is not the last pipeline stage is never the main rank."""
     _patch_state(monkeypatch, _parallel_state(tp_rank=0, pp_rank=0, pp_size=2))
     assert initialize.is_first_replica_megatron_main_rank() is False
+
+
+# [fork fix-011] begin
+class _RoutedLayer(torch.nn.Module):
+    """Keeps a tensor from its forward on the module, like the alltoall dispatcher's self.probs."""
+
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.width = width
+        self.proj = torch.nn.Linear(width, width, bias=False)
+        self.router = torch.nn.Linear(width, 4, bias=False)
+        self.probs = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        hidden = x[..., : self.width].contiguous()
+        self.probs = torch.softmax(self.router(hidden), dim=-1)
+        out = self.proj(hidden) * self.probs[..., :1]
+        return x + torch.nn.functional.pad(out, (0, x.shape[-1] - self.width))
+
+
+class TestReleaseRecomputeInputs:
+    def _train(self, monkeypatch: pytest.MonkeyPatch, release: bool) -> tuple[torch.Tensor, int]:
+        from megatron.core.tensor_parallel import random as tp_random
+
+        monkeypatch.setattr(tp_random, "_get_all_rng_states", lambda: (None, None, None))
+        monkeypatch.setattr(tp_random, "_set_all_rng_states", lambda *args, **kwargs: None)
+        original = tp_random.CheckpointFunction.__dict__["backward"]
+        width, rows = 64, 4096
+        try:
+            if release:
+                initialize._release_recompute_inputs()
+            torch.manual_seed(0)
+            layers = torch.nn.ModuleList(_RoutedLayer(width) for _ in range(4))
+            for _ in range(2):
+                hidden = torch.randn(rows, 1, width + 3, requires_grad=True)
+                for layer in layers:
+                    hidden = tp_random.checkpoint(layer, False, hidden)
+                hidden.sum().backward()
+                del hidden
+        finally:
+            tp_random.CheckpointFunction.backward = original
+        alive = {
+            t.untyped_storage().data_ptr()
+            for layer in layers
+            for t in self._graph_leaves(layer.probs)
+            if t.numel() >= rows * width
+        }
+        grads = torch.cat([p.grad.flatten() for p in layers.parameters()])
+        return grads, len(alive)
+
+    @staticmethod
+    def _graph_leaves(tensor: torch.Tensor) -> list[torch.Tensor]:
+        leaves, stack, seen = [], [tensor.grad_fn], set()
+        while stack:
+            node = stack.pop()
+            if node is None or id(node) in seen:
+                continue
+            seen.add(id(node))
+            if hasattr(node, "variable"):
+                leaves.extend([node.variable] + ([node.variable.grad] if node.variable.grad is not None else []))
+            stack.extend(next_node for next_node, _ in node.next_functions)
+        return leaves
+
+    def test_release_frees_recompute_inputs_and_keeps_grads(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Module-held recompute outputs no longer pin each layer's input and its grad; grads are unchanged."""
+        base_grads, base_alive = self._train(monkeypatch, release=False)
+        grads, alive = self._train(monkeypatch, release=True)
+
+        assert base_alive == 8  # four layers, each keeping its input and the input's grad
+        assert alive == 0
+        assert torch.equal(grads, base_grads)
+
+    def test_env_switch_leaves_megatron_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MILES_RECOMPUTE_RELEASE=0 keeps Megatron's own backward."""
+        from megatron.core.tensor_parallel import random as tp_random
+
+        monkeypatch.setenv("MILES_RECOMPUTE_RELEASE", "0")
+        original = tp_random.CheckpointFunction.__dict__["backward"]
+        initialize._release_recompute_inputs()
+
+        assert tp_random.CheckpointFunction.__dict__["backward"] is original
+
+
+# [fork fix-011] end
