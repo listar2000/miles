@@ -20,7 +20,8 @@ Numerics are unchanged: the mains equal the loaded params, as before.
 
 ## How it is applied
 `miles_plugins/optimizers/nvme_stream.py`, every spot marked `[fork fix-010]`. The "NVMe optimizer main-param
-initialization: wrote N GB" log line now appears after "Load checkpoint ...". Verify:
+initialization" log line appears after "Load checkpoint ...": "wrote N GB" when a load path wrote the mains,
+"deferred to the first step" on a fresh start (fix-021). Verify:
 `tests/fast/optimizers/test_nvme_stream_deferred_main_init.py` (CPU: written exactly once, equal to the loaded
 params; a resume via `load_from` writes nothing) and, on GPU, one such line per store after the load and no
 "no checkpoint load filled the fp32 mains" warning. On a sync, keep the flag on every path that writes the mains.
