@@ -80,6 +80,7 @@ checkpoint:
   save_interval: 2  # weights only, at the last step (Adam's ~4.4 TB is not saved)
   keep: 1
   save_optimizer: false
+  save_rollout_data: true  # a trainer failure replays on trainer nodes alone
 tracking:
   wandb_project: miles-dsv41
   wandb_entity: mobiuslab

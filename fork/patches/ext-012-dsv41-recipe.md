@@ -50,6 +50,14 @@ stack end to end before a run on the full task set. The reason for each value: L
   event dir, which defaults `--log-inference-engine-weight-checksums` on; the post-sync checksum
   crashed the FP8 + FP4 engines (dsv41-tb4-overfit16-1). Every launch passes the `--no-` flag, so a
   recipe's `extra_args` may not repeat it (reserved-flag check).
+- **Trainer allocator follows the mode.** Fully async trainers get
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`; colocated ones keep `False`, because
+  torch_memory_saver rejects expandable segments. With it off, overfit-1018-a1's step-0 cache
+  (72 GiB reserved, unallocated) fragmented step 1 into an OOM; two 256k steps fit with it on
+  (replay-r3-2, with fix-014).
+- **`checkpoint.save_rollout_data`** writes each trained batch to `<run>/rollout_data/<id>.pt`
+  (Miles `--save-debug-rollout-data`, now reserved), so a trainer failure replays on trainer
+  nodes alone. On in the overfit config.
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,

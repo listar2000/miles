@@ -145,8 +145,10 @@ DEFAULTS: dict[str, Any] = {
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
+    # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
+    # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True},
+                   "save_optimizer": True, "save_rollout_data": False},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -715,7 +717,13 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
-    args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"})]
+    if recipe["checkpoint"]["save_rollout_data"]:
+        args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
+    # Colocated trainers offload through torch_memory_saver, which rejects expandable segments; a fully
+    # async trainer owns its GPUs, and expandable segments keep its step-to-step cache from fragmenting
+    # (overfit-1018-a1's step-1 OOM, fix-014 check replay-r3-2)
+    alloc = f"expandable_segments:{fully_async}"
+    args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": alloc})]
     return args + [str(a) for a in recipe["extra_args"]]
 
 

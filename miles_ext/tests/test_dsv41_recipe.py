@@ -161,3 +161,16 @@ def test_overfit8_one_step_per_rollout_at_256k():
     for flag, value in (("--rollout-num-gpus", "8"), ("--rollout-num-gpus-per-engine", "4"),
                         ("--actor-num-nodes", "2"), ("--max-seq-len", "262144")):
         assert _value(argv, flag) == value, flag
+    # a step-1 OOM must replay on trainer nodes alone; the trainer's cache must not fragment across steps
+    assert _value(argv, "--save-debug-rollout-data") == "/results/run1/rollout_data/{rollout_id}.pt"
+    assert json.loads(_value(argv, "--train-env-vars")) == {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+
+
+def test_colocated_trainer_keeps_expandable_segments_off():
+    r = _recipe("dsv41-flash-overfit8.yaml")
+    r["algorithm"]["mode"] = "sync"  # torch_memory_saver rejects expandable segments
+    argv = R.miles_args(r, "run1", resume=False)
+    assert json.loads(_value(argv, "--train-env-vars")) == {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"}
+    assert "--save-debug-rollout-data" in argv
+    r["checkpoint"]["save_rollout_data"] = False
+    assert "--save-debug-rollout-data" not in R.miles_args(r, "run1", resume=False)

@@ -23,6 +23,7 @@ RESERVED_FLAGS = {
     "--save-hf": "checkpoint.save_hf",
     "--save-interval": "checkpoint.save_interval",
     "--save-trigger-sentinel": "platform (deadline save)",
+    "--save-debug-rollout-data": "checkpoint.save_rollout_data",
     "--wandb-project": "tracking.wandb_project",
     "--wandb-group": "platform (run id)",
     "--wandb-team": "tracking.wandb_entity",
