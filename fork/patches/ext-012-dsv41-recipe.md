@@ -55,10 +55,26 @@ stack end to end before a run on the full task set. The reason for each value: L
   torch_memory_saver rejects expandable segments. With it off, overfit-1018-a1's step-0 cache
   (72 GiB reserved, unallocated) fragmented step 1 into an OOM; two 256k steps fit with it on
   (replay-r3-2, with fix-014).
+- **`checkpoint.save_rollout_data`** writes each trained batch to `<run>/rollout_data/<id>.pt`
+  (Miles `--save-debug-rollout-data`, now reserved), so a trainer failure replays on trainer
+  nodes alone. On in the overfit config.
+- **Training-rule fields** (defaults keep the old argv): `algorithm.grpo_std_normalization`
+  (`false`: rewards centered on the group mean only, Dr. GRPO), `algorithm.per_token_loss`
+  (`--calculate-per-token-loss`), and `algorithm.loss: score_centering` (upstream's
+  `--loss-type score_centering`, arXiv 2609.20807) with `score_centering_is` and `top_logprobs`.
+  Score centering takes old log-probs from the rollout (`--use-rollout-logprobs`), so it needs no
+  forward-only pass; Miles rejects it with `--use-tis` or `--skip-actor-forward-only`, which
+  `_loss_args` and the a3 config leave out. Rejected: a second config block for score centering;
+  upstream validates its own flags (`miles/utils/score_centering.py`).
+- **`dsv41-flash-overfit8-a3`**: overfit8 with four harder tasks, no group filter (an
+  all-equal group has zero advantage either way; a1/a2 dropped ~37% of their tries waiting for
+  replacements), score centering + TIS, context-exhausted trials scored 0, staleness 1, 10 steps.
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,
-`miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.yaml` and `.tasks`, tests in
+`miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.yaml` and `.tasks`,
+`dsv41-flash-overfit8.yaml` and `.tasks` (8 tasks x 8 samples, 3 nodes, 2 x TP4 engines),
+`dsv41-flash-overfit8-a3.yaml` and `.tasks`, tests in
 `miles_ext/tests/test_dsv41_recipe.py`. Verify with `--check-only` on the host before the
 launch. On a sync, diff the preset against `scripts/run_deepseek_v4_1.py` (`_train`).
 

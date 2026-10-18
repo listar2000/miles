@@ -76,6 +76,8 @@ DEFAULTS: dict[str, Any] = {
         # for a cold mini-swe-agent install on a busy provider
         "setup_timeout": 1800,
         "cwd": None,  # None: where Harbor starts the agent (task.toml workdir, else the image WORKDIR)
+        # True: a trial that fills the context window scores 0 whatever its verifier says
+        "context_exhausted_scores_zero": False,
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -122,6 +124,15 @@ DEFAULTS: dict[str, Any] = {
         # 248k vocab): 32768 OOMed a 9B run on 4 H200s (smoke-r5-v1), so the default is 16384
         "max_tokens_per_gpu": 16384,
         "advantage_estimator": "grpo",
+        # False: rewards are only centered on the group mean, not divided by its std (Dr. GRPO)
+        "grpo_std_normalization": True,
+        # True: the loss averages over all response tokens of the batch instead of per sample
+        "per_token_loss": False,
+        # "score_centering" (arXiv 2609.20807) replaces PPO clipping and --use-tis; score_centering_is weights it
+        # ("tis" clips at tis_clip), top_logprobs is the sampler's candidates per generated token
+        "loss": "policy_loss",
+        "score_centering_is": "tis",
+        "top_logprobs": 32,
         "kl_loss_coef": 0.0,  # > 0: KL loss against the base weights (FSDP then loads a reference copy)
         "entropy_coef": 0.0,
         "seed": None,  # None: Miles' default (1234)
@@ -145,8 +156,10 @@ DEFAULTS: dict[str, Any] = {
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
+    # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
+    # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True},
+                   "save_optimizer": True, "save_rollout_data": False},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -253,6 +266,9 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.sglang_mem_fraction": {"type": "number", "nullable": True, "min": 0.05, "max": 0.95},
     "algorithm.max_tokens_per_gpu": {"type": "int", "min": 1},
     "algorithm.advantage_estimator": {"type": "str", "enum": ADVANTAGE_ESTIMATORS},
+    "algorithm.loss": {"type": "str", "enum": ("policy_loss", "score_centering")},
+    "algorithm.score_centering_is": {"type": "str", "enum": ("none", "tis", "mis")},
+    "algorithm.top_logprobs": {"type": "int", "min": 1},
     "algorithm.kl_loss_coef": {"type": "number", "min": 0},
     "algorithm.entropy_coef": {"type": "number", "min": 0},
     "algorithm.seed": {"type": "int", "nullable": True},
@@ -590,6 +606,8 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         env["HARBOR_ENV_BUILD_TIMEOUT_MULTIPLIER"] = str(multiplier)
     if agent["cwd"]:
         env["MSWEA_CWD"] = agent["cwd"]
+    if agent["context_exhausted_scores_zero"]:
+        env["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] = "1"
     return env
 
 
@@ -676,7 +694,9 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --rollout-max-response-len {algo["max_response_len"]} --max-seq-len {algo["max_seq_len"]}
 
         --advantage-estimator {algo["advantage_estimator"]}
-        --use-tis --tis-clip {algo["tis_clip"]} --tis-clip-low {algo["tis_clip_low"]}
+        {_loss_args(algo)}
+        {"" if algo["grpo_std_normalization"] else "--disable-grpo-std-normalization"}
+        {"--calculate-per-token-loss" if algo["per_token_loss"] else ""}
         {"--use-rollout-routing-replay" if algo["routing_replay"] else ""}
         --kl-coef 0 --entropy-coef {algo["entropy_coef"]}
         {f"--use-kl-loss --kl-loss-coef {algo['kl_loss_coef']}" if kl_loss else ""}
@@ -715,11 +735,21 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
+    if recipe["checkpoint"]["save_rollout_data"]:
+        args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
     # torch_memory_saver (colocated offload) rejects expandable segments; a fully async trainer needs them so its
     # cache does not fragment between steps
     alloc = f"expandable_segments:{fully_async}"
     args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": alloc})]
     return args + [str(a) for a in recipe["extra_args"]]
+
+
+def _loss_args(algo: dict) -> str:
+    if algo["loss"] == "policy_loss":
+        return f"--use-tis --tis-clip {algo['tis_clip']} --tis-clip-low {algo['tis_clip_low']}"
+    return f"""--loss-type score_centering --use-rollout-logprobs
+        --score-centering-is {algo["score_centering_is"]} --score-centering-tis-clip {algo["tis_clip"]}
+        --rollout-top-logprobs-num {algo["top_logprobs"]}"""
 
 
 def trainer_env(recipe: dict) -> dict[str, str]:
