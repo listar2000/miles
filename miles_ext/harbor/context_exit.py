@@ -9,7 +9,8 @@ import os
 from minisweagent.agents.interactive import InteractiveAgent
 from minisweagent.exceptions import FormatError, LimitsExceeded
 
-ENV_TOKENS = "MSWEA_CONTEXT_TOKENS"
+# Harbor redacts agent env values whose key contains KEY, TOKEN, AUTH, ... in trial files: keep these names clear of them
+ENV_LIMIT = "MSWEA_CONTEXT_LIMIT"
 ENV_MIN_REPLY = "MSWEA_CONTEXT_MIN_REPLY"
 EXIT_STATUS = "ContextExhausted"
 AGENT_MODULE = "miles_mswea_context"
@@ -68,7 +69,7 @@ def _exit() -> LimitsExceeded:
 
 class ContextExitAgent(InteractiveAgent):
     def query(self) -> dict:
-        limit = _env_int(ENV_TOKENS)
+        limit = _env_int(ENV_LIMIT)
         if limit and window_full(self.messages, limit, _env_int(ENV_MIN_REPLY) or _DEFAULT_MIN_REPLY):
             raise _exit()
         try:

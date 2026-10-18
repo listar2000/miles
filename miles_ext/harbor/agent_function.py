@@ -161,7 +161,7 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
         config.agent.extra_allowed_hosts = [*config.agent.extra_allowed_hosts, urlsplit(session_url).hostname]
         # ContextExitAgent's window (context_exit.py)
         if max_seq_len := config.agent.kwargs.get("max_seq_len"):
-            config.agent.env = {**config.agent.env, context_exit.ENV_TOKENS: str(max_seq_len)}
+            config.agent.env = {**config.agent.env, context_exit.ENV_LIMIT: str(max_seq_len)}
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path

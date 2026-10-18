@@ -47,7 +47,7 @@ def ce(monkeypatch):
     spec = importlib.util.spec_from_file_location("miles_mswea_context_under_test", _SRC)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setenv(module.ENV_TOKENS, "1000")
+    monkeypatch.setenv(module.ENV_LIMIT, "1000")
     monkeypatch.setenv(module.ENV_MIN_REPLY, "100")
     return module
 
@@ -120,7 +120,13 @@ def test_ordinary_format_error_still_nags(ce):
 
 
 def test_unset_limit_does_nothing(ce, monkeypatch):
-    monkeypatch.delenv(ce.ENV_TOKENS)
+    monkeypatch.delenv(ce.ENV_LIMIT)
     model = _Model(_turn(0, 0))
     ce.ContextExitAgent(model, [_turn(10**6, 10**6)]).query()
     assert model.calls == 1
+
+
+def test_env_names_are_not_scrubbed_as_secrets(ce):
+    from harbor.utils.env import is_sensitive_env_key
+
+    assert not any(is_sensitive_env_key(k) for k in (ce.ENV_LIMIT, ce.ENV_MIN_REPLY))
