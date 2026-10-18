@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import os  # [fork hook-004]
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-_DYNAMIC_PORT_START = 20000
+# [fork hook-004] deployments sharing a host (split runs on one container) each get their own range
+_DYNAMIC_PORT_START = int(os.environ.get("MILES_DYNAMIC_PORT_START", "20000"))
 _MAX_PORT = 65535
 
 
