@@ -127,3 +127,25 @@ def test_copies_back_land_in_the_compute_streams_pool(monkeypatch, offloading):
     _recompute_step()
     compute = torch.cuda.current_stream().cuda_stream
     assert {seg["stream"] for seg in torch.cuda.memory_snapshot()} == {compute}
+
+
+@pytest.mark.parametrize("resident", [0, 2])
+def test_both_offloads_compose_with_the_recompute_release(monkeypatch, offloading, resident):
+    """fix-011 (released recompute inputs) wraps the same backward as recompute_offload: values stay bit-identical."""
+    from miles.backends.megatron_utils import initialize
+
+    out_ref, grads_ref, _ = _step(_block)
+    recompute_grads_ref, _ = _recompute_step()
+    function = tensor_parallel.random.CheckpointFunction
+    monkeypatch.setattr(function, "backward", function.backward)  # restored after the test
+    initialize._release_recompute_inputs()  # first, as in init(); the offload installs later from the init path
+    assert getattr(function.backward, "miles_release", False)
+    monkeypatch.setattr(function, "backward", recompute_offload._offloading_backward(function.backward))
+    monkeypatch.setattr(recompute_offload, "RESIDENT_BYTES", resident * 2 * ROWS * COLS * 4)
+
+    for _ in range(2):
+        out, grads, _ = _step(offloading)
+        recompute_grads, _ = _recompute_step()
+        assert torch.equal(out, out_ref)
+        assert all(torch.equal(a, b) for a, b in zip(grads, grads_ref, strict=True))
+        assert all(torch.equal(a, b) for a, b in zip(recompute_grads, recompute_grads_ref, strict=True))
