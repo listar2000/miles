@@ -32,6 +32,7 @@ def test_dsv41_argv():
     assert _value(argv, "--ref-load") == "/models/DeepSeek-V4.1-bf16"
     assert argv.count("--ref-load") == 1
     assert _value(argv, "--custom-weight-quantizer-path").endswith("quantize_like_checkpoint")
+    assert _value(argv, "--custom-placement-hook-path") == "miles_ext.obs.gpu_telemetry.start"
     assert "--mxfp4-qat-routed-experts" in argv and "--stream-optimizer-state-to-disk" in argv
     assert _value(argv, "--stream-optimizer-state-moment-dtype") == "bf16"
     assert "--grad-reduce-in-bf16" in argv and "--accumulate-allreduce-grads-in-fp32" not in argv
@@ -97,7 +98,7 @@ def test_qwen_recipes_keep_their_defaults():
         "--micro-batch-size",
     ):
         assert flag not in argv, flag
-    assert R.trainer_env(_recipe("qwen35-9b-swegym8-sail.yaml")) == {}
+    assert R.trainer_env(_recipe("qwen35-9b-swegym8-sail.yaml")) == {"WANDB__DISABLE_STATS": "true"}
 
 
 @pytest.mark.parametrize(

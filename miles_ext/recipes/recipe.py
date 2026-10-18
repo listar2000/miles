@@ -709,6 +709,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         {placement}
 
         --use-wandb --wandb-project {wandb_project(recipe, run_id)} --wandb-group {run_id}
+        --custom-placement-hook-path miles_ext.obs.gpu_telemetry.start
         {f"--wandb-team {tracking['wandb_entity']}" if tracking["wandb_entity"] else ""}
         """
     )
@@ -720,11 +721,12 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
 
 def trainer_env(recipe: dict) -> dict[str, str]:
     """Env the Miles driver, trainer workers and engines need before Miles starts (Ray workers
-    inherit the raylet's env): the model's, its rollout precision's, and for Megatron
-    CUDA_DEVICE_MAX_CONNECTIONS=1, which its argument validation requires for TP or CP in
+    inherit the raylet's env): the model's, its rollout precision's, WANDB__DISABLE_STATS so that
+    only the per-node observers of miles_ext.obs.gpu_telemetry sample system metrics, and for
+    Megatron CUDA_DEVICE_MAX_CONNECTIONS=1, which its argument validation requires for TP or CP in
     every process that parses args."""
     preset = PRESETS[recipe["model"]["preset"]]
-    env = {**preset.env, **preset.precisions[rollout_precision(recipe)]}
+    env = {**preset.env, **preset.precisions[rollout_precision(recipe)], "WANDB__DISABLE_STATS": "true"}
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     return env
