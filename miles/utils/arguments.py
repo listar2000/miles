@@ -726,6 +726,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "Requires train_async.py."
                 ),
             )
+            # [fork fix-022] begin
+            parser.add_argument(
+                "--trainer-init-with-rollout",
+                action="store_true",
+                default=False,
+                help=(
+                    "train_async.py: initialize the trainer (model build and weight load) while the rollout side "
+                    "starts its engines, instead of after it. Needs --num-rollout; refuses --colocate."
+                ),
+            )
+            # [fork fix-022] end
             # Sampling values reach the engine per request only: the built-in generate path sends them
             # itself and the session server fills fields an agent omits from its session's defaults.
             # They are never engine launch arguments: an engine shared by rollout and eval has no single default.
@@ -4145,6 +4156,15 @@ def miles_validate_args(args):
             assert args.num_rollout is not None, (
                 "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
             )
+    # [fork fix-022]
+    assert not args.trainer_init_with_rollout or args.num_rollout is not None, (
+        "--trainer-init-with-rollout needs --num-rollout: with only --num-epoch the trainer waits for the "
+        "rollout side to count the dataset"
+    )
+    assert not (args.trainer_init_with_rollout and args.colocate), (
+        "--trainer-init-with-rollout cannot run with --colocate: an engine sizes its memory from what is free on "
+        "its GPUs at start, which the trainer's load would take"
+    )
 
     if args.enable_mtp_training:
         assert (
