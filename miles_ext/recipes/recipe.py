@@ -715,7 +715,10 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
-    args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"})]
+    # torch_memory_saver (colocated offload) rejects expandable segments; a fully async trainer needs them so its
+    # cache does not fragment between steps
+    alloc = f"expandable_segments:{fully_async}"
+    args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": alloc})]
     return args + [str(a) for a in recipe["extra_args"]]
 
 
