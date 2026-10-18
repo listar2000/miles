@@ -49,7 +49,7 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import context_exit, upstream
+from miles_ext.harbor import context_exit, task_hash, upstream
 from miles_ext.recipes import recipe as R
 
 hf = upstream.harbor_agent_function()
@@ -189,6 +189,8 @@ async def run(
     config = build_trial_config(metadata, openai_session_url(base_url), request_kwargs or {})
 
     try:
+        if config.task.path:  # Harbor hashes the task dir on this loop, twice per trial (task_hash.py)
+            await asyncio.to_thread(task_hash.warm, config.task.path)
         trial = await Trial.create(config)
         result = await asyncio.wait_for(trial.run(), timeout=trial_timeout_s)
     except asyncio.TimeoutError:
