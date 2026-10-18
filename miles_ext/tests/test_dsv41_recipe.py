@@ -1,5 +1,6 @@
 """The DeepSeek V4.1 overfitting-run recipe (ext-012): the argv and env it resolves to, and the
-layouts it refuses. The Qwen recipes' argv is unchanged by the new fields (defaults)."""
+layouts it refuses. The Qwen recipes' argv is unchanged by the new fields (defaults) except the fully
+async trainer's allocator."""
 
 import json
 from pathlib import Path
@@ -145,3 +146,11 @@ def test_overfit_task_list_fills_a_step():
     tasks = (ROOT / "miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.tasks").read_text().splitlines()
     ids = [line.split()[0] for line in tasks if line.strip() and not line.startswith("#")]
     assert len(set(ids)) == len(ids) == _recipe()["algorithm"]["rollout_batch_size"]
+
+
+@pytest.mark.parametrize("mode, expandable", [("fully_async", "True"), ("sync", "False")])
+def test_trainer_allocator_follows_mode(mode, expandable):
+    r = _recipe()
+    r["algorithm"]["mode"] = mode  # torch_memory_saver (colocated) rejects expandable segments
+    env = json.loads(_value(R.miles_args(r, "run1", resume=False), "--train-env-vars"))
+    assert env == {"PYTORCH_CUDA_ALLOC_CONF": f"expandable_segments:{expandable}"}
