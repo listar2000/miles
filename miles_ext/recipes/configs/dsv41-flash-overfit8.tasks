@@ -1,0 +1,15 @@
+# The 8 tasks of dsv41-flash-overfit8.yaml, one instance_id per line (the source of truth): the
+# task directory names on miles-datasets:/tb4t-20261016/tasks. Picked from the 1017 pass@3 eval
+# (dsv41-1017-eval-a, 256k, 7,200 s agent) for a mixed outcome: each solved 1 or 2 of 3 times, every
+# trial ended Submitted, and every trial peaked at or under 177k tokens. Note: registry name, passes/3,
+# peak context of the 3 trials.
+# The prompt file keeps only these tasks' rows of the eval's prompt file (eval1017_A.jsonl):
+#   grep -F -f <(grep -v '^#' dsv41-flash-overfit8.tasks | sed 's/.*/"instance_id": "&"/') eval1017_A.jsonl
+atrx-vep-crispr-05-go-obsolete-term-remediation       # atrx-vep-crispr-05-go-obsolete-term-remediation, 1/3, 78-99k
+science-017                                           # mobius-labs/science-017, 1/3, 105-129k
+bp105-security-email-auth-policy-r01                  # mobius-labs/security-email-auth-policy-r01, 1/3, 158-171k
+bf200-security-instruction-semantics-r03              # mobius-labs/emulator-65c02-acceptance, 2/3, 89-126k
+sail200-hardware-028-20261001                         # sail200-hardware-028-20261001, 2/3, 115-150k
+sail200-media-025-20261001                            # sail200-media-025-20261001, 2/3, 135-158k
+sail200-operations-002-20261001                       # sail200-operations-002-20261001, 2/3, 67-111k
+wal-recovery-ordering-11-persist-queue-ack-recovery   # wal-recovery-ordering-11-persist-queue-ack-recovery, 2/3, 162-177k

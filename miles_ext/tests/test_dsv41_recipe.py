@@ -142,10 +142,15 @@ def test_fsdp_refuses_megatron_only_fields(over, message):
         R.validate(_recipe("qwen35-9b-swegym8-sail.yaml", **over), local_inputs=False)
 
 
-def test_overfit_task_list_fills_a_step():
-    tasks = (ROOT / "miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.tasks").read_text().splitlines()
-    ids = [line.split()[0] for line in tasks if line.strip() and not line.startswith("#")]
-    assert len(set(ids)) == len(ids) == _recipe()["algorithm"]["rollout_batch_size"]
+def _task_ids(name: str) -> list[str]:
+    lines = (ROOT / "miles_ext/recipes/configs" / name).read_text().splitlines()
+    return [line.split()[0] for line in lines if line.strip() and not line.startswith("#")]
+
+
+@pytest.mark.parametrize("name", ["dsv41-flash-tb4-overfit16", "dsv41-flash-overfit8", "dsv41-flash-overfit8-a3"])
+def test_task_list_fills_a_step(name):
+    ids = _task_ids(f"{name}.tasks")
+    assert len(set(ids)) == len(ids) == _recipe(f"{name}.yaml")["algorithm"]["rollout_batch_size"]
 
 
 @pytest.mark.parametrize("mode, expandable", [("fully_async", "True"), ("sync", "False")])
@@ -154,3 +159,35 @@ def test_trainer_allocator_follows_mode(mode, expandable):
     r["algorithm"]["mode"] = mode  # torch_memory_saver (colocated) rejects expandable segments
     env = json.loads(_value(R.miles_args(r, "run1", resume=False), "--train-env-vars"))
     assert env == {"PYTORCH_CUDA_ALLOC_CONF": f"expandable_segments:{expandable}"}
+
+
+def test_overfit8_one_step_per_rollout():
+    r = _recipe("dsv41-flash-overfit8.yaml")
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    # --skip-actor-forward-only needs exactly one optimizer step per rollout
+    algo = r["algorithm"]
+    assert "--skip-actor-forward-only" in argv
+    assert int(_value(argv, "--global-batch-size")) == algo["rollout_batch_size"] * algo["n_samples"]
+    assert _value(argv, "--save-debug-rollout-data") == "/results/run1/rollout_data/{rollout_id}.pt"
+    r["checkpoint"]["save_rollout_data"] = False
+    assert "--save-debug-rollout-data" not in R.miles_args(r, "run1", resume=False)
+
+
+def test_overfit8_a3_score_centering():
+    r = _recipe("dsv41-flash-overfit8-a3.yaml")
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    # Miles rejects score centering with --use-tis or --skip-actor-forward-only
+    assert _value(argv, "--loss-type") == "score_centering" and "--use-rollout-logprobs" in argv
+    assert "--use-tis" not in argv and "--skip-actor-forward-only" not in argv
+    assert "--disable-grpo-std-normalization" in argv and "--calculate-per-token-loss" in argv
+    assert R.harbor_env(r, "run1")["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] == "1"
+
+
+def test_policy_loss_keeps_tis():
+    r = _recipe("dsv41-flash-overfit8.yaml")
+    argv = R.miles_args(r, "run1", resume=False)
+    assert "--use-tis" in argv and "--loss-type" not in argv and "--rollout-top-logprobs-num" not in argv
+    assert "--disable-grpo-std-normalization" not in argv and "--calculate-per-token-loss" not in argv
+    assert "MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO" not in R.harbor_env(r, "run1")
