@@ -16,6 +16,7 @@ from miles.backends.training_utils.weight_update.protocols.utils.data_replica im
 from miles.utils import async_utils
 from miles.utils.distributed_lock import create_world_ticket_lock
 from miles.utils.distributed_utils import init_process_group
+from miles.utils.http_utils import wrap_ipv6  # [fork fix-013]
 
 
 class UpdateWeightFromDistributed(WeightTransferProtocol):
@@ -98,7 +99,8 @@ def connect_rollout_engines_from_distributed(
     """
     if engine_gpu_counts is None:
         engine_gpu_counts = [args.rollout_num_gpus_per_engine] * len(rollout_engines)
-    master_address = ray._private.services.get_node_ip_address()
+    # [fork fix-013] bracket an IPv6 node address: both this side and the engines build tcp://<addr>:<port>
+    master_address = wrap_ipv6(ray._private.services.get_node_ip_address())
     with socket.socket() as sock:
         sock.bind(("", 0))
         master_port = sock.getsockname()[1]
