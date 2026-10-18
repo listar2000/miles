@@ -1219,6 +1219,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``; the hook gates itself."
                 ),
             )
+            # [fork hook-002]
+            parser.add_argument(
+                "--custom-placement-hook-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a function the driver calls once after creating the GPU placement group, e.g. to "
+                    "start per-node observers that know which GPUs train and which serve rollouts. Signature: "
+                    "``def hook(args, pgs: dict[str, PlacementGroupInfo]) -> None``."
+                ),
+            )
             parser.add_argument(
                 "--p2p-transfer-timeout",
                 type=float,

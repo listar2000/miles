@@ -31,6 +31,7 @@ from miles.utils.audit_utils.event_logger import checkpoint as event_logger_chec
 from miles.utils.audit_utils.event_logger.logger import get_event_logger, is_event_logger_initialized
 from miles.utils.audit_utils.event_logger.models import InferenceEngineWeightChecksumEvent
 from miles.utils.ft_utils.api_server.server import start_api_server
+from miles.utils.function_registry import load_function  # [fork hook-002]
 from miles.utils.hot_restart import (
     init_or_reset_inference_controller,
     trainer_init_or_load_state,
@@ -159,6 +160,8 @@ def create_placement_groups(args) -> dict[str, PlacementGroupInfo]:
     }
     if args.use_critic:
         ans["critic"] = ans["actor"]
+    if getattr(args, "custom_placement_hook_path", None):  # [fork hook-002]
+        load_function(args.custom_placement_hook_path)(args, ans)
     return ans
 
 
