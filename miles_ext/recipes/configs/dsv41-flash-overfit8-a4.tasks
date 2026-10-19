@@ -1,0 +1,10 @@
+# The 4 tasks of dsv41-flash-overfit8-a4.yaml, one instance_id per line (the source of truth): the
+# task directory names on miles-datasets:/tb4t-20261016/tasks. a3's four kept overfit8 tasks. Note:
+# a1+a2 pass rate, minutes per try p50/p90 in a1+a2.
+# The prompt file keeps only these tasks' rows of the eval's prompt file (eval1017_A.jsonl):
+#   grep -F -f <(grep -v '^#' dsv41-flash-overfit8-a4.tasks | awk '{print "\"instance_id\": \"" $1 "\""}') \
+#     eval1017_A.jsonl > $MILES_DATA/prompts/overfit8_a4.jsonl
+atrx-vep-crispr-05-go-obsolete-term-remediation          # 0.62, 21/27 min
+science-017                                              # 0.59, 25/42 min
+wal-recovery-ordering-11-persist-queue-ack-recovery      # 0.59, 35/50 min
+bp105-security-email-auth-policy-r01                     # 0.80, 25/31 min
