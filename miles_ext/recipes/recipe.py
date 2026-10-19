@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 
 from miles.utils.external_utils.model_args_utils import load_model_args
+from miles_ext.checkpoint.staged_save import STAGE_ENV
 from miles_ext.recipes.presets import PRESETS
 
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
@@ -158,8 +159,10 @@ DEFAULTS: dict[str, Any] = {
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
     # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
     # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
+    # stage_dir (Megatron only): each node saves to this node-local dir and uploads to the results
+    # volume in the background (miles_ext.checkpoint.staged_save); None: saves go to the volume directly
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True, "save_rollout_data": False},
+                   "save_optimizer": True, "save_rollout_data": False, "stage_dir": None},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -286,6 +289,7 @@ FIELD_RULES: dict[str, dict] = {
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
+    "checkpoint.stage_dir": {"type": "str", "nullable": True},
     "parallel.tp": {"type": "int", "min": 1},
     "parallel.pp": {"type": "int", "min": 1},
     "parallel.cp": {"type": "int", "min": 1},
@@ -381,6 +385,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
+    if ckpt["stage_dir"] and backend(recipe) != "megatron":
+        raise ValueError("checkpoint.stage_dir is Megatron-only")
     revision = recipe["model"]["revision"]
     if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
         raise ValueError(f"model.revision must be a full commit sha, got {revision!r}")
@@ -735,6 +741,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
+    if recipe["checkpoint"]["stage_dir"]:
+        args += ["--custom-megatron-save-context-path", "miles_ext.checkpoint.staged_save.context"]
     if recipe["checkpoint"]["save_rollout_data"]:
         args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
     # torch_memory_saver (colocated offload) rejects expandable segments; a fully async trainer needs them so its
@@ -762,6 +770,8 @@ def trainer_env(recipe: dict) -> dict[str, str]:
     env = {**preset.env, **preset.precisions[rollout_precision(recipe)], "WANDB__DISABLE_STATS": "true"}
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+    if recipe["checkpoint"]["stage_dir"]:
+        env[STAGE_ENV] = recipe["checkpoint"]["stage_dir"]
     return env
 
 
