@@ -1,11 +1,15 @@
+import importlib  # [fork hook-006]
 import logging
 from typing import Any
 
 from miles.backends.megatron_utils.lora.native import resolve_adapter_targets, validate_native_lora_args
+from miles.backends.megatron_utils.lora.native.registry import MODEL_SPECS  # [fork hook-006]
 from miles.utils.hf_utils.config import load_hf_config
 from miles.utils.hf_utils.weight_mapping import HfWeightMapping
-from miles.utils.lora.hf_lora_targets import (
+from miles.utils.lora.hf_lora_targets import (  # [fork hook-006] _HF_LORA_MODELS, _HfLoraModelSpec
+    _HF_LORA_MODELS,
     LORA_TARGET_GROUPS,
+    _HfLoraModelSpec,
     exclude_hf_lora_targets,
     expand_hf_lora_targets,
     expand_packed_hf_lora_targets,
@@ -99,6 +103,29 @@ def add_lora_arguments(parser):
             "support (e.g. Inkling native LoRA)."
         ),
     )
+    # [fork hook-006] begin
+    parser.add_argument(
+        "--lora-merged-sync",
+        action="store_true",
+        default=False,
+        help=(
+            "Serve the trained policy without SGLang LoRA: every weight sync sends the full weights with "
+            "each adapter folded in (W + alpha/r * B @ A, merged in fp32 from the frozen base) through "
+            "the full-parameter path, with its weight versions and staleness checks. Needs "
+            "--megatron-to-hf-mode raw and a disaggregated trainer that is not offloaded."
+        ),
+    )
+    parser.add_argument(
+        "--custom-lora-spec-path",
+        type=str,
+        default=None,
+        help=(
+            "Module registering a native-LoRA architecture: MODEL_TYPE (the HF model_type), ARCH_SPEC "
+            "(a LoRAArchSpec), HF_LAYER_PREFIX, HF_UNEMBED and hf_lora_groups(hf_config) -> "
+            "(attention targets, mlp targets) under the layer prefix."
+        ),
+    )
+    # [fork hook-006] end
     parser.add_argument(
         "--experts-shared-outer-loras",
         action="store_true",
@@ -145,6 +172,8 @@ def validate_lora_args(args):
         return
     assert args.train_backend == "megatron", "LoRA injection is not implemented for FSDP; use --train-backend megatron"
     assert args.lora_rank > 0, "LoRA requires a positive --lora-rank, including when loading an adapter"
+    load_custom_lora_spec(args)  # [fork hook-006]
+    _validate_lora_merged_sync(args)  # [fork hook-006]
     hf_config = load_hf_config(args.hf_checkpoint)
     args.hf_lora_targets, args.lora_adapter_targets = _resolve_lora_targets(args, hf_config)
 
@@ -164,7 +193,47 @@ def validate_lora_args(args):
 def validate_lora_args_after_megatron(args):
     """LoRA checks that read Megatron's resolved args (e.g. the expert TP size it defaults from TP)."""
     if is_lora_enabled(args) and args.megatron_to_hf_mode == "raw":
+        load_custom_lora_spec(args)  # [fork hook-006]
+        _validate_lora_merged_sync_placement(args)  # [fork hook-006]
         validate_native_lora_args(args)
+
+
+# [fork hook-006] begin
+def load_custom_lora_spec(args) -> None:
+    """Register the architecture of --custom-lora-spec-path with native LoRA, once per process."""
+    if not getattr(args, "custom_lora_spec_path", None):
+        return
+    spec = importlib.import_module(args.custom_lora_spec_path)
+    assert (
+        MODEL_SPECS.setdefault(spec.MODEL_TYPE, spec.ARCH_SPEC) is spec.ARCH_SPEC
+    ), f"native LoRA already has a spec for {spec.MODEL_TYPE!r}; drop --custom-lora-spec-path"
+    _HF_LORA_MODELS.setdefault(
+        spec.MODEL_TYPE,
+        _HfLoraModelSpec(spec.hf_lora_groups, layer_prefix=spec.HF_LAYER_PREFIX, unembed=spec.HF_UNEMBED),
+    )
+
+
+def _validate_lora_merged_sync(args) -> None:
+    if not args.lora_merged_sync:
+        return
+    assert (
+        args.megatron_to_hf_mode == "raw"
+    ), "--lora-merged-sync merges native adapters: use --megatron-to-hf-mode raw"
+    assert not args.lora_train_only, "--lora-merged-sync syncs the trained policy; --lora-train-only keeps the base"
+    assert not args.multi_lora, "--lora-merged-sync folds a single adapter into the weights"
+
+
+def _validate_lora_merged_sync_placement(args) -> None:
+    """Runs after miles_validate_args, which resolves --offload, --use-critic and --colocate into offload_train."""
+    if not args.lora_merged_sync:
+        return
+    assert not (args.colocate or args.offload_train), (
+        "--lora-merged-sync merges into the live trainer weights at each sync; it needs a disaggregated trainer "
+        "without --colocate or --offload-train"
+    )
+
+
+# [fork hook-006] end
 
 
 def _resolve_lora_targets(args, hf_config):

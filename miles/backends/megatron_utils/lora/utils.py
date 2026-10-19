@@ -13,6 +13,7 @@ import torch.distributed as dist
 from miles.backends.megatron_utils.lora.native import load_lora_adapter_hf
 from miles.backends.megatron_utils.lora.native.modules.linear import NativeLoRAAdapter
 from miles.backends.training_utils.checkpoint.io import write_checkpoint_dir
+from miles.backends.training_utils.model_companion import ModelCompanion  # [fork hook-006]
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.backends.training_utils.weight_update.snapshot_publisher import SnapshotPublisher
 from miles.utils.lora.utils import (  # noqa: F401  (re-exported)
@@ -224,6 +225,8 @@ def save_lora_checkpoint(
                     else None
                 ),
                 "opt_param_scheduler": opt_param_scheduler.state_dict() if opt_param_scheduler else None,
+                # [fork hook-006] weight version and sample consumptions continue across a resume
+                "model_companions": [companion.state_dict() for companion in _model_companions(model)],
             }
 
         if args.megatron_to_hf_mode == "raw":
@@ -297,7 +300,20 @@ def restore_lora_adapter(
         return None
     if opt_param_scheduler is not None and training_state["opt_param_scheduler"] is not None:
         opt_param_scheduler.load_state_dict(training_state["opt_param_scheduler"])
+    # [fork hook-006] sample counts only on a resume from --load, which also restores the rollout side; a new run
+    # seeded by --lora-adapter-path numbers its samples afresh.
+    if "model_companions" in training_state:
+        resuming = getattr(args, "lora_resume_dir", None) is not None
+        for companion, state in zip(_model_companions(model), training_state["model_companions"], strict=True):
+            if resuming:
+                companion.load_state_dict(state)
+            else:
+                companion.weight_version.data.copy_(state["weight_version"])
     return training_state["iteration"]
+
+
+def _model_companions(model: Sequence[torch.nn.Module]) -> list[ModelCompanion]:  # [fork hook-006]
+    return [module for chunk in model for module in chunk.modules() if isinstance(module, ModelCompanion)]
 
 
 def _native_adapter_shard(adapter_dir: Path) -> Path | None:

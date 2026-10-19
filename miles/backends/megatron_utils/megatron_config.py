@@ -382,7 +382,9 @@ def resolve_args_checkpoint_load(args: Namespace) -> None:
             args.load = args.ref_load or args.hf_checkpoint
             args.start_rollout_id = 0
     else:
-        if not has_megatron_checkpoint(args.load):
+        if (lora_iteration := _lora_resume_iteration(args.load, lora_rank=args.lora_rank)) is not None:
+            _resume_lora_from_load(args, iteration=lora_iteration)  # [fork hook-006]
+        elif not has_megatron_checkpoint(args.load):
             args.no_load_optim = True
             args.no_load_rng = True
             args.finetune = True
@@ -390,6 +392,28 @@ def resolve_args_checkpoint_load(args: Namespace) -> None:
             if args.ref_ckpt_step is not None:
                 args.ckpt_step = args.ref_ckpt_step
             args.start_rollout_id = 0
+
+
+def _lora_resume_iteration(load_dir: str | None, *, lora_rank: int) -> int | None:  # [fork hook-006]
+    """The latest iteration under a LoRA run's --load with both its adapter and rollout state saved, if any."""
+    if not lora_rank or load_dir is None:
+        return None
+    rollout_dirs = (Path(load_dir) / "rollout").glob("*")
+    saved = [int(d.name) for d in rollout_dirs if d.name.isdigit()]
+    return max((i for i in saved if (Path(load_dir) / f"iter_{i:07d}" / "adapter").is_dir()), default=None)
+
+
+def _resume_lora_from_load(args: Namespace, *, iteration: int) -> None:  # [fork hook-006]
+    """Continue a LoRA run like a full checkpoint: base weights from --ref-load, adapter and optimizer from
+    iter_N/adapter, rollout side from rollout/N. Overrides --lora-adapter-path, which only seeds a new run."""
+    logger.info(f"Resuming LoRA run from {args.load} at iteration {iteration}")
+    args.lora_adapter_path = str(Path(args.load) / f"iter_{iteration:07d}" / "adapter")
+    args.lora_resume_dir = args.load
+    args.no_load_rng = True
+    args.finetune = True
+    args.load = args.ref_load
+    if args.ref_ckpt_step is not None:
+        args.ckpt_step = args.ref_ckpt_step
 
 
 def has_megatron_checkpoint(load_dir: str | None) -> bool:
