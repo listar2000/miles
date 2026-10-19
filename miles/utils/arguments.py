@@ -35,7 +35,7 @@ from miles.utils.function_registry import load_function
 from miles.utils.hf_utils.config import is_dsa, load_hf_config
 from miles.utils.logging_utils import configure_logger_raw
 from miles.utils.lora.arguments import add_lora_arguments, validate_lora_args, validate_lora_args_after_megatron
-from miles.utils.lora.utils import is_lora_enabled
+from miles.utils.lora.utils import is_lora_enabled, lora_without_weight_versions  # [fork hook-006]
 from miles.utils.megatron_args_utils import compute_megatron_world_size_except_dp
 from miles.utils.object_store import ObjectStoreBackend
 from miles.utils.object_store_config import (
@@ -3460,7 +3460,7 @@ def _resolve_sample_ownership_check(args: argparse.Namespace) -> None:
         reason
         for condition, reason in (
             (args.train_backend != "megatron", "the FSDP backend has no model companion info"),
-            (is_lora_enabled(args), "LoRA training has no model companion info"),
+            (lora_without_weight_versions(args), "LoRA training has no model companion info"),  # [fork hook-006]
             (args.multi_lora, "multi-LoRA training can replay samples"),
             (multi_policy, "multi-policy training has separate model companion lineages"),
             (args.debug_train_only, "train-only mode has no issuing data source"),
