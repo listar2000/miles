@@ -6,7 +6,7 @@ import logging
 import math
 from argparse import Namespace
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext  # [fork hook-007]
 from functools import partial
 from pathlib import Path
 
@@ -929,20 +929,26 @@ def save(
     if should_disable_forward_pre_hook(args):
         disable_forward_pre_hook(model)
 
-    if is_lora_model(model):
-        save_checkpoint_with_lora(iteration, model, optimizer, opt_param_scheduler, publisher=snapshot_publisher)
-    else:
-        save_checkpoint(
-            iteration,
-            model,
-            optimizer,
-            opt_param_scheduler,
-            num_floating_point_operations_so_far=0,
-            train_data_iterator=None,
-            preprocess_common_state_dict_fn=None,
-            checkpointing_context=checkpointing_context,
-            non_persistent_ckpt=non_persistent_ckpt,
-        )
+    with ExitStack() as save_context:  # [fork hook-007] the save runs inside it, so it sees a failed save
+        if args.custom_megatron_save_context_path:
+            from miles.utils.function_registry import load_function
+
+            save_context.enter_context(load_function(args.custom_megatron_save_context_path)(args, iteration))
+
+        if is_lora_model(model):
+            save_checkpoint_with_lora(iteration, model, optimizer, opt_param_scheduler, publisher=snapshot_publisher)
+        else:
+            save_checkpoint(
+                iteration,
+                model,
+                optimizer,
+                opt_param_scheduler,
+                num_floating_point_operations_so_far=0,
+                train_data_iterator=None,
+                preprocess_common_state_dict_fn=None,
+                checkpointing_context=checkpointing_context,
+                non_persistent_ckpt=non_persistent_ckpt,
+            )
 
     if hashes is not None:
         save_model_hashes(args, model, iteration, hashes)

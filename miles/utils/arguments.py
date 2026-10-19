@@ -1679,6 +1679,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "hf_checkpoint_dir: str | None) -> None."
                 ),
             )
+            # [fork hook-007]
+            parser.add_argument(
+                "--custom-megatron-save-context-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a function every trainer rank enters around each Megatron checkpoint save, e.g. to "
+                    "write the save to node-local disk first. Signature: "
+                    "``def context(args, iteration: int) -> contextlib.AbstractContextManager``."
+                ),
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
