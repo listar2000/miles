@@ -31,6 +31,7 @@ def _args(qkv_format: str) -> Namespace:
         enable_witness=False,
         qkv_format=qkv_format,
         data_pad_size_multiplier=16,
+        micro_batch_size=1,  # [fork fix-015]
         compress_ratios=[],
         true_on_policy_mode=False,
         bf16=False,

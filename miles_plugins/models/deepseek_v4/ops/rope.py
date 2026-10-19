@@ -94,4 +94,9 @@ def wrapped_precompute_freqs_cis(
         beta_slow=1,
     )
 
-    return precompute_freqs_cis(**inputs, device=device)
+    # [fork fix-015] begin
+    # Each row depends only on its position, so build the table for the next power of two and slice it: micro-batches
+    # of many different lengths then share a few cached GPU tables instead of filling the cache with one per length.
+    inputs["seqlen"] = 1 << (max_seq_len - 1).bit_length()
+    return precompute_freqs_cis(**inputs, device=device)[:max_seq_len]
+    # [fork fix-015] end

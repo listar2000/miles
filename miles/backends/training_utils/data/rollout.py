@@ -1,4 +1,5 @@
 import logging
+import os  # [fork fix-015]
 from argparse import Namespace
 from collections.abc import Sequence
 
@@ -18,6 +19,44 @@ from miles.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
 logger = logging.getLogger(__name__)
+
+_BSHD_PAD_PER_MICRO_BATCH = os.environ.get("MILES_BSHD_PAD_PER_MICRO_BATCH", "1") != "0"  # [fork fix-015]
+
+
+# [fork fix-015] begin
+def _micro_batch_groups(rollout_data: RolloutBatch, micro_batch_size: int) -> list[list[int]]:
+    """The sample indices of each micro-batch: the rollout side's explicit schedule, or contiguous slices."""
+    if "micro_batch_indices" in rollout_data:
+        return [list(indices) for indices in rollout_data["micro_batch_indices"]]
+    n = len(rollout_data["total_lengths"])
+    return [list(range(start, min(start + micro_batch_size, n))) for start in range(0, n, micro_batch_size)]
+
+
+def _micro_batch_max_seq_lens(total_lengths: Sequence[int], groups: list[list[int]], pad_size: int) -> list[int]:
+    """Pad each micro-batch to its own longest sample, rounded up to pad_size; every sample of a micro-batch shares it."""
+    max_seq_lens = [0] * len(total_lengths)
+    for indices in groups:
+        longest = max(total_lengths[i] for i in indices)
+        padded = (longest + pad_size - 1) // pad_size * pad_size
+        for i in indices:
+            max_seq_lens[i] = padded
+    assert all(max_seq_lens), "every sample must belong to a micro-batch"
+    return max_seq_lens
+
+
+def _longest_micro_batch_first(
+    groups: list[list[int]], num_microbatches: Sequence[int], total_lengths: Sequence[int]
+) -> list[list[int]]:
+    """Order each step's micro-batches longest first; samples stay in their step, trailing groups keep their place."""
+    ordered, start = [], 0
+    for count in num_microbatches:
+        step = groups[start : start + count]
+        ordered += sorted(step, key=lambda indices: -max(total_lengths[i] for i in indices))
+        start += count
+    return ordered + groups[start:]
+
+
+# [fork fix-015] end
 
 
 def _rollout_logprob_dtype(args: Namespace) -> torch.dtype:
@@ -86,6 +125,11 @@ def get_rollout_data(
         max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
 
         rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
+        # [fork fix-015] begin
+        if _BSHD_PAD_PER_MICRO_BATCH:
+            groups = _micro_batch_groups(rollout_data, args.micro_batch_size)
+            rollout_data["max_seq_lens"] = _micro_batch_max_seq_lens(rollout_data["total_lengths"], groups, pad_size)
+        # [fork fix-015] end
 
     # Full-response SGLang OPD fields share rollout CP slicing but retain float32 precision.
     for key in ("rollout_log_probs", "teacher_log_probs", "opd_reverse_kl"):
@@ -478,6 +522,14 @@ def get_data_iterator(
     if "micro_batch_indices" in rollout_data:
         assert args.use_dynamic_global_batch_size == ("dynamic_global_batch_size" in rollout_data)
         micro_batch_indices = rollout_data["micro_batch_indices"]
+        # [fork fix-015] begin
+        if args.qkv_format == "bshd" and _BSHD_PAD_PER_MICRO_BATCH:
+            micro_batch_indices = _longest_micro_batch_first(
+                _micro_batch_groups(rollout_data, args.micro_batch_size),
+                rollout_data["num_microbatches"],
+                rollout_data["total_lengths"],
+            )
+        # [fork fix-015] end
         data_iterator = [
             DataIterator(rollout_data, micro_batch_indices=micro_batch_indices) for _ in range(parallel_state.vpp_size)
         ]
@@ -516,7 +568,18 @@ def get_data_iterator(
                 "Use --use-dynamic-batch-size or choose compatible adapter batch shapes."
             )
         num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
-        data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+        # [fork fix-015] begin
+        # Longest first, so GPU and pinned host buffers reach full size on micro-batch 1.
+        if args.qkv_format == "bshd" and _BSHD_PAD_PER_MICRO_BATCH:
+            micro_batch_indices = _longest_micro_batch_first(
+                _micro_batch_groups(rollout_data, args.micro_batch_size),
+                num_microbatches,
+                rollout_data["total_lengths"],
+            )
+            data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
+        else:
+            data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+        # [fork fix-015] end
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
