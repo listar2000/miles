@@ -216,9 +216,7 @@ async def create_training_model(args, *, handle: BaseWorkerHandle, trainer_id: s
 
 
 # TODO: move (when reorganizing files)
-async def create_training_models(
-    args, rollout_executor: BaseWorkerHandle
-) -> tuple[BaseWorkerHandle, BaseWorkerHandle | None]:
+async def init_training_models(args) -> tuple[BaseWorkerHandle, BaseWorkerHandle | None]:  # [fork fix-022]
     trainer_configs = compute_trainer_configs(args)
     handles = create_trainer_handles(args, trainer_configs=trainer_configs)
     resumed = await take_over_trainers(args, handles=handles)
@@ -252,11 +250,25 @@ async def create_training_models(
 
     args.start_rollout_id = actor_info.start_rollout_id
 
-    await rollout_executor.set_train_parallel_config(await actor_info.handle.get_train_parallel_config())
+    # [fork fix-022] begin: split so the trainer can initialize before the rollout side exists
+    return actor_info.handle, critic_info.handle if critic_info is not None else None
+
+
+async def connect_training_models(args, actor_model: BaseWorkerHandle, rollout_executor: BaseWorkerHandle) -> None:
+    await rollout_executor.set_train_parallel_config(await actor_model.get_train_parallel_config())
     if args.start_rollout_id > 0:
         await rollout_executor.load(args.start_rollout_id - 1)
 
-    return actor_info.handle, critic_info.handle if critic_info is not None else None
+
+async def create_training_models(
+    args, rollout_executor: BaseWorkerHandle
+) -> tuple[BaseWorkerHandle, BaseWorkerHandle | None]:
+    actor_model, critic_model = await init_training_models(args)
+    await connect_training_models(args, actor_model, rollout_executor)
+    return actor_model, critic_model
+
+
+# [fork fix-022] end
 
 
 # TODO: move (when reorganizing files)
