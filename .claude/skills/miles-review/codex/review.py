@@ -227,7 +227,10 @@ def run_codex(args, work, prompt, tag):
         prompt,
     ]
     t0 = time.time()
-    p = sh(cmd, timeout=args.timeout, check=False)
+    try:
+        p = sh(cmd, timeout=args.timeout, check=False)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"codex did not finish within {args.timeout} s")
     events.write_text(p.stdout)
     usage = {}
     for line in p.stdout.splitlines():
@@ -238,7 +241,8 @@ def run_codex(args, work, prompt, tag):
             sys.exit(f"codex failed: {line[:500]}")
     if not out.exists():
         sys.exit(f"codex wrote no result; see {events}\n{p.stderr[-1500:]}")
-    return json.loads(out.read_text()), {"seconds": round(time.time() - t0), **usage}
+    text = out.read_text()
+    return json.loads(text[text.index("{") : text.rindex("}") + 1]), {"seconds": round(time.time() - t0), **usage}
 
 
 def validate(r, ctx, tree):
@@ -348,6 +352,7 @@ def main():
     ap.add_argument("--prior", type=Path, help="an earlier review of this PR")
     ap.add_argument("--head", help="review this commit instead of the PR's current head (it must be in --repo)")
     ap.add_argument("--body", type=Path, help="use this file as the PR body instead of the live one")
+    ap.add_argument("--result", type=Path, help="use this JSON as the first attempt instead of calling Codex")
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--bundle-only", action="store_true", help="run the checks and build the bundle, skip Codex")
     ap.add_argument("--keep", action="store_true", help="keep the checkout after the review")
@@ -380,12 +385,16 @@ def main():
             prompt += "\n\nA previous attempt broke these protocol rules; fix every one:\n" + "\n".join(
                 f"- {v}" for v in violations
             )
-        result, usage = run_codex(args, work, prompt, f"a{attempt}")
+        if args.result and attempt == 1:
+            result, usage = json.loads(args.result.read_text()), {"seconds": 0}
+        else:
+            result, usage = run_codex(args, work, prompt, f"a{attempt}")
         sh(["git", "checkout", "-q", "--", "."], cwd=tree)
         sh(["git", "clean", "-fdq"], cwd=tree)
         violations = validate(result, ctx, tree)
         if not violations:
             break
+        print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
     run_info.update(usage, attempt=attempt)
     report = work / "review.md"
     report.write_text(render(result, meta, head, base, run_info, violations))
