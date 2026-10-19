@@ -55,3 +55,47 @@ def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):
         )
         out = asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
         assert out["exit_status"] == expected
+
+
+class _Env:
+    """A sandbox where the harness is not yet installed."""
+
+    async def exec(self, command, **kwargs):
+        return SimpleNamespace(return_code=1, stdout="", stderr="")
+
+
+def _install(monkeypatch, tmp_path, failures):
+    from harbor.agents.installed import mini_swe_agent as stock
+    from harbor.agents.installed.base import NonZeroAgentExitCodeError
+
+    from miles_ext.harbor import sandbox_agent
+
+    calls = []
+
+    async def flaky_install(self, environment):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise NonZeroAgentExitCodeError("Command failed (exit 2): uv tool install mini-swe-agent")
+
+    async def noop_exec(self, environment, command, **kwargs):
+        return None
+
+    monkeypatch.setattr(stock.MiniSweAgent, "install", flaky_install)
+    monkeypatch.setattr(SandboxMiniSweAgent, "exec_as_agent", noop_exec)
+    monkeypatch.setattr(sandbox_agent, "INSTALL_BACKOFF_SECS", 0)
+    asyncio.run(_agent(tmp_path).install(_Env()))
+    return len(calls)
+
+
+def test_install_retries_a_dropped_download(monkeypatch, tmp_path):
+    assert _install(monkeypatch, tmp_path, failures=2) == 3
+
+
+def test_install_gives_up_after_the_last_attempt(monkeypatch, tmp_path):
+    import pytest
+    from harbor.agents.installed.base import NonZeroAgentExitCodeError
+
+    from miles_ext.harbor import sandbox_agent
+
+    with pytest.raises(NonZeroAgentExitCodeError):
+        _install(monkeypatch, tmp_path, failures=sandbox_agent.INSTALL_ATTEMPTS)

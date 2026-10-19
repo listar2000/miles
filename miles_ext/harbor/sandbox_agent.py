@@ -13,13 +13,20 @@ public network for the install only and restores the task's policy before the
 agent runs, as the platform's evals do (mobius-platform
 programs/harbor-eval/patches/harness/setup.py). A task that is already public
 is set up unchanged.
+
+The install downloads from PyPI, astral.sh and the distro mirrors, and a dropped
+connection fails the whole trial before its first model call; Miles then marks the
+sample aborted and drops its group of 8 (overfit-1019-a3: 12 of 52 tries). ``install``
+retries a failed install, which is safe to repeat (each step skips what is in place).
 """
 
+import asyncio
 import base64
 import json
 from pathlib import Path
 
 from harbor.agents.installed import mini_swe_agent as stock
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import NetworkMode, NetworkPolicy
@@ -27,6 +34,9 @@ from harbor.models.task.config import NetworkMode, NetworkPolicy
 from miles_ext.harbor import context_exit
 
 _PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)
+
+INSTALL_ATTEMPTS = 4
+INSTALL_BACKOFF_SECS = 15  # waits 15, 30, 45 s between attempts
 
 _UV_PATH = 'if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; else export PATH="$HOME/.local/bin:$PATH"; fi; '
 
@@ -50,7 +60,7 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         probe = await environment.exec(command=_UV_PATH + "command -v mini-swe-agent")
         if probe.return_code != 0:
-            await super().install(environment)
+            await self._install_with_retries(environment)
         else:
             output_cap_b64 = base64.b64encode(
                 stock._OUTPUT_CAP_PATCH.format(cap_bytes=stock.MAX_COMMAND_OUTPUT_BYTES).encode()
@@ -78,6 +88,16 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
                 + f'"$py" -c "import {context_exit.AGENT_MODULE}"'
             ),
         )
+
+    async def _install_with_retries(self, environment: BaseEnvironment) -> None:
+        for attempt in range(1, INSTALL_ATTEMPTS + 1):
+            try:
+                return await super().install(environment)
+            except NonZeroAgentExitCodeError as e:
+                if attempt == INSTALL_ATTEMPTS:
+                    raise
+                self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
+                await asyncio.sleep(INSTALL_BACKOFF_SECS * attempt)
 
     def build_cli_flags(self) -> str:
         return " ".join(f for f in (super().build_cli_flags(), f"--agent-class={context_exit.AGENT_CLASS}") if f)
