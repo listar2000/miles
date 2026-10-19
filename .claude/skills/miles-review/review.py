@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Review a listar2000/miles PR with Codex under the pinned protocol in this folder."""
+"""Run the independent review of a listar2000/miles PR with a fresh agent, as SKILL.md "Supervised runs" says."""
 
 import argparse
 import hashlib
@@ -19,6 +19,38 @@ ATTRIBUTION = re.compile(
     re.I,
 )
 SEVERITY_ORDER = ("blocking", "should-fix", "nit")
+SCHEMA = HERE / "output.schema.json"
+PROMPT = """Review pull request #{pr} of listar2000/miles as the independent reviewer. Your guidance is
+.claude/skills/miles-review/SKILL.md; follow it, its "Supervised runs" section included.
+This directory is a throwaway clone at the PR head {head}; the merge base with main is {base}.
+The bundle is {bundle}. Run tests with {python}. Answer with the JSON object it describes."""
+
+
+def codex(args, tree, prompt, out):
+    return [
+        "codex",
+        "exec",
+        "-m",
+        args.model,
+        "-c",
+        f"model_reasoning_effort={args.effort}",
+        "-s",
+        "workspace-write",
+        "--ephemeral",
+        "--json",
+        "-C",
+        str(tree),
+        "--output-schema",
+        str(SCHEMA),
+        "-o",
+        str(out),
+        prompt,
+    ]
+
+
+# Each adapter returns the command that runs one agent non-interactively in `tree` and writes its final message to `out`.
+AGENTS = {"codex": codex}
+DEFAULT_MODELS = {"codex": "gpt-6-astra"}
 VERDICT_FOR = {"blocking": "blocked", "should-fix": "ready after the should-fixes", None: "ready"}
 
 
@@ -205,48 +237,30 @@ def build_bundle(args, work, meta, head, base, tree):
     return bundle, {"files": files, "checks": checks, "attribution": hits, "new_tests": new_tests(diff)}
 
 
-def run_codex(args, work, prompt, tag):
-    out, events = work / f"codex-{tag}.json", work / f"codex-{tag}.jsonl"
-    cmd = [
-        "codex",
-        "exec",
-        "-m",
-        args.model,
-        "-c",
-        f"model_reasoning_effort={args.effort}",
-        "-s",
-        "workspace-write",
-        "--ephemeral",
-        "--json",
-        "-C",
-        str(work / "tree"),
-        "--output-schema",
-        str(HERE / "schema.json"),
-        "-o",
-        str(out),
-        prompt,
-    ]
+def run_agent(args, work, prompt, tag):
+    out, events = work / f"{args.agent}-{tag}.json", work / f"{args.agent}-{tag}.jsonl"
+    cmd = AGENTS[args.agent](args, work / "tree", prompt, out)
     t0 = time.time()
     try:
         p = sh(cmd, timeout=args.timeout, check=False)
     except subprocess.TimeoutExpired:
-        sys.exit(f"codex did not finish within {args.timeout} s")
+        sys.exit(f"{args.agent} did not finish within {args.timeout} s")
     events.write_text(p.stdout)
     usage = {}
     for line in p.stdout.splitlines():
         ev = json.loads(line) if line.startswith("{") else {}
         if ev.get("type") == "turn.completed":
             usage = ev.get("usage", {})
-        if ev.get("type") in ("error", "turn.failed"):
-            sys.exit(f"codex failed: {line[:500]}")
+        if ev.get("type") == "turn.failed":
+            sys.exit(f"{args.agent} failed: {line[:500]}")
     if not out.exists():
-        sys.exit(f"codex wrote no result; see {events}\n{p.stderr[-1500:]}")
+        sys.exit(f"{args.agent} wrote no result; see {events}\n{p.stderr[-1500:]}")
     text = out.read_text()
     return json.loads(text[text.index("{") : text.rindex("}") + 1]), {"seconds": round(time.time() - t0), **usage}
 
 
 def validate(r, ctx, tree):
-    """Mechanical protocol checks; returns the violations as sentences Codex can act on."""
+    """Mechanical protocol checks; returns the violations as sentences the agent can act on."""
     bad = []
     worst = next((s for s in SEVERITY_ORDER[:2] if any(f["severity"] == s for f in r["findings"])), None)
     if r["verdict"] != VERDICT_FOR[worst]:
@@ -290,8 +304,8 @@ def render(r, meta, head, base, run_info, violations):
         "",
         f"# PR #{meta['number']} review: {meta['title']}",
         "",
-        f"Head `{head[:10]}`, base `{base[:10]}`. Reviewer: Codex {run_info['codex']} `{run_info['model']}` "
-        f"(effort {run_info['effort']}), prompt `{run_info['prompt_sha']}`, {run_info['seconds']} s, "
+        f"Head `{head[:10]}`, base `{base[:10]}`. Reviewer: {run_info['agent']} `{run_info['model']}` "
+        f"(effort {run_info['effort']}), protocol `{run_info['protocol']}`, {run_info['seconds']} s, "
         f"{run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out tokens, "
         f"attempt {run_info['attempt']}.",
         "",
@@ -346,17 +360,19 @@ def main():
         "--out", type=Path, default=Path(os.environ.get("MILES_REVIEW_OUT", "~/.cache/miles-review")).expanduser()
     )
     ap.add_argument("--repo", type=Path, default=Path.cwd())
-    ap.add_argument("--model", default="gpt-6-astra")
+    ap.add_argument("--agent", choices=sorted(AGENTS), default="codex")
+    ap.add_argument("--model", help="the agent's model; each adapter has a default")
     ap.add_argument("--effort", default="high")
     ap.add_argument("--python", default=sys.executable, help="interpreter with pytest for miles_ext/tests")
     ap.add_argument("--prior", type=Path, help="an earlier review of this PR")
     ap.add_argument("--head", help="review this commit instead of the PR's current head (it must be in --repo)")
     ap.add_argument("--body", type=Path, help="use this file as the PR body instead of the live one")
-    ap.add_argument("--result", type=Path, help="use this JSON as the first attempt instead of calling Codex")
+    ap.add_argument("--result", type=Path, help="use this JSON as the first attempt instead of calling the agent")
     ap.add_argument("--timeout", type=int, default=3600)
-    ap.add_argument("--bundle-only", action="store_true", help="run the checks and build the bundle, skip Codex")
+    ap.add_argument("--bundle-only", action="store_true", help="run the checks and build the bundle, skip the agent")
     ap.add_argument("--keep", action="store_true", help="keep the checkout after the review")
     args = ap.parse_args()
+    args.model = args.model or DEFAULT_MODELS[args.agent]
     args.out = args.out.resolve()
     args.repo = Path(sh(["git", "rev-parse", "--show-toplevel"], cwd=args.repo).stdout.strip())
 
@@ -369,15 +385,14 @@ def main():
         print(f"bundle: {bundle}")
         return
 
-    template = (HERE / "prompt.md").read_text()
-    prompt = template
-    for key, val in {"PR": args.pr, "HEAD": head, "BASE": base, "BUNDLE": bundle, "PYTHON": args.python}.items():
-        prompt = prompt.replace("{" + key + "}", str(val))
+    prompt = PROMPT.format(pr=args.pr, head=head, base=base, bundle=bundle, python=args.python)
+    protocol = (HERE / "SKILL.md").read_text() + SCHEMA.read_text() + PROMPT
+    version = sh([args.agent, "--version"], check=False).stdout.strip().split()
     run_info = {
-        "codex": sh(["codex", "--version"]).stdout.split()[-1],
+        "agent": f"{args.agent} {version[-1] if version else '?'}",
         "model": args.model,
         "effort": args.effort,
-        "prompt_sha": hashlib.sha256((template + (HERE / "schema.json").read_text()).encode()).hexdigest()[:12],
+        "protocol": hashlib.sha256(protocol.encode()).hexdigest()[:12],
     }
     violations = []
     for attempt in (1, 2):
@@ -388,7 +403,7 @@ def main():
         if args.result and attempt == 1:
             result, usage = json.loads(args.result.read_text()), {"seconds": 0}
         else:
-            result, usage = run_codex(args, work, prompt, f"a{attempt}")
+            result, usage = run_agent(args, work, prompt, f"a{attempt}")
         sh(["git", "checkout", "-q", "--", "."], cwd=tree)
         sh(["git", "clean", "-fdq"], cwd=tree)
         violations = validate(result, ctx, tree)

@@ -31,8 +31,9 @@ It has two users:
   reports only: never push to the PR branch and never comment on GitHub unless
   asked; the PR's owner applies fixes.
 
-The independent review can run on Codex under a pinned prompt and output
-schema: see `codex/README.md`.
+The independent reviewer is a fresh agent (Claude, Codex or another) started by
+`review.py`, which runs the setup and required checks for it; see "Supervised
+runs" at the end. This file is its whole guidance.
 
 The reviewer's job is workflow and best practice: comments, tests, PR hygiene
 and fork conventions. It is never technical depth (whether the algorithm,
@@ -209,7 +210,8 @@ this PR.
 
 ## Report
 
-Write the review to `/mnt/project-files/reviews/pr<N>-<slug>-review.md` when
+In a supervised run, return the JSON in "Supervised runs" instead. Otherwise
+write the review to `/mnt/project-files/reviews/pr<N>-<slug>-review.md` when
 that folder exists (otherwise put it in your reply):
 
 1. Verdict on the first line: ready / ready after the should-fixes / blocked.
@@ -227,3 +229,73 @@ Every required check ran on the head and on `$BASE`; every finding carries
 evidence and a concrete fix; every proposed test was proven green on the head
 and red on `$BASE`; and the PR's branch is untouched (reviewer) or holds
 one commit per fork id that passes every check (author).
+
+## Supervised runs
+
+`review.py` gives every independent review the same inputs, the same output
+shape and the same checks, whichever agent does it:
+
+```bash
+python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python \
+    [--agent codex] [--prior <earlier review.md>] [--out <dir>]
+```
+
+It needs `gh`, `uv`, the agent's CLI logged in, a Python with pytest, aiohttp,
+modal and pyyaml, and a full (not partial or shallow) clone.
+
+1. It checks out the PR head in a throwaway clone, runs Setup and the Ledger,
+   Lint and Extension-tests checks on head and base, and writes a bundle.
+2. It starts the agent in that clone (writable, no network) with a short prompt
+   naming this file, the PR, head, base and bundle path.
+3. It checks the answer against the rules below; on a break it reruns the agent
+   once with the breaks listed, and a second break is printed at the top of the
+   report.
+4. It prints three lines (verdict and counts, protocol status, report path) and
+   writes `review.md` and `review.json` under `<out>/pr<N>-<MMDD-HHMM>/`. The
+   report header names the agent, model, effort and a hash of this file and the
+   schema; two reviews compare only when those match.
+
+**The bundle** (read it instead of re-running those checks): `pr.json` (title,
+body, head), `commits.txt` (log with trailers), `diff.patch`, `diffstat.txt`,
+`files.txt`, `ledger.txt`, `precommit.txt` and `pytest.txt` (head and base),
+`comment_blocks.txt` (blocks of three or more lines touching added lines),
+`ratios.txt`, `attribution.txt` (lines that look like attribution), and
+`prior_review.md` when given (check each of its findings against the head).
+
+**The reviewer still** reads the diff and changed files in full, does sections
+1-4, and proves every new or changed test: run it on the head, `git checkout
+<base> -- <production files>`, run it again (it must fail fast), then `git
+checkout -- . && git clean -fdq`. A test that cannot run on this host (torch, a
+GPU, Modal) is `not run`, with the reason in the summary. No pushes, commits,
+GitHub comments, network, GPUs or Modal apps, and no edits outside the clone.
+
+**The answer** is one JSON object matching `output.schema.json`:
+
+- one finding per problem; a problem repeated across files is one finding
+  anchored at the first location, listing the others in `evidence`;
+- `location` is a path from `files.txt`, `PR body` or `commit <sha8>`; `line`
+  is 1-based at the head, 0 for a whole file, the body or a commit;
+- `evidence` quotes the text or the command and output; `fix` is the exact
+  replacement text or a diff, never advice;
+- `rule` names the broken rule, `severity` follows Severity, and `verdict`
+  follows from them (any blocking: blocked; any should-fix: ready after the
+  should-fixes; else ready);
+- `checks` gives one line per side for each required check; `summary` is at
+  most three sentences a non-specialist can read; technical doubts go in
+  `handoffs`.
+
+**The supervisor rejects** an answer whose verdict does not follow from its
+severities; a finding off the changed files, the body or a commit, past the end
+of its file, or without evidence and an exact fix; a failing ledger on the head
+without a blocking `ledger` finding; attribution lines without an `attribution`
+finding; and a new `test_*` with no proof, or one that passes on base without a
+`test` finding.
+
+**The thread that runs it** reads only the printed lines and the report's top,
+posts the report as the review with the verdict first, says so when the
+protocol check failed, and never re-reviews or adds findings: a disagreement
+goes to the PR owner as a question citing the finding.
+
+To add an agent, add an entry to `AGENTS` in `review.py`: the command that runs
+it non-interactively in the clone with the prompt and schema and writes its
+final message to a file.
