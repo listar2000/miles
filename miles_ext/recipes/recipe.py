@@ -148,6 +148,9 @@ DEFAULTS: dict[str, Any] = {
     # (disk_dir on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
     # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
     "optimizer": {"offload": None, "disk_dir": "/tmp/miles-optimizer", "moment_dtype": None, "grad_dtype": "fp32"},
+    # Engines receive merged full weights; they need no native LoRA support.
+    # target_modules uses Miles' selector syntax; None selects attention and MLP groups.
+    "lora": {"rank": 0, "alpha": 32, "target_modules": None},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default or, for
     # max_concurrent_samples, rollout_batch_size * n_samples. single_pass: hand each prompt out
     # once and let a step wait for every group (evals: num_rollout 1, rollout_batch_size = tasks)
@@ -283,6 +286,9 @@ FIELD_RULES: dict[str, dict] = {
     "optimizer.disk_dir": {"type": "str"},
     "optimizer.moment_dtype": {"type": "str", "nullable": True, "enum": ("bf16",)},
     "optimizer.grad_dtype": {"type": "str", "enum": tuple(_GRAD_DTYPE_FLAGS)},
+    "lora.rank": {"type": "int", "min": 0},
+    "lora.alpha": {"type": "int", "min": 1},
+    "lora.target_modules": {"type": "str", "nullable": True},
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
@@ -473,10 +479,14 @@ def _validate_trainer(recipe: dict) -> None:
             raise ValueError("parallel.* applies to model.backend: megatron only")
         if recipe["optimizer"] != DEFAULTS["optimizer"] or not recipe["checkpoint"]["save_optimizer"]:
             raise ValueError("optimizer.* and checkpoint.save_optimizer apply to model.backend: megatron only")
+        if recipe["lora"]["rank"]:
+            raise ValueError("lora.* applies to model.backend: megatron only")
         return
     if recipe["optimizer"]["offload"] == "disk" and not recipe["cluster"]["disk_gib"]:
         # Modal's default per-container quota (512 GiB) is far below a large model's Adam state
         raise ValueError("optimizer.offload disk needs cluster.disk_gib (node-local disk for Adam's state)")
+    if recipe["lora"]["rank"]:
+        _validate_lora(recipe)
     model_type = PRESETS[recipe["model"]["preset"]].megatron_model_type
     if not model_type:
         raise ValueError(f"preset {recipe['model']['preset']!r} has no megatron_model_type")
@@ -498,6 +508,29 @@ def _validate_trainer(recipe: dict) -> None:
     for ok, message in checks:
         if not ok:
             raise ValueError(f"parallel: {message}")
+
+
+def _validate_lora(recipe: dict) -> None:
+    if recipe["algorithm"]["mode"] != "fully_async":
+        raise ValueError("lora needs algorithm.mode fully_async: the merged sync reads the live trainer weights")
+    if recipe["optimizer"]["offload"]:
+        raise ValueError(
+            "lora trains only the adapters; drop optimizer.offload (Miles refuses the disk Adam with LoRA)"
+        )
+    if recipe["rollout"]["expert_qat"]:
+        raise ValueError("lora leaves the routed experts frozen; drop rollout.expert_qat")
+
+
+def _lora_args(recipe: dict) -> str:
+    lora = recipe["lora"]
+    if not lora["rank"]:
+        return ""
+    args = f" --lora-rank {lora['rank']} --lora-alpha {lora['alpha']} --lora-merged-sync"
+    if lora["target_modules"]:
+        args += f" --target-modules {lora['target_modules']}"
+    if spec := PRESETS[recipe["model"]["preset"]].lora_spec_path:
+        args += f" --custom-lora-spec-path {spec}"
+    return args
 
 
 SMOKE_PROJECT = "miles-smoke"
@@ -839,6 +872,7 @@ def _backend_args(recipe: dict, resume: bool) -> str:
         --override-opt_param-scheduler
         {preset.megatron_args}
         {_optimizer_args(recipe, resume)}
+        {_lora_args(recipe)}
         """
 
 

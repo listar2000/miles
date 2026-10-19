@@ -191,3 +191,35 @@ def test_policy_loss_keeps_tis():
     assert "--use-tis" in argv and "--loss-type" not in argv and "--rollout-top-logprobs-num" not in argv
     assert "--disable-grpo-std-normalization" not in argv and "--calculate-per-token-loss" not in argv
     assert "MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO" not in R.harbor_env(r, "run1")
+
+
+def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec):
+    from miles.backends.megatron_utils.lora.native import validate_native_lora_args
+
+    lora = {"rank": 32, "alpha": 32}
+    r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, rollout={"expert_qat": False})
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    assert _value(argv, "--lora-rank") == "32" and "--lora-merged-sync" in argv
+    assert _value(argv, "--custom-lora-spec-path") == "miles_ext.lora.dsv41"
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "deepseek_v41"}))
+    validate_native_lora_args(_native_lora_args(argv, hf_checkpoint=str(tmp_path)))
+    with pytest.raises(ValueError, match="drop rollout.expert_qat"):
+        R.validate(_recipe(lora=lora, optimizer={"offload": None}), local_inputs=False)
+
+
+def _native_lora_args(argv: list[str], **overrides):
+    """The flags native LoRA validates at startup, as Megatron parses them from ``argv``."""
+    from argparse import Namespace
+
+    flags = ("--colocate", "--overlap-param-gather", "--overlap-grad-reduce", "--moe-shared-expert-overlap")
+    values = {flag.removeprefix("--").replace("-", "_"): flag in argv for flag in flags}
+    return Namespace(
+        **values,
+        lora_rank=int(_value(argv, "--lora-rank")),
+        lora_adapter_path=None,
+        lora_train_only=False,
+        lora_merged_sync="--lora-merged-sync" in argv,
+        expert_tensor_parallel_size=int(_value(argv, "--expert-tensor-parallel-size")),
+        **overrides,
+    )
