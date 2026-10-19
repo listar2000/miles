@@ -39,11 +39,15 @@ Harbor installs the harness in each trial's sandbox; ``HARBOR_AGENT_SETUP_TIMEOU
 """
 
 import asyncio
+import functools
+import importlib
 import json
 import logging
 import os
 import re
+import threading
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -64,10 +68,21 @@ _IMPORT_PATHS = {
 }
 
 
-def _shell_config() -> dict[str, Any]:
+@functools.cache
+def _swebench_environment() -> dict[str, Any]:
+    """swebench.yaml's environment section; read once (every trial config uses it, on the rollout loop)."""
     from miles_ext.harbor.host_agent import load_builtin_config
 
-    env_cfg = load_builtin_config("benchmarks/swebench.yaml").get("environment", {})
+    return load_builtin_config("benchmarks/swebench.yaml").get("environment", {})
+
+
+@functools.cache
+def _mini_swe_agent_version() -> str:
+    return version("mini-swe-agent")
+
+
+def _shell_config() -> dict[str, Any]:
+    env_cfg = _swebench_environment()
     return {
         # "": mini-swe-agent runs commands where Harbor started it, the task's task.toml workdir
         # or else its image's WORKDIR; swebench.yaml's /testbed fits only SWE-bench images
@@ -89,7 +104,7 @@ def _sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -
     version the sandbox installs pinned to the one in this image (unpinned, Harbor installs the latest)."""
     model_kwargs = {**_model_call_kwargs(sampling_params), "drop_params": True, "parallel_tool_calls": False}
     return {
-        "version": version("mini-swe-agent"),
+        "version": _mini_swe_agent_version(),
         "config": {
             "agent": {"step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")), "cost_limit": 0},
             "environment": _shell_config(),
@@ -208,3 +223,33 @@ async def run(
     out["trial_dir"] = str(trial.paths.trial_dir)
     logger.info(f"Harbor trial {instance_id}: exit_status={out['exit_status']} reward={out['reward']}")
     return out
+
+
+def prepare(args, data_source) -> None:
+    """Rollout-setup hook (hook-005): start a daemon thread that imports what the first ``Trial.create`` imports,
+    then runs ``task_hash.prewarm`` over the prompt set's task dirs in hand-out order."""
+    dataset = getattr(data_source, "dataset", None)
+    tasks_dir = os.getenv("HARBOR_TASKS_DIR")
+    if dataset is None or not tasks_dir:
+        return
+    dirs = []
+    for sample in dataset.samples:
+        instance_id = str((sample.metadata or {}).get("instance_id", ""))
+        try:
+            dirs.append(hf._task_path(Path(tasks_dir), instance_id))
+        except (ValueError, FileNotFoundError) as e:
+            logger.warning(f"task_hash prewarm skips {instance_id!r}: {e}")
+    modules = ["harbor.trial.single_step", "harbor.trial.multi_step"]
+    for path in (_IMPORT_PATHS.get(harness_for({})), os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()):
+        if path:
+            modules.append(path.partition(":")[0])
+
+    def _run():
+        for name in modules:
+            try:
+                importlib.import_module(name)
+            except Exception as e:
+                logger.warning(f"prepare: importing {name} failed, the first trial imports it: {e!r}")
+        task_hash.prewarm(dirs)
+
+    threading.Thread(target=_run, name="harbor-prepare", daemon=True).start()

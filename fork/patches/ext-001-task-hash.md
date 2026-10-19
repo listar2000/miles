@@ -20,6 +20,14 @@ lasting the whole wall time.
   never saw falls through to them.
 - A task's attempts share one computation (a per-directory lock). Each `warm` re-checks every
   file's relative path, size and mtime, in its thread, and hashes again when anything changed.
+- `prewarm(task_dirs)` hashes the whole prompt set at rollout setup, before the first weight
+  sync, on 4 threads of its own, in the order the data source hands prompts out. It runs from
+  `agent_function.prepare` (hook-005), in a daemon thread that first imports what the first
+  `Trial.create` imports (Harbor's trial classes, the harness, the `HARBOR_ENV_IMPORT_PATH`
+  provider). Without it the first wave does both at once: the hash threads hold the GIL while the
+  loop imports, and the loop also builds 128 trial configs back to back. A trial whose dir is
+  still being prewarmed waits on that dir's lock, so a set that outlasts the setup is still hashed
+  once. `build_trial_config` reads swebench.yaml and the mini-swe-agent version once, not per trial.
 - Rejected: a `listar2000/harbor` fork (fork/README.md "Harbor"). The fix changes no Harbor
   code path, only where and how often it runs, and a fork would add a second sync to every
   upstream release. Rejected: creating the `Trial` in a thread. The trial result still reads
@@ -36,11 +44,21 @@ lasting the whole wall time.
 - Measured after the change: 4 large tasks, max loop stall 3.8 s and 21.4 s wall; 8 tasks, max
   stall 4.3 s and 26.7 s wall. An evaluation at 128 agents on one 8-GPU node had 156 trials
   started about 30 minutes after the first.
+- Prewarm, CPU probe with the trial config of overfit-1018-a2 (the 8-task
+  DeepSeek-V4.1 overfitting run of 2026-10-18) (mini-swe-agent-sandbox harness, Sail environment
+  constructed but not started; 16 groups x 8 tries of that run's 8 tasks, 10 ms ticker;
+  a CPU-only Modal probe, not in this repo): without prepare, the loop
+  was blocked once for 16.9 s and the first trial started at 16.9 s (the first `Trial.create`
+  11.5 s, 128 config builds 5.2 s). With prepare (12.1 s, before the wave): max loop stall 1.1 s,
+  first trial at 0.7 s, all 128 by 6.2 s. That run's stall was 7 min 43 s on its head node; the
+  probe reproduces its shape (one block, then every trial at once), not its length.
 - On a Harbor sync: check that `Packager.compute_content_hash` and the `Task.checksum` property
   still exist with the same signatures, and that the lock and result still read them from the class.
-- Known cost: the first wave over the 21 GB task set still takes about 30 minutes per launch. It
-  reads each directory twice, and at 128 agents it fills the default thread pool (32 workers).
-  The event loop stays free.
+- Known cost: hashing the 21 GB task set takes about 30 minutes. It reads each directory twice.
+  With prewarm it starts at setup, so a set that hashes faster than the engines load is free;
+  a larger one still overlaps the first wave, where trial warms of not-yet-hashed dirs wait on
+  their locks and the hash threads share the GIL with the loop. A child process for the hashing
+  would remove that (follow-up, not needed for an 8-task set).
 
 ## Remove when
 Harbor computes these hashes off the event loop or caches them per task; upstream status: not filed.
