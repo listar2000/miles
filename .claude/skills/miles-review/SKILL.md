@@ -245,7 +245,7 @@ shape and the same checks, whichever agent does it:
 
 ```bash
 python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python \
-    [--agent codex] [--prior <earlier review.md>] [--out <dir>]
+    [--agent codex] [--board coord/BOARD.md] [--prior <earlier review.md>] [--out <dir>]
 ```
 
 It needs `gh`, `uv`, the agent's CLI logged in, a Python with pytest, aiohttp,
@@ -257,7 +257,9 @@ modal and pyyaml, and a full (not partial or shallow) clone.
    writes a bundle.
 2. It starts the agent read-only, with no shell, and hands it everything in
    one prompt: this file, the rules it points to, the bundle, and every changed
-   file in full. The agent judges; it runs nothing.
+   file in full (only the diff when that would be too long). The agent judges;
+   it runs nothing. A PR whose body starts "Stacked on #N." is diffed against
+   #N's head.
 3. It checks the answer against the rules below; on a break it reruns the agent
    once with the breaks listed, and a second break is printed at the top of the
    report.
@@ -268,7 +270,9 @@ modal and pyyaml, and a full (not partial or shallow) clone.
 
 **The bundle** stands in for Setup and the required checks: `pr.json` (title,
 body, head), `commits.txt` (log with trailers), `diff.patch`, `diffstat.txt`,
-`files.txt`, `ledger_list.txt` (every fork id at the head), `ledger.txt`,
+`files.txt`, `ledger_list.txt` (every fork id at the head),
+`reserved_ids.txt` (id reservations from the coordination board, given with
+`--board`; a reserved id counts as taken), `ledger.txt`,
 `precommit.txt` (failing hooks and exit code) and `pytest.txt` (head and base),
 `test_proofs.txt` (each new test on the head and on the base's production
 files, with times; `error` when it cannot run on this host),

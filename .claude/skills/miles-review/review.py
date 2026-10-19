@@ -34,6 +34,7 @@ CONTEXT_FILES = (
     ".claude/skills/miles-fork/SKILL.md",
     ".github/pull_request_template.md",
 )
+MAX_PROMPT_CHARS = 900_000  # Codex rejects prompts over 1,048,576 characters
 TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*\.py$)")
 
 
@@ -125,7 +126,13 @@ def prepare(args, work):
         cwd=tree,
     )
     sh(["git", "checkout", "-q", head], cwd=tree)
-    base = sh(["git", "merge-base", "origin/main", "HEAD"], cwd=tree).stdout.strip()
+    base_ref = "origin/main"
+    if stacked := re.match(r"\s*Stacked on #(\d+)", meta["body"] or ""):
+        n = stacked.group(1)
+        sh(["git", "fetch", "-q", "origin", f"+pull/{n}/head:refs/review/pr{n}"], cwd=args.repo)
+        sh(["git", "fetch", "-q", str(args.repo), f"refs/review/pr{n}:refs/review/pr{n}"], cwd=tree)
+        base_ref = f"refs/review/pr{n}"
+    base = sh(["git", "merge-base", base_ref, "HEAD"], cwd=tree).stdout.strip()
     return meta, head, base, tree
 
 
@@ -259,6 +266,9 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "diffstat.txt").write_text(git("diff", "--stat", base, head))
     (bundle / "files.txt").write_text("\n".join(files) + "\n")
     (bundle / "ledger_list.txt").write_text(sh([args.python, "fork/tools/ledger.py", "list"], cwd=tree).stdout)
+    if args.board:
+        reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
+        (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
     checks = {"head": run_checks(tree, head, files, args.python), "base": run_checks(tree, base, files, args.python)}
     sh(["git", "checkout", "-q", head], cwd=tree)
     for name in ("ledger", "precommit", "pytest"):
@@ -294,8 +304,14 @@ def build_prompt(args, tree, head, base, bundle, files):
     ]
     sections += [(str(r.relative_to(tree)), r.read_text()) for r in rules]
     sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())]
-    sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in files if (tree / f).is_file()]
-    body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
+    head_files = [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in files if (tree / f).is_file()]
+    body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections + head_files)
+    if len(body) > MAX_PROMPT_CHARS:  # too big for the agent: the diff in bundle/ has to stand in for full files
+        body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
+    if len(body) > MAX_PROMPT_CHARS:
+        sys.exit(
+            f"the bundle alone is {len(body)} characters, over {MAX_PROMPT_CHARS}; split the PR or review it by hand"
+        )
     return PROMPT.format(pr=args.pr, head=head, base=base) + body
 
 
@@ -426,6 +442,7 @@ def main():
     ap.add_argument("--effort", default="high")
     ap.add_argument("--python", default=sys.executable, help="interpreter with pytest for miles_ext/tests")
     ap.add_argument("--prior", type=Path, help="an earlier review of this PR")
+    ap.add_argument("--board", type=Path, help="coordination board whose 'reserved' lines hold fork id reservations")
     ap.add_argument("--head", help="review this commit instead of the PR's current head (it must be in --repo)")
     ap.add_argument("--body", type=Path, help="use this file as the PR body instead of the live one")
     ap.add_argument("--result", type=Path, help="use this JSON as the first attempt instead of calling the agent")
