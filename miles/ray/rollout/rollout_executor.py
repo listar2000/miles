@@ -43,6 +43,7 @@ from miles.utils.http_utils import init_http_client
 from miles.utils.init_once import InitOnce, init_once
 from miles.utils.logging_utils import configure_logger
 from miles.utils.metric_checker import MetricChecker
+from miles.utils.misc import call_agent_prepare_hook  # [fork hook-005]
 from miles.utils.simple_checkpointer import atomic_save_folder
 from miles.utils.timer import timer
 from miles.utils.tracking_utils.tracking import init_tracking
@@ -135,6 +136,8 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
         if self.generate_rollout is not None:
             logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
             logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
+            # [fork hook-005] the agent plugin's one-time setup runs before the first weight sync
+            call_agent_prepare_hook(self.args, self.data_source)
 
         self._eval_lock = asyncio.Lock()
         self._eval_fleet: RolloutExecutorEvalFleet | None = None
