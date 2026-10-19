@@ -60,6 +60,29 @@ async def call_agent_abort_hook(args) -> None:
         logger.warning(f"Agent abort hook {module_path}.abort failed: {e}")
 
 
+def call_agent_prepare_hook(args, data_source) -> None:  # [fork hook-005]
+    """Call the agent module's optional ``prepare(args, data_source)`` once, at rollout setup.
+
+    It must return quickly; long work belongs in a thread.
+    """
+    agent_function_path = getattr(args, "custom_agent_function_path", None)
+    if not agent_function_path:
+        return
+
+    module_path, _, _ = agent_function_path.rpartition(".")
+    if not module_path:
+        return
+    try:
+        prepare_hook = load_function(f"{module_path}.prepare")
+    except (AttributeError, ModuleNotFoundError):
+        return  # plugin doesn't expose a prepare hook
+
+    try:
+        prepare_hook(args, data_source)
+    except Exception as e:
+        logger.warning(f"Agent prepare hook {module_path}.prepare failed: {e}")
+
+
 class SingletonMeta(type):
     """
     A metaclass for creating singleton classes.
