@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| review-supervisor | Infra | Independent PR reviews: one miles-review skill for any agent; `review.py` runs the ledger, lint, extension tests and new-test proofs, the agent (Codex first) only judges, and its JSON answer is checked before posting | active | [review-supervisor.md](review-supervisor.md) |
 | ext-031 | Ext | Megatron saves land on node-local disk (`checkpoint.stage_dir`); each node uploads them to the results volume in the background and the tracker moves once every node has | active | [ext-031-staged-save.md](ext-031-staged-save.md) |
 | ext-020 | Ext | Full-recompute activations in pinned host memory: layer-input checkpoints (`ckpt_offload.install`) and the recomputed layer's saved tensors (`recompute_offload.install`), prefetched ahead of backward; bit-identical | active | [ext-020-ckpt-host-offload.md](ext-020-ckpt-host-offload.md) |
 | fix-004 | Fix | `--async-single-pass`: the fully-async producer hands each prompt out once and the step waits for every group (evals) | active | [fix-004-async-single-pass.md](fix-004-async-single-pass.md) |
