@@ -49,11 +49,11 @@ METRICS = (
     "perf/rollout_time",
 )
 _EVENT_FILES = ("rollout_executor.jsonl", "actor_cell00000_rank00000.jsonl", "trainer_controller_actor.jsonl")
-_OOM = ("CUDA out of memory", "OutOfMemoryError", "torch.OutOfMemoryError",
-        # a Ray worker that dies this way was almost always killed by the kernel OOM killer
-        # (host memory); Ray's own message lists that as the first cause
-        "Worker unexpectedly exits with a connection error code 2")
-_NCCL = ("Watchdog caught collective operation timeout", "NCCL timeout", "ProcessGroupNCCL", "NCCL communicator was aborted")
+_OOM = ("CUDA out of memory", "OutOfMemoryError", "torch.OutOfMemoryError")
+# a host OOM kill, or NCCL's watchdog taking the process down (classify() tells them apart by order)
+_WORKER_DIED = ("Worker unexpectedly exits with a connection error code 2",)
+_WATCHDOG = ("Watchdog caught collective operation timeout",)
+_NCCL = (*_WATCHDOG, "NCCL timeout", "ProcessGroupNCCL", "NCCL communicator was aborted")
 
 
 # the first line of Miles' (or Ray's) output that names an error goes into the exit record's note
@@ -63,11 +63,14 @@ NOTE_CHARS = 500
 
 
 def first_error(lines, reason: str | None = None) -> str | None:
-    """The line that best names the failure: for ``oom`` the first line with an OOM sign, else
-    the first line naming an error (warnings and traceback headers skipped)."""
+    """The line that best names the failure: for ``oom`` the first line with an OOM sign, for ``nccl_timeout``
+    the first watchdog timeout, else the first line naming an error (warnings and traceback headers skipped)."""
     lines = list(lines)
     if reason == "oom":
-        if hit := next((ln for ln in lines if any(s in ln for s in _OOM)), None):
+        if hit := next((ln for ln in lines if any(s in ln for s in _OOM + _WORKER_DIED)), None):
+            return hit.strip()[:NOTE_CHARS]
+    if reason == "nccl_timeout":
+        if hit := next((ln for ln in lines if any(s in ln for s in _WATCHDOG)), None):
             return hit.strip()[:NOTE_CHARS]
     for line in lines:
         if _ERROR_LINE.search(line) and not _NOT_AN_ERROR.search(line):
@@ -75,13 +78,24 @@ def first_error(lines, reason: str | None = None) -> str | None:
     return None
 
 
+def _first(lines: list[str], signs: tuple[str, ...]) -> int | None:
+    return next((i for i, ln in enumerate(lines) if any(s in ln for s in signs)), None)
+
+
 def classify(returncode: int, tail: list[str]) -> str:
     """The exit reason of a Miles process that ended by itself (``tail``: its output, or any part
-    of it that carries the cause)."""
+    of it that carries the cause, in output order). A worker death after an NCCL watchdog timeout is
+    the timeout; one before it (peers time out after a rank is killed) is the kill."""
     if returncode == 0:
         return "success"
-    text = "\n".join(tail)
+    lines = list(tail)
+    text = "\n".join(lines)
     if any(s in text for s in _OOM):
+        return "oom"
+    died, watchdog = _first(lines, _WORKER_DIED), _first(lines, _WATCHDOG)
+    if watchdog is not None and (died is None or watchdog < died):
+        return "nccl_timeout"
+    if died is not None:
         return "oom"
     if any(s in text for s in _NCCL) and ("timeout" in text.lower() or "timed out" in text.lower()):
         return "nccl_timeout"
@@ -170,6 +184,7 @@ class Supervisor:
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)
         self.error_lines: list[str] = []  # the first error lines of the whole output, past the tail's reach
+        self.cause_lines: list[str] = []  # the first line of each kind classify() weighs, in output order
         self.started = time.time()
         self.events = _EventTail(self.run_dir / "checkpoints" / "events", since=self.started)
         self.phase = "starting"
@@ -214,6 +229,9 @@ class Supervisor:
             self.tail.append(line.rstrip("\n"))
             if len(self.error_lines) < TAIL_LINES and _ERROR_LINE.search(line) and not _NOT_AN_ERROR.search(line):
                 self.error_lines.append(line.rstrip("\n"))
+            for signs in (_OOM, _WORKER_DIED, _WATCHDOG):
+                if any(s in line for s in signs) and not any(s in ln for ln in self.cause_lines for s in signs):
+                    self.cause_lines.append(line.rstrip("\n"))
         sys.stdout.flush()
 
     def _stop(self, proc: subprocess.Popen):
@@ -285,10 +303,10 @@ class Supervisor:
         piper.join(timeout=10)
         self.events.poll()
         self.tracker = self._tracker()
+        lines = self.cause_lines + self.error_lines + list(self.tail)
         if reason is None:
-            reason = classify(proc.returncode, self.error_lines + list(self.tail))
-        note = first_error(self.error_lines + list(self.tail), reason) if reason not in ("success", "segment_end",
-                                                                                   "lease_expired") else None
+            reason = classify(proc.returncode, lines)
+        note = first_error(lines, reason) if reason not in ("success", "segment_end", "lease_expired") else None
         return self.finish(reason, proc.returncode, note=note)
 
     def finish(self, reason: str, returncode: int | None, note: str | None = None) -> dict:

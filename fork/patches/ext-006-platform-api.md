@@ -107,7 +107,9 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   r6: `note` holds the first line of the output that names the error (for `oom`, the first
   OOM sign), kept from the whole output, not only the 60-line tail; a Ray worker that died
   with "connection error code 2" (the kernel OOM killer, by Ray's own account) reads as
-  `oom` (platform field report, Megatron run 267df4a9).
+  `oom` (platform field report, Megatron run 267df4a9), unless an NCCL watchdog timeout came
+  first in the output: that worker was taken down by NCCL, so the reason is `nccl_timeout`
+  (a DeepSeek-V4.1 weight save, where one rank's closing barrier timed out while the others still wrote).
 - **Memory defaults** (r6): `algorithm.max_tokens_per_gpu` defaults to 16384 (was 32768).
   It caps the tokens packed into one training micro-batch, and FSDP holds that micro-batch's
   full-vocabulary logits (about 1 GiB per 1k tokens in fp32 at a 248k vocabulary): 32768
