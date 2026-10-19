@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+import pybase64  # [fork fix-016]
 
 from miles.utils.rollout_topk_logprobs import validate_rollout_topk_logprobs_sampling
 from miles.utils.sampling_mask import RolloutSamplingMask
@@ -26,6 +27,8 @@ def configure_rollout_topk_logprobs_request(args: Namespace, request: dict[str, 
         if sampling.get(key) is None:
             sampling[key] = default
     validate_rollout_topk_logprobs_sampling(sampling, temperature=args.rollout_temperature, candidate_count=k)
+    request.pop("return_flat_raw_output_top_logprobs", None)  # [fork fix-016] set below only where read
+    request.pop("return_flat_raw_top_logprobs_b64", None)
     if args.rollout_sampling_logprobs_mode == "support":
         # SGLang's support mode returns the actual post-filter behavior distribution.
         request.pop("top_logprobs", None)
@@ -34,13 +37,22 @@ def configure_rollout_topk_logprobs_request(args: Namespace, request: dict[str, 
     elif openai:
         request.pop("sampling_logprobs_mode", None)
         request["top_logprobs"] = k
+        # [fork fix-016] Candidates as base64 arrays in meta_info; the nested default decodes k strings per token
+        # in the engine's HTTP process.
+        request["return_flat_raw_output_top_logprobs"] = True
+        request["return_flat_raw_top_logprobs_b64"] = True
     else:
         request.pop("sampling_logprobs_mode", None)
         request["top_logprobs_num"] = k
 
 
 def append_rollout_topk_logprobs(
-    sample: Sample, meta: Mapping[str, Any], k: int, *, sampling_logprobs_mode: str = "selected"
+    sample: Sample,
+    meta: Mapping[str, Any],
+    k: int,
+    *,
+    sampling_logprobs_mode: str = "selected",
+    flat: bool = False,  # [fork fix-016] the request asked for return_flat_raw_output_top_logprobs
 ) -> None:
     """Append compact [response, k] arrays after appending generated tokens.
 
@@ -52,6 +64,12 @@ def append_rollout_topk_logprobs(
     if not k:
         return
     n = len(meta.get("output_token_logprobs") or [])
+    if flat:  # [fork fix-016]
+        ids, logps = _decode_flat_topk_logprobs(meta, n, k)
+        for name, values in (("rollout_topk_token_ids", ids), ("rollout_topk_log_probs", logps)):
+            previous = getattr(sample, name)
+            setattr(sample, name, values if previous is None else np.concatenate((previous, values)))
+        return
     support_mode = sampling_logprobs_mode == "support"
     field = "output_token_sampling_logprobs" if support_mode else "output_top_logprobs"
     rows = meta.get(field)
@@ -72,6 +90,23 @@ def append_rollout_topk_logprobs(
     for name, values in (("rollout_topk_token_ids", ids), ("rollout_topk_log_probs", logps)):
         previous = getattr(sample, name)
         setattr(sample, name, values if previous is None else np.concatenate((previous, values)))
+
+
+def _decode_flat_topk_logprobs(meta: Mapping[str, Any], n: int, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """[fork fix-016] SGLang's flat output top logprobs: base64 [rows, width] arrays after null_prefix rows."""
+    if "output_top_logprobs_idx_flat_b64" not in meta:
+        raise ValueError("Requested flat output top logprobs but the response has none (router or SGLang too old?)")
+    rows, width = meta["output_top_logprobs_shape"]
+    null_prefix = meta["output_top_logprobs_null_prefix"]
+    if null_prefix + rows != n or width > k:
+        raise ValueError(f"Flat top logprobs cover {null_prefix}+{rows} rows of width {width}; expected {n} of {k}")
+    ids = np.full((n, k), -1, dtype=np.int32)
+    logps = np.full((n, k), -np.inf, dtype=np.float32)
+    for out, field in ((ids, "idx"), (logps, "val")):
+        data = pybase64.b64decode(meta[f"output_top_logprobs_{field}_flat_b64"], validate=True)
+        dtype = meta[f"output_top_logprobs_{field}_flat_b64_dtype"]
+        out[null_prefix:, :width] = np.frombuffer(data, dtype=dtype).reshape(rows, width)
+    return ids, logps
 
 
 def _support_membership(ids: np.ndarray, support: RolloutSamplingMask) -> tuple[np.ndarray, np.ndarray]:
