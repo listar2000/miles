@@ -73,6 +73,7 @@ class _HarborExecEnvironment:
         self._environment = environment
         self._loop = loop
         self.config = {"cwd": cwd, "env": env, "timeout": timeout}
+        self.uname = {"system": "Linux", "release": "", "version": "", "machine": "x86_64"}
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         from minisweagent.exceptions import Submitted
@@ -105,8 +106,8 @@ class _HarborExecEnvironment:
         return output
 
     def get_template_vars(self, **kwargs) -> dict[str, Any]:
-        # the instance template prints uname fields; report the sandbox as Linux
-        return {**self.config, "system": "Linux", "release": "", "version": "", "machine": "x86_64", **kwargs}
+        # the instance template prints uname fields (the in-sandbox agent reads its own)
+        return {**self.config, **self.uname, **kwargs}
 
     def serialize(self) -> dict:
         return {"info": {"config": {"environment": self.config, "environment_type": "harbor-exec"}}}
@@ -229,6 +230,11 @@ class HostMiniSweAgent(BaseAgent):
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         loop = asyncio.get_running_loop()
         agent = self._build_agent(environment, loop)
+        try:
+            result = await environment.exec("uname -s; uname -r; uname -v; uname -m", timeout_sec=60)
+            agent.env.uname.update(zip(("system", "release", "version", "machine"), (result.stdout or "").splitlines()))
+        except Exception as e:
+            logger.warning(f"uname in the sandbox failed, the prompt reports Linux x86_64: {e}")
         exit_status = "unknown"
         try:
             result = await loop.run_in_executor(_AGENT_THREADS, agent.run, instruction)

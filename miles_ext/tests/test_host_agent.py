@@ -1,6 +1,7 @@
-"""HostMiniSweAgent matches the in-sandbox harness: window exit, output cap, step timings, start directory."""
+"""HostMiniSweAgent matches the in-sandbox harness: window exit, output cap, step timings, start directory, uname."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import minisweagent.models.litellm_model as litellm_model
@@ -18,6 +19,8 @@ class _Sandbox:
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None):
         self.calls.append((command, cwd))
+        if command.startswith("uname"):
+            return SimpleNamespace(stdout="Linux\n6.1.0-test\n#1 SMP\nx86_64\n", stderr="", return_code=0)
         out = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n" if "COMPLETE_TASK" in command else "ok\n"
         return SimpleNamespace(stdout=out, stderr="", return_code=0)
 
@@ -42,7 +45,9 @@ def test_submit_records_timings_and_starts_where_the_sandbox_starts(monkeypatch,
     sandbox, context = _run(
         monkeypatch, tmp_path, [_reply("ls"), _reply("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")], shell=shell
     )
-    assert [cwd for _, cwd in sandbox.calls] == [None, None]
+    assert [cwd for command, cwd in sandbox.calls if not command.startswith("uname")] == [None, None]
+    trajectory = json.loads((tmp_path / "mini-swe-agent.trajectory.json").read_text())
+    assert "Linux 6.1.0-test #1 SMP x86_64" in trajectory["messages"][1]["content"]
     assert context.metadata["mswea_exit_status"] == "Submitted"
     assert len(context.metadata["api_request_times_msec"]) == 2
     assert len(context.metadata["command_exec_times_msec"]) == 1
