@@ -175,6 +175,8 @@ def test_missing_or_mismatched_probabilities_fail_before_training() -> None:
         validate_rollout_topk_logprobs_sample(sample, 3)
     with pytest.raises(ValueError, match="output_top_logprobs"):
         append_rollout_topk_logprobs(Sample(response_length=1), {"output_token_logprobs": [(-1.0, 2, None)]}, 3)
+    with pytest.raises(ValueError, match="flat output top logprobs"):  # [fork fix-016]
+        append_rollout_topk_logprobs(Sample(), {"output_token_logprobs": [(-1.0, 2, None)]}, 3, flat=True)
 
 
 @pytest.mark.parametrize("mode", ["selected", "support"])
