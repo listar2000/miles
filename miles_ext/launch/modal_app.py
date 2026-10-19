@@ -397,7 +397,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             proxy = subprocess.Popen([
                 "python", "-m", "miles_ext.harbor.session_proxy", "--listen-port", str(R.PROXY_PORT),
                 "--upstream-host", head_ip, "--ports", f"{R.SESSION_PORT}-{R.SESSION_PORT + R.SESSION_WORKERS - 1}",
-                "--token", token,
+                f"--token={token}",  # token_urlsafe can start with "-", which argparse reads as a flag
             ])
             stack_ctx.callback(proxy.terminate)
             _wait_for_port("127.0.0.1", R.PROXY_PORT, timeout=60)
