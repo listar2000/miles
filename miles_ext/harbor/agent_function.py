@@ -31,8 +31,8 @@ import path, for providers the pinned Harbor lacks, e.g.
 ``miles_ext.harbor.sail:SailEnvironment``). Upstream's ``_environment_config``
 only knows the first, so this module replaces it on the loaded upstream
 module; with no import path set it delegates unchanged.
-Both mini-swe-agent harnesses use the same settings: mini.yaml templates, swebench.yaml shell env (in-sandbox cwd
-``MSWEA_CWD``, else where Harbor starts the agent; the host harness keeps swebench.yaml's /testbed), ``HARBOR_AGENT_MAX_ITERATIONS``
+Both mini-swe-agent harnesses use the same settings: mini.yaml templates, swebench.yaml shell env (cwd
+``MSWEA_CWD``, else where Harbor starts the agent), ``HARBOR_AGENT_MAX_ITERATIONS``
 steps, ``MSWEA_EXEC_TIMEOUT`` seconds per command, sampling params from the rollout.
 Harbor installs the harness in each trial's sandbox; ``HARBOR_AGENT_SETUP_TIMEOUT_SEC``
 (the recipe's ``agent.setup_timeout``) caps that install instead of Harbor's 360 s.
@@ -51,10 +51,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from miles.rollout.agentic.session import openai_session_url
-
 from miles_ext.harbor import context_exit, task_hash, upstream
 from miles_ext.recipes import recipe as R
+
+from miles.rollout.agentic.session import openai_session_url
 
 hf = upstream.harbor_agent_function()
 
@@ -109,18 +109,17 @@ def _sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -
             "agent": {"step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")), "cost_limit": 0},
             "environment": _shell_config(),
             "model": {"model_kwargs": model_kwargs},
-        }
+        },
     }
 
 
 def _host_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
-    shell = _shell_config()
     return {
         "api_base": session_url,
         "api_key": api_key,
         "llm_call_kwargs": _model_call_kwargs(sampling_params),
         "step_limit": int(os.getenv("HARBOR_AGENT_MAX_ITERATIONS", "50")),
-        "exec_timeout": shell["timeout"],
+        "shell": _shell_config(),
     }
 
 
@@ -129,8 +128,13 @@ hf.HARNESS_BINDINGS[HOST_HARNESS] = hf.HarnessBinding(kwargs=_host_kwargs, env=l
 
 _upstream_environment_config = hf._environment_config
 # what upstream's _environment_config reads that an import-path provider does not honor here
-_TYPE_ONLY_VARS = ("HARBOR_OVERRIDE_CPUS", "HARBOR_OVERRIDE_MEMORY_MB", "HARBOR_OVERRIDE_STORAGE_MB",
-                   "HARBOR_CPU_ENFORCEMENT_POLICY", "HARBOR_MEMORY_ENFORCEMENT_POLICY")
+_TYPE_ONLY_VARS = (
+    "HARBOR_OVERRIDE_CPUS",
+    "HARBOR_OVERRIDE_MEMORY_MB",
+    "HARBOR_OVERRIDE_STORAGE_MB",
+    "HARBOR_CPU_ENFORCEMENT_POLICY",
+    "HARBOR_MEMORY_ENFORCEMENT_POLICY",
+)
 
 
 def _environment_config():
