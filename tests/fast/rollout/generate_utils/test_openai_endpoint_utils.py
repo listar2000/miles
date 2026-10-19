@@ -750,6 +750,10 @@ async def test_create_takes_the_collect_timeout_from_args(monkeypatch):
     monkeypatch.setattr("miles.rollout.generate_utils.openai_endpoint_utils.post", fake_post)
     args = SimpleNamespace(
         session_server_instances=[SessionServerInstance(addr="127.0.0.1:12345", instance_id="i-0")],
+        use_sampling_support_replay=False,
+        rollout_temperature=1.0,
+        rollout_top_p=1.0,
+        rollout_top_k=-1,
         session_collect_timeout=1800.0,
     )
     assert (await OpenAIEndpointTracer.create(args)).collect_timeout == 1800.0
