@@ -44,6 +44,8 @@ class Preset:
     # instead of packing samples up to max_tokens_per_gpu (--use-dynamic-batch-size)
     packed_batches: bool = True
     attention_backend: str | None = "flash"  # --attention-backend; None: the model's spec decides
+    # --custom-lora-spec-path for LoRA on a model Miles' native LoRA does not ship
+    lora_spec_path: str | None = None
 
     @property
     def dir_name(self) -> str:
@@ -81,6 +83,7 @@ PRESETS: dict[str, Preset] = {
         reasoning_parser="deepseek-v41",
         backend="megatron",
         megatron_model_type="deepseek-v4.1",
+        lora_spec_path="miles_ext.lora.dsv41",
         chat_template_kwargs={"thinking": True, "reasoning_effort": "high"},
         precisions={"fp8_fp4": {"SGLANG_DSV4_FP4_EXPERTS": "1"}, "bf16": {"SGLANG_DSV4_FP4_EXPERTS": "0"}},
         env={
