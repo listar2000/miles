@@ -39,6 +39,7 @@ import ledger  # noqa: E402
 REVIEW_PATHS = [
     "examples/experimental/harbor/",  # harbor_agent_function (loaded by path), README (Harbor pin)
     "miles/rollout/agentic/",  # session URLs, provider credentials
+    "miles/rollout/data_source.py",  # agent_function.prepare reads dataset.samples
     "miles/rollout/generate_hub/agentic_tool_call.py",  # --custom-generate-function-path we use
     "miles/rollout/filter_hub/dynamic_sampling_filters.py",
     "miles/utils/arguments.py",  # every flag recipe.py emits

@@ -61,3 +61,28 @@ def test_run_hashes_in_a_thread_before_the_trial(tmp_path, monkeypatch):
     monkeypatch.setattr(af.hf, "_ensure_provider_key", lambda: None)
     asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
     assert seen and len(threads) == 2 and threading.main_thread() not in threads
+
+
+def test_prewarm_hashes_each_dir_once_in_order(tmp_path, monkeypatch):
+    a, b = _task(tmp_path, "a"), _task(tmp_path, "b")
+    calls = []
+    upstream = task_hash._upstream_content_hash
+    monkeypatch.setattr(task_hash, "_upstream_content_hash", lambda p: calls.append(p.name) or upstream(p))
+    task_hash.prewarm([a, b, a, tmp_path / "missing"], workers=1)  # a failing dir is logged, not raised
+    assert calls[:2] == ["a", "b"] and calls.count("a") == 1
+
+
+def test_prepare_prewarms_the_prompt_set_in_its_own_thread(tmp_path, monkeypatch):
+    _task(tmp_path, "a"), _task(tmp_path, "b")
+    monkeypatch.setenv("HARBOR_TASKS_DIR", str(tmp_path))
+    monkeypatch.delenv("HARBOR_ENV_IMPORT_PATH", raising=False)
+    got = []
+    monkeypatch.setattr(
+        af.task_hash, "prewarm", lambda dirs: got.append(([d.name for d in dirs], threading.current_thread().name))
+    )
+    samples = [SimpleNamespace(metadata={"instance_id": i}) for i in ("b", "a", "b", "nope")]
+    af.prepare(SimpleNamespace(), SimpleNamespace(dataset=SimpleNamespace(samples=samples)))
+    for t in threading.enumerate():
+        if t.name == "harbor-prepare":
+            t.join(30)
+    assert got == [(["b", "a", "b"], "harbor-prepare")]  # hand-out order; the missing task is skipped

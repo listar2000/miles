@@ -1,16 +1,22 @@
 """Harbor's two per-trial task-dir hashes, computed once per task in a worker thread instead of on the rollout loop.
 
 ``warm`` stores Harbor's own values; the patched ``Packager.compute_content_hash`` and ``Task.checksum`` read them
-and fall back to Harbor for a dir ``warm`` never saw (fork/patches/ext-001-task-hash.md).
+and fall back to Harbor for a dir ``warm`` never saw (fork/patches/ext-001-task-hash.md). ``prewarm`` hashes a
+whole task set ahead of the first trials (agent_function.prepare, at rollout setup, hook-005).
 """
 
+import logging
 import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from harbor.models.task.task import Task
 from harbor.publisher.packager import Packager
+
+logger = logging.getLogger(__name__)
 
 _upstream_content_hash = Packager.compute_content_hash
 _upstream_checksum = Task.checksum.fget
@@ -67,3 +73,25 @@ def warm(task_dir: Path | str) -> None:
             return
         values = {"content": _upstream_content_hash(root), "dirhash": _upstream_checksum(Task(root))}
         _memo[str(root)] = (sig, values)
+
+
+def prewarm(task_dirs, workers: int = 4) -> None:
+    """``warm`` every dir, in the given order, on ``workers`` threads of its own (not the default pool).
+
+    A trial that needs a dir still being hashed waits on that dir's lock and then reads the stored values,
+    so a task set that outlasts the call is never hashed twice. A dir that fails is left to the trial.
+    """
+    dirs = list(dict.fromkeys(str(Path(d).resolve()) for d in task_dirs))
+    t0 = time.monotonic()
+
+    def one(d: str) -> bool:
+        try:
+            warm(d)
+            return True
+        except Exception as e:
+            logger.warning(f"task_hash prewarm of {d} failed, the trial hashes it: {e!r}")
+            return False
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="task-hash-prewarm") as pool:
+        done = sum(pool.map(one, dirs))
+    logger.info(f"task_hash prewarm: {done}/{len(dirs)} task dirs hashed in {time.monotonic() - t0:.1f}s")
