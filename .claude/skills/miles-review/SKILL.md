@@ -188,8 +188,16 @@ green on the head and red on `$BASE` the same way before you report it.
   files touched with their markers; delete the section if it would say "none"),
   Done, Verification with the exact commands and counts. "Stacked on #N." is
   the first line when it applies.
+- Outcome opens with a plain-language result a non-specialist gets at a
+  glance (bold line or small before/after table), technical detail below. A
+  term a newcomer would not know gets a short "Terms:" line. No run ids
+  (`overfit-1019-a4`) or internal jargon anywhere a reader lands: body, commit
+  messages, patch pages, comments; describe the run and keep its numbers.
+- A patch page added in its own commit uses `Fork-Infra: patch-<id>` and the
+  subject `infra(patches): patch page for <id>, ...`.
 - No "Requested by" header or attribution marker, no generated-by footer, and
-  no claude.ai links (sessions, threads, artifacts). These are should-fix.
+  no claude.ai links (sessions, threads, artifacts). These are should-fix. A
+  `Co-Authored-By:` commit trailer is fine.
 - Every claim matches the diff and the checks you ran (for example "fails
   without the fix": did it fail, and how?).
 - Authors update a body from a file. `gh pr edit N --body-file <file>` fails
