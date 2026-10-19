@@ -154,7 +154,8 @@ def aggregate_forward_results(
             values += batch_result[key]
 
         # Handle dynamic batch size: restore original order
-        if args.use_dynamic_batch_size and hasattr(data_iterator, "micro_batch_indices"):
+        # [fork fix-015] any explicit micro-batch order, including bshd's longest-first one
+        if getattr(data_iterator, "micro_batch_indices", None) is not None:
             origin_values = [None] * len(values)
             origin_indices = sum(data_iterator.micro_batch_indices, [])
             for value, origin_index in zip(values, origin_indices, strict=False):
