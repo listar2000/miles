@@ -32,8 +32,12 @@ class OpenAIEndpointTracer:
         session_server_instance_id: str | None = None,
         samples_wire_fields: tuple[str, ...] = COMPUTED_FIELDS,
         agent_router_url: str | None = None,
+        # [fork fix-042] collecting samples and deleting the session wait this long; create() takes
+        # --session-collect-timeout (a timeout drops the sample's whole group)
+        collect_timeout: float = _SESSION_REQUEST_TIMEOUT,
     ):
         self.router_url = router_url
+        self.collect_timeout = collect_timeout  # [fork fix-042]
         self.session_id = session_id
         self.base_url = f"{router_url}/sessions/{session_id}"
         # The agent may run outside the cluster; the driver's own calls stay on base_url.
@@ -85,6 +89,7 @@ class OpenAIEndpointTracer:
             session_server_instance_id=instance.instance_id,
             samples_wire_fields=samples_wire_fields,
             agent_router_url=instance.external_url,
+            collect_timeout=getattr(args, "session_collect_timeout", _SESSION_REQUEST_TIMEOUT),  # [fork fix-042]
         )
 
     async def collect_samples(
@@ -99,13 +104,13 @@ class OpenAIEndpointTracer:
             payload = await post_buffer_no_retry(
                 f"{self.base_url}/samples",
                 body,
-                timeout=_SESSION_REQUEST_TIMEOUT,
+                timeout=self.collect_timeout,  # [fork fix-042]
             )
         finally:
             try:
                 await asyncio.wait_for(
                     post(self.base_url, {}, action="delete"),
-                    timeout=_SESSION_REQUEST_TIMEOUT,
+                    timeout=self.collect_timeout,  # [fork fix-042]
                 )
             except Exception as e:
                 logger.warning(f"Failed to delete session {self.session_id} after collecting samples: {e}")

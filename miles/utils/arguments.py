@@ -2811,6 +2811,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=32,
                 help="Number of session server instances.",
             )
+            # [fork fix-042] begin
+            parser.add_argument(
+                "--session-collect-timeout",
+                type=float,
+                default=1800.0,
+                help="Seconds the rollout waits for a session server to return a finished session's training "
+                "samples (and to delete the session). A timeout drops the sample's whole group, so this only "
+                "bounds a server that is stuck; a server sharing a node with a busy trainer can take minutes.",
+            )
+            # [fork fix-042] end
             parser.add_argument(
                 "--session-server-ip",
                 type=str,
