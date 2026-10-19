@@ -82,6 +82,40 @@ def test_ray_worker_killed_reads_as_oom_with_a_note():
     assert SUP.first_error(["WARNING: ValueError-ish text", "all good"]) is None
 
 
+NCCL_SAVE_TIMEOUT = [  # a weight save: one rank waited in the closing barrier while the others still wrote
+    "[rank8]:[E1019 11:26:38.579496141 ProcessGroupNCCL.cpp:730] [Rank 8] Watchdog caught collective operation "
+    "timeout: WorkNCCL(SeqNum=15, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=600000) ran for 600071 "
+    "milliseconds before timing out.",
+    "[rank8]:[E1019 11:27:38.633369970 ProcessGroupNCCL.cpp:805] [Rank 8] To avoid data inconsistency, we are "
+    "taking the entire process down.",
+] + RAY_OOM_KILL[1:]
+
+
+def test_nccl_timeout_that_kills_a_worker_reads_as_nccl_timeout():
+    assert SUP.classify(1, NCCL_SAVE_TIMEOUT) == "nccl_timeout"
+    assert "Watchdog caught collective operation timeout" in SUP.first_error(NCCL_SAVE_TIMEOUT, "nccl_timeout")
+    # a CUDA OOM still wins over a timeout it caused
+    assert SUP.classify(1, ["torch.OutOfMemoryError: CUDA out of memory."] + NCCL_SAVE_TIMEOUT) == "oom"
+    # a rank killed first, its peers timing out after: the kill
+    assert SUP.classify(1, RAY_OOM_KILL + NCCL_SAVE_TIMEOUT[:1]) == "oom"
+
+
+def test_watchdog_long_before_the_end_still_names_the_cause(tmp_path, monkeypatch):
+    """The watchdog fired thousands of lines before Ray's worker-death message ended the run."""
+    sentinel = tmp_path / "save-now"
+    sup, _, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    out = [
+        *(f"KeyError: noise {i}" for i in range(80)),
+        NCCL_SAVE_TIMEOUT[0],
+        *(f"shutting down {i}" for i in range(200)),
+        *RAY_OOM_KILL[1:],
+    ]
+    code = f"import sys; [print(x) for x in {out!r}]; raise SystemExit(1)"
+    record = sup.run([sys.executable, "-c", code], cwd=str(tmp_path), env={})
+    assert record["reason"] == "nccl_timeout"
+    assert "Watchdog caught collective operation timeout" in record["note"]
+
+
 def test_error_note_survives_a_long_tail(tmp_path, monkeypatch):
     """The cause is printed long before Miles exits; the note keeps it past the tail's 60 lines."""
     sentinel = tmp_path / "save-now"
