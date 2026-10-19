@@ -29,6 +29,9 @@ class _HostPool:
             fits = [i for i, (buffer, _) in enumerate(self._free) if buffer.numel() >= nbytes]
             if fits:
                 return self._free.pop(min(fits, key=lambda i: self._free[i][0].numel()))
+            # Nothing free is big enough: drop the free buffers that are too small before growing, so micro-batches of
+            # varying length keep the pool at the in-flight working set instead of one set of buffers per new length.
+            self._drop_free()
             self.total_bytes += nbytes
         buffer = torch.empty(nbytes, dtype=torch.uint8)
         err = torch.cuda.cudart().cudaHostRegister(buffer.data_ptr(), nbytes, 0)
@@ -38,6 +41,19 @@ class _HostPool:
     def release(self, buffer: torch.Tensor, done: torch.cuda.Event) -> None:
         with self._lock:
             self._free.append((buffer, done))
+
+    def close(self) -> None:
+        """Unregister the free buffers; buffers still handed out stay registered."""
+        with self._lock:
+            self._drop_free()
+
+    def _drop_free(self) -> None:
+        dropped, self._free = self._free, []
+        for buffer, done in dropped:
+            if done is not None:
+                done.synchronize()
+            torch.cuda.cudart().cudaHostUnregister(buffer.data_ptr())
+            self.total_bytes -= buffer.numel()
 
 
 _pool = _HostPool()

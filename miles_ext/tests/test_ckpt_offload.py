@@ -46,8 +46,14 @@ def test_offload_is_bit_identical_and_frees_the_checkpoints(offloading):
     assert held_ref - held >= LAYERS * ROWS * COLS * 4
 
 
-def test_host_pool_hands_out_the_smallest_free_buffer_that_fits():
+@pytest.fixture
+def pool():
     pool = ckpt_offload._HostPool()
+    yield pool
+    pool.close()  # a freed but still registered range would fail the next registration that reuses it
+
+
+def test_host_pool_hands_out_the_smallest_free_buffer_that_fits(pool):
     small, _ = pool.acquire(1 << 20)
     large, _ = pool.acquire(4 << 20)
     pool.release(small, torch.cuda.Event())  # the fitting buffer is not first in the free list
@@ -55,6 +61,16 @@ def test_host_pool_hands_out_the_smallest_free_buffer_that_fits():
     assert pool.acquire(2 << 20)[0] is large
     assert pool.acquire(1 << 20)[0] is small
     assert pool.total_bytes == 5 << 20
+    pool.release(small, torch.cuda.Event())
+    pool.release(large, torch.cuda.Event())
+
+
+def test_host_pool_drops_buffers_too_small_for_a_longer_micro_batch(pool):
+    for nbytes in (1 << 20, 2 << 20, 3 << 20, 4 << 20, 2 << 20):  # micro-batches of varying length
+        buffers = [pool.acquire(nbytes)[0] for _ in range(2)]  # two checkpoints each
+        for buffer in buffers:
+            pool.release(buffer, torch.cuda.Event())
+    assert pool.total_bytes == 2 * (4 << 20)
 
 
 def test_host_buffers_are_reused_across_steps(offloading):

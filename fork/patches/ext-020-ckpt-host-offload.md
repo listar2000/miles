@@ -20,8 +20,10 @@ microbatch.
   layer are not touched. The checkpoint is a pure copy, so results are bit-identical.
 - The device-to-host copy runs on a side stream right after the save. In backward each checkpoint is copied back one
   layer ahead, so the GPU holds at most two.
-- Host buffers come from an exact-size pool registered with `cudaHostRegister` and reused across steps. The pinned
-  caching allocator rounds every block up to a power of two, which can double the host RAM.
+- Host buffers come from an exact-size pool registered with `cudaHostRegister` and reused across steps (best fit).
+  When no free buffer fits, the free ones are unregistered before a new one is allocated, so micro-batches of varying
+  length (fix-015) keep the pool at the in-flight working set. The pinned caching allocator rounds every block up to
+  a power of two, which can double the host RAM.
 - Plugged in with Miles' existing `--custom-megatron-init-path`, so no upstream file changes.
   - Rejected: patching `CheckpointFunction` itself, which is more invasive and would touch every caller.
   - Rejected: Megatron's fine-grained activation offload, whose hooks sit in the standard attention and MLP modules
