@@ -11,6 +11,11 @@ every bash action is executed in the sandbox through Harbor's
 Token parity is unaffected: every model call still goes through Miles' session
 server, which records the exact sampled tokens.
 
+It matches the in-sandbox harness (``sandbox_agent.py``) where that changes the
+trajectory or its metrics: the context-window exit (``context_exit.ContextExit``),
+Harbor's per-command output cap, and Harbor's per-step LLM-wait and command
+timings in the agent metadata.
+
 kwargs (via ``AgentConfig.kwargs``):
   api_base         per-sample OpenAI-compatible session URL (required)
   api_key          any non-empty string
@@ -19,22 +24,26 @@ kwargs (via ``AgentConfig.kwargs``):
   config_name      mini-swe-agent builtin config for the agent and model
                    templates (default ``mini.yaml``, whose submit step is a
                    bare ``echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT``)
-  env_config_name  builtin config for the shell settings (default
-                   ``benchmarks/swebench.yaml``: cwd /testbed, BASH_ENV so the
-                   image's conda env is active, 60 s per command)
-  exec_timeout     per-command timeout in seconds (default from the config)
+  shell            ``{"cwd", "env", "timeout"}`` for each command; cwd "" runs
+                   where the sandbox starts (default: ``benchmarks/swebench.yaml``,
+                   cwd /testbed, 60 s per command)
+  max_seq_len      context window; the agent ends "ContextExhausted" at it
 """
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import yaml
 from harbor.agents.base import BaseAgent
+from harbor.agents.installed import mini_swe_agent as stock
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+
+from miles_ext.harbor import context_exit
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +80,9 @@ class _HarborExecEnvironment:
         command = action.get("command", "")
         timeout = timeout or self.config["timeout"]
         future = asyncio.run_coroutine_threadsafe(
-            self._environment.exec(command, cwd=cwd or self.config["cwd"], env=self.config["env"], timeout_sec=timeout),
+            self._environment.exec(
+                command, cwd=cwd or self.config["cwd"] or None, env=self.config["env"], timeout_sec=timeout
+            ),
             self._loop,
         )
         try:
@@ -84,6 +95,7 @@ class _HarborExecEnvironment:
                 "returncode": -1,
                 "exception_info": f"An error occurred while executing the command: {type(e).__name__}: {e}",
             }
+        output["output"] = cap_output(output["output"])
         lines = output["output"].lstrip().splitlines(keepends=True)
         if lines and lines[0].strip() == SUBMIT_MARKER and output["returncode"] == 0:
             submission = "".join(lines[1:])
@@ -100,6 +112,42 @@ class _HarborExecEnvironment:
         return {"info": {"config": {"environment": self.config, "environment_type": "harbor-exec"}}}
 
 
+def cap_output(text: str, cap: int = stock.MAX_COMMAND_OUTPUT_BYTES) -> str:
+    """Harbor's in-sandbox output cap (``stock._OUTPUT_CAP_PATCH``): keep head and tail."""
+    if len(text) <= cap:
+        return text
+    return text[: cap // 2] + "\n...[harbor: elided " + str(len(text) - cap) + " chars]...\n" + text[-(cap // 2) :]
+
+
+def _host_agent_class():
+    from minisweagent.agents.default import DefaultAgent
+
+    class _HostAgent(context_exit.ContextExit, DefaultAgent):
+        """DefaultAgent with the window exit and the timings Harbor's step-timing patch stamps in the sandbox."""
+
+        def __init__(self, *args, context_limit: int = 0, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._context_limit = context_limit
+
+        def context_limits(self) -> tuple[int, int]:
+            return self._context_limit, super().context_limits()[1]
+
+        def query(self) -> dict:
+            t0 = time.time()
+            message = super().query()
+            message.setdefault("extra", {})["harbor_llm_wait_msec"] = (time.time() - t0) * 1000
+            return message
+
+        def execute_actions(self, message: dict) -> list[dict]:
+            t0 = time.time()
+            observations = super().execute_actions(message)
+            if observations:
+                observations[0].setdefault("extra", {})["harbor_tool_exec_msec"] = (time.time() - t0) * 1000
+            return observations
+
+    return _HostAgent
+
+
 class HostMiniSweAgent(BaseAgent):
     SUPPORTS_ATIF = False
 
@@ -111,21 +159,20 @@ class HostMiniSweAgent(BaseAgent):
         llm_call_kwargs: dict[str, Any] | None = None,
         step_limit: int = 30,
         config_name: str = "mini.yaml",
-        env_config_name: str = "benchmarks/swebench.yaml",
-        exec_timeout: int | None = None,
+        shell: dict[str, Any] | None = None,
+        max_seq_len: int | None = None,
         **kwargs,
     ):
-        # Miles' agent function passes model_info / max_seq_len for other harnesses
+        # Miles' agent function passes model_info for other harnesses
         kwargs.pop("model_info", None)
-        kwargs.pop("max_seq_len", None)
         super().__init__(*args, **kwargs)
         self._api_base = api_base
         self._api_key = api_key
         self._llm_call_kwargs = dict(llm_call_kwargs or {})
         self._step_limit = step_limit
         self._config = load_builtin_config(config_name)
-        self._env_config = load_builtin_config(env_config_name).get("environment", {})
-        self._exec_timeout = exec_timeout
+        self._shell = shell or load_builtin_config("benchmarks/swebench.yaml").get("environment", {})
+        self._max_seq_len = int(max_seq_len or 0)
 
     @staticmethod
     def name() -> str:
@@ -140,10 +187,8 @@ class HostMiniSweAgent(BaseAgent):
         return None
 
     def _build_agent(self, environment: BaseEnvironment, loop: asyncio.AbstractEventLoop):
-        from minisweagent.agents.default import DefaultAgent
         from minisweagent.models.litellm_model import LitellmModel
 
-        env_cfg = self._env_config
         model_cfg = dict(self._config.get("model", {}))
         model_kwargs = {
             **(model_cfg.get("model_kwargs") or {}),
@@ -151,9 +196,9 @@ class HostMiniSweAgent(BaseAgent):
             "api_base": self._api_base,
             "api_key": self._api_key,
             "drop_params": True,
+            # one command per turn keeps the trajectory a plain linear chat
+            "parallel_tool_calls": False,
         }
-        # one command per turn keeps the trajectory a plain linear chat
-        model_kwargs.pop("parallel_tool_calls", None)
         model = LitellmModel(
             model_name=self.model_name or "openai/model",
             model_kwargs=model_kwargs,
@@ -164,20 +209,21 @@ class HostMiniSweAgent(BaseAgent):
         env = _HarborExecEnvironment(
             environment,
             loop,
-            cwd=env_cfg.get("cwd"),
-            env=dict(env_cfg.get("env") or {}),
-            timeout=int(self._exec_timeout or env_cfg.get("timeout", 60)),
+            cwd=self._shell.get("cwd"),
+            env=dict(self._shell.get("env") or {}),
+            timeout=int(self._shell.get("timeout") or 60),
         )
         agent_cfg = {
             k: v for k, v in self._config.get("agent", {}).items() if k in ("system_template", "instance_template")
         }
-        return DefaultAgent(
+        return _host_agent_class()(
             model,
             env,
             **agent_cfg,
             step_limit=self._step_limit,
             cost_limit=0,
             output_path=self.logs_dir / "mini-swe-agent.trajectory.json",
+            context_limit=self._max_seq_len,
         )
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
@@ -194,4 +240,9 @@ class HostMiniSweAgent(BaseAgent):
             logger.warning(f"mini-swe-agent ended with {exit_status}: {e}")
         finally:
             context.n_steps = agent.n_calls
-            context.metadata = {**(context.metadata or {}), "mswea_exit_status": exit_status, "turns": agent.n_calls}
+            context.metadata = {
+                **(context.metadata or {}),
+                **stock._extract_subtiming_msec({"messages": agent.messages}),
+                "mswea_exit_status": exit_status,
+                "turns": agent.n_calls,
+            }

@@ -1,7 +1,7 @@
 """mini-swe-agent agent class that ends a run "ContextExhausted" when the context window is full.
 
 Self-contained (imports only mini-swe-agent): ``SandboxMiniSweAgent.install`` copies it into the sandbox as
-``AGENT_MODULE`` (fork/patches/ext-001-context-exit.md).
+``AGENT_MODULE`` (fork/patches/ext-001-context-exit.md); the host harness uses the ``ContextExit`` mixin directly.
 """
 
 import os
@@ -67,10 +67,15 @@ def _exit() -> LimitsExceeded:
     )
 
 
-class ContextExitAgent(InteractiveAgent):
+class ContextExit:
+    """Agent mixin; the window comes from ``context_limits`` (default: the env vars above)."""
+
+    def context_limits(self) -> tuple[int, int]:
+        return _env_int(ENV_LIMIT), _env_int(ENV_MIN_REPLY) or _DEFAULT_MIN_REPLY
+
     def query(self) -> dict:
-        limit = _env_int(ENV_LIMIT)
-        if limit and window_full(self.messages, limit, _env_int(ENV_MIN_REPLY) or _DEFAULT_MIN_REPLY):
+        limit, min_reply = self.context_limits()
+        if limit and window_full(self.messages, limit, min_reply):
             raise _exit()
         try:
             return super().query()
@@ -78,3 +83,7 @@ class ContextExitAgent(InteractiveAgent):
             if limit and reply_hit_window(e.messages, limit):
                 raise _exit() from e
             raise
+
+
+class ContextExitAgent(ContextExit, InteractiveAgent):
+    pass

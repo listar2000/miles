@@ -32,6 +32,8 @@ trials in the 1017 eval passed their verifier. The sample stays in the batch wit
   reply reserve.
 - `populate_context_post_run` records mini-swe-agent's exit status as agent metadata `mswea_exit_status` (as the host
   harness does).
+- The host harness (`host_agent.py`, `mini-swe-agent-host`) uses the same check through the `ContextExit` mixin, with the
+  window passed as `max_seq_len` instead of the env var.
 - Sizing (overfit16-4): calls that hit the window ended 2-6 tokens short of it (the 64-token threshold); observation
   tokens per char/3 p50 1.26, p90 1.67 (hence chars / 2); replies p50 980, p90 4750 tokens.
 - Verify: `python -m pytest miles_ext/tests/test_context_exit.py miles_ext/tests/test_sandbox_context_exit.py`.
