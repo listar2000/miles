@@ -244,9 +244,12 @@ It needs `gh`, `uv`, the agent's CLI logged in, a Python with pytest, aiohttp,
 modal and pyyaml, and a full (not partial or shallow) clone.
 
 1. It checks out the PR head in a throwaway clone, runs Setup and the Ledger,
-   Lint and Extension-tests checks on head and base, and writes a bundle.
-2. It starts the agent in that clone (writable, no network) with a short prompt
-   naming this file, the PR, head, base and bundle path.
+   Lint and Extension-tests checks on head and base, proves each new test
+   (section 3: run on the head, then with the base's production files), and
+   writes a bundle.
+2. It starts the agent read-only, with no shell, and hands it everything in
+   one prompt: this file, the rules it points to, the bundle, and every changed
+   file in full. The agent judges; it runs nothing.
 3. It checks the answer against the rules below; on a break it reruns the agent
    once with the breaks listed, and a second break is printed at the top of the
    report.
@@ -255,19 +258,19 @@ modal and pyyaml, and a full (not partial or shallow) clone.
    report header names the agent, model, effort and a hash of this file and the
    schema; two reviews compare only when those match.
 
-**The bundle** (read it instead of re-running those checks): `pr.json` (title,
+**The bundle** stands in for Setup and the required checks: `pr.json` (title,
 body, head), `commits.txt` (log with trailers), `diff.patch`, `diffstat.txt`,
-`files.txt`, `ledger.txt`, `precommit.txt` and `pytest.txt` (head and base),
+`files.txt`, `ledger_list.txt` (every fork id at the head), `ledger.txt`,
+`precommit.txt` (failing hooks and exit code) and `pytest.txt` (head and base),
+`test_proofs.txt` (each new test on the head and on the base's production
+files, with times; `error` when it cannot run on this host),
 `comment_blocks.txt` (blocks of three or more lines touching added lines),
 `ratios.txt`, `attribution.txt` (lines that look like attribution), and
 `prior_review.md` when given (check each of its findings against the head).
 
-**The reviewer still** reads the diff and changed files in full, does sections
-1-4, and proves every new or changed test: run it on the head, `git checkout
-<base> -- <production files>`, run it again (it must fail fast), then `git
-checkout -- . && git clean -fdq`. A test that cannot run on this host (torch, a
-GPU, Modal) is `not run`, with the reason in the summary. No pushes, commits,
-GitHub comments, network, GPUs or Modal apps, and no edits outside the clone.
+**The reviewer** does sections 1-4 from the prompt alone. A smaller test it
+proposes goes in `fix` marked unproven; the PR's owner proves it. Upstream's
+`REVIEW.md` is for upstream PRs; on this fork, this file wins.
 
 **The answer** is one JSON object matching `output.schema.json`:
 
@@ -275,21 +278,20 @@ GitHub comments, network, GPUs or Modal apps, and no edits outside the clone.
   anchored at the first location, listing the others in `evidence`;
 - `location` is a path from `files.txt`, `PR body` or `commit <sha8>`; `line`
   is 1-based at the head, 0 for a whole file, the body or a commit;
-- `evidence` quotes the text or the command and output; `fix` is the exact
-  replacement text or a diff, never advice;
+- `evidence` quotes the text, or the bundle file and lines it comes from;
+  `fix` is the exact replacement text or a diff, never advice;
 - `rule` names the broken rule, `severity` follows Severity, and `verdict`
   follows from them (any blocking: blocked; any should-fix: ready after the
   should-fixes; else ready);
-- `checks` gives one line per side for each required check; `summary` is at
-  most three sentences a non-specialist can read; technical doubts go in
-  `handoffs`.
+- `summary` is at most three sentences a non-specialist can read; technical
+  doubts go in `handoffs`.
 
 **The supervisor rejects** an answer whose verdict does not follow from its
 severities; a finding off the changed files, the body or a commit, past the end
 of its file, or without evidence and an exact fix; a failing ledger on the head
 without a blocking `ledger` finding; attribution lines without an `attribution`
-finding; and a new `test_*` with no proof, or one that passes on base without a
-`test` finding.
+finding; and a new test that passes on the base without a `test` finding
+naming it.
 
 **The thread that runs it** reads only the printed lines and the report's top,
 posts the report as the review with the verdict first, says so when the
@@ -297,5 +299,5 @@ protocol check failed, and never re-reviews or adds findings: a disagreement
 goes to the PR owner as a question citing the finding.
 
 To add an agent, add an entry to `AGENTS` in `review.py`: the command that runs
-it non-interactively in the clone with the prompt and schema and writes its
-final message to a file.
+it non-interactively and read-only with the prompt on stdin and the schema, and
+writes its final message to a file.

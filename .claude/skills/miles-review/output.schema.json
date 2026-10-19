@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "summary", "findings", "test_proofs", "checks", "handoffs"],
+  "required": ["verdict", "summary", "findings", "handoffs"],
   "properties": {
     "verdict": {"type": "string", "enum": ["ready", "ready after the should-fixes", "blocked"]},
     "summary": {"type": "string"},
@@ -24,36 +24,8 @@
           "title": {"type": "string"},
           "location": {"type": "string", "description": "A repo path from the diff, or 'PR body' or 'commit <sha8>'."},
           "line": {"type": "integer", "description": "1-based line at the PR head; 0 for a whole file, the PR body or a commit."},
-          "evidence": {"type": "string", "description": "The command and its output, or the quoted text."},
+          "evidence": {"type": "string", "description": "The quoted text, or the bundle file and lines it comes from."},
           "fix": {"type": "string", "description": "Exact replacement text or a unified diff."}
-        }
-      }
-    },
-    "test_proofs": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["test", "head", "base", "head_seconds", "base_seconds"],
-        "properties": {
-          "test": {"type": "string", "description": "pytest node id"},
-          "head": {"type": "string", "enum": ["pass", "fail", "error", "not run"]},
-          "base": {"type": "string", "enum": ["pass", "fail", "error", "not run"]},
-          "head_seconds": {"type": "number"},
-          "base_seconds": {"type": "number"}
-        }
-      }
-    },
-    "checks": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "head", "base"],
-        "properties": {
-          "name": {"type": "string"},
-          "head": {"type": "string"},
-          "base": {"type": "string"}
         }
       }
     },

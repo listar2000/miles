@@ -20,13 +20,24 @@ ATTRIBUTION = re.compile(
 )
 SEVERITY_ORDER = ("blocking", "should-fix", "nit")
 SCHEMA = HERE / "output.schema.json"
-PROMPT = """Review pull request #{pr} of listar2000/miles as the independent reviewer. Your guidance is
-.claude/skills/miles-review/SKILL.md; follow it, its "Supervised runs" section included.
-This directory is a throwaway clone at the PR head {head}; the merge base with main is {base}.
-The bundle is {bundle}. Run tests with {python}. Answer with the JSON object it describes."""
+PROMPT = """Review pull request #{pr} of listar2000/miles (head {head}, merge base {base}) as the
+independent reviewer. Your guidance is .claude/skills/miles-review/SKILL.md, its "Supervised runs"
+section included. Everything you need is below: the skill, the rules it points to, the bundle and
+every changed file at the head. Do not run commands. REVIEW.md (upstream's review guide) is left out
+on purpose; .agents/rules is the same as .claude/rules, included when the PR touches miles/. Answer
+with the JSON object the skill describes.
+"""
+CONTEXT_FILES = (
+    ".claude/skills/miles-review/SKILL.md",
+    "fork/README.md",
+    "fork/rfcs/0001-main-and-stable-versions.md",
+    ".claude/skills/miles-fork/SKILL.md",
+    ".github/pull_request_template.md",
+)
+TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*\.py$)")
 
 
-def codex(args, tree, prompt, out):
+def codex(args, out):
     return [
         "codex",
         "exec",
@@ -35,33 +46,34 @@ def codex(args, tree, prompt, out):
         "-c",
         f"model_reasoning_effort={args.effort}",
         "-s",
-        "workspace-write",
+        "read-only",
         "--ephemeral",
+        "--skip-git-repo-check",
         "--json",
-        "-C",
-        str(tree),
         "--output-schema",
         str(SCHEMA),
         "-o",
         str(out),
-        prompt,
+        "-",
     ]
 
 
-# Each adapter returns the command that runs one agent non-interactively in `tree` and writes its final message to `out`.
+# Each adapter returns the command that runs one agent non-interactively and read-only, with the prompt on stdin
+# and its final message written to `out`.
 AGENTS = {"codex": codex}
 DEFAULT_MODELS = {"codex": "gpt-6-astra"}
 VERDICT_FOR = {"blocking": "blocked", "should-fix": "ready after the should-fixes", None: "ready"}
 
 
-def sh(cmd, cwd=None, timeout=None, check=True):
+def sh(cmd, cwd=None, timeout=None, check=True, input=None):
     p = subprocess.run(
         cmd,
         cwd=cwd,
         timeout=timeout,
         text=True,
         capture_output=True,
-        stdin=subprocess.DEVNULL,
+        input=input,
+        stdin=None if input is not None else subprocess.DEVNULL,
         shell=isinstance(cmd, str),
     )
     if check and p.returncode:
@@ -124,7 +136,8 @@ def run_checks(tree, rev, files, python):
     present = [f for f in files if (tree / f).exists()]
     if present:
         p = sh(["uvx", "pre-commit", "run", "--files", *present], cwd=tree, timeout=1800, check=False)
-        out["precommit"] = tail(p, 80)
+        kept = [line for line in tail(p, 400).splitlines() if not line.endswith(("Passed", "Skipped"))]
+        out["precommit"] = "\n".join(kept + [f"exit {p.returncode}" + ("" if p.returncode else ": all hooks passed")])
         sh(["git", "checkout", "-q", "--", "."], cwd=tree)
     else:
         out["precommit"] = "(no changed files at this revision)"
@@ -199,14 +212,38 @@ def ratios(diff):
 
 
 def new_tests(diff):
-    names, current = [], ""
+    nodes, current = [], ""
     for line in diff.splitlines():
         if line.startswith("+++ b/"):
             current = line[6:]
         m = re.match(r"\+\s*(?:async\s+)?def (test_\w+)", line)
         if m and current.endswith(".py"):
-            names.append(m.group(1))
-    return names
+            nodes.append(f"{current}::{m.group(1)}")
+    return nodes
+
+
+def pytest_node(tree, node, python):
+    t0 = time.time()
+    p = sh([python, "-m", "pytest", node, "-q", "-p", "no:cacheprovider"], cwd=tree, timeout=600, check=False)
+    result = {0: "pass", 1: "fail"}.get(p.returncode, "error")
+    return result, round(time.time() - t0, 1), tail(p, 3)
+
+
+def prove_tests(tree, base, files, nodes, python):
+    """Run each new test on the head, then with the base's version of every changed production file."""
+    proofs = {node: {"head": pytest_node(tree, node, python)} for node in nodes}
+    for f in files:
+        if TEST_FILE.search(f):
+            continue
+        if sh(["git", "cat-file", "-e", f"{base}:{f}"], cwd=tree, check=False).returncode == 0:
+            sh(["git", "checkout", "-q", base, "--", f], cwd=tree)
+        elif (tree / f).exists():
+            (tree / f).unlink()
+    for node in nodes:
+        proofs[node]["base"] = pytest_node(tree, node, python)
+    sh(["git", "reset", "-q", "--hard"], cwd=tree)
+    sh(["git", "clean", "-fdq"], cwd=tree)
+    return proofs
 
 
 def build_bundle(args, work, meta, head, base, tree):
@@ -221,12 +258,23 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "diff.patch").write_text(diff)
     (bundle / "diffstat.txt").write_text(git("diff", "--stat", base, head))
     (bundle / "files.txt").write_text("\n".join(files) + "\n")
+    (bundle / "ledger_list.txt").write_text(sh([args.python, "fork/tools/ledger.py", "list"], cwd=tree).stdout)
     checks = {"head": run_checks(tree, head, files, args.python), "base": run_checks(tree, base, files, args.python)}
     sh(["git", "checkout", "-q", head], cwd=tree)
     for name in ("ledger", "precommit", "pytest"):
         (bundle / f"{name}.txt").write_text(
             f"== head {head[:8]}\n{checks['head'][name]}\n\n== base {base[:8]}\n{checks['base'][name]}\n"
         )
+    nodes = new_tests(diff)
+    proofs = prove_tests(tree, base, files, nodes, args.python)
+    (bundle / "test_proofs.txt").write_text(
+        "\n".join(
+            f"{n}: head {p['head'][0]} ({p['head'][1]} s), base {p['base'][0]} ({p['base'][1]} s)\n"
+            f"  head: {p['head'][2]}\n  base: {p['base'][2]}"
+            for n, p in proofs.items()
+        )
+        or "no new tests"
+    )
     (bundle / "comment_blocks.txt").write_text("\n".join(comment_blocks(tree, added_lines(diff))) or "none")
     (bundle / "ratios.txt").write_text(ratios(diff))
     hits = [f"PR body: {line}" for line in (meta["body"] or "").splitlines() if ATTRIBUTION.search(line)]
@@ -234,15 +282,29 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "attribution.txt").write_text("\n".join(hits) or "none")
     if args.prior:
         shutil.copy(args.prior, bundle / "prior_review.md")
-    return bundle, {"files": files, "checks": checks, "attribution": hits, "new_tests": new_tests(diff)}
+    return bundle, {"files": files, "checks": checks, "attribution": hits, "proofs": proofs}
+
+
+def build_prompt(args, tree, head, base, bundle, files):
+    rules = sorted((tree / ".claude/rules").glob("*.md")) if any(f.startswith("miles/") for f in files) else []
+    # The skill comes from the supervisor's own copy, so a PR that edits it is still reviewed under the current one.
+    sections = [
+        (p, ((HERE / "SKILL.md") if p.endswith("miles-review/SKILL.md") else tree / p).read_text())
+        for p in CONTEXT_FILES
+    ]
+    sections += [(str(r.relative_to(tree)), r.read_text()) for r in rules]
+    sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())]
+    sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in files if (tree / f).is_file()]
+    body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
+    return PROMPT.format(pr=args.pr, head=head, base=base) + body
 
 
 def run_agent(args, work, prompt, tag):
     out, events = work / f"{args.agent}-{tag}.json", work / f"{args.agent}-{tag}.jsonl"
-    cmd = AGENTS[args.agent](args, work / "tree", prompt, out)
+    cmd = AGENTS[args.agent](args, out)
     t0 = time.time()
     try:
-        p = sh(cmd, timeout=args.timeout, check=False)
+        p = sh(cmd, timeout=args.timeout, check=False, input=prompt)
     except subprocess.TimeoutExpired:
         sys.exit(f"{args.agent} did not finish within {args.timeout} s")
     events.write_text(p.stdout)
@@ -282,23 +344,15 @@ def validate(r, ctx, tree):
         bad.append("ledger check fails on the head but there is no blocking 'ledger' finding")
     if ctx["attribution"] and not any(f["rule"] == "attribution" for f in r["findings"]):
         bad.append(f"attribution lines present ({ctx['attribution'][0]!r}) but no 'attribution' finding")
-    if not r["checks"]:
-        bad.append("checks is empty")
-    proofs = {p["test"].rsplit("::", 1)[-1].split("[")[0]: p for p in r["test_proofs"]}
-    for name in ctx["new_tests"]:
-        p = proofs.get(name)
-        if p is None:
-            bad.append(f"new test {name} has no entry in test_proofs")
-        elif (
-            p["head"] == "pass"
-            and p["base"] == "pass"
-            and not any(f["rule"] == "test" and name in f["title"] + f["evidence"] for f in r["findings"])
-        ):
+    for node, p in ctx["proofs"].items():
+        name = node.rsplit("::", 1)[-1]
+        named = any(f["rule"] == "test" and name in f["title"] + f["evidence"] + f["fix"] for f in r["findings"])
+        if p["head"][0] == "pass" and p["base"][0] == "pass" and not named:
             bad.append(f"{name} passes on the base, so it cannot go red, but no 'test' finding names it")
     return bad
 
 
-def render(r, meta, head, base, run_info, violations):
+def render(r, meta, head, base, run_info, violations, proofs, checks):
     lines = [
         f"{r['verdict'].capitalize()}.",
         "",
@@ -339,15 +393,22 @@ def render(r, meta, head, base, run_info, violations):
                 "```",
                 "",
             ]
-    if r["test_proofs"]:
-        lines += ["## Test proofs", "", "| Test | Head | Base |", "| --- | --- | --- |"]
+    if proofs:
+        lines += ["## Test proofs (run by the supervisor)", "", "| Test | Head | Base |", "| --- | --- | --- |"]
         lines += [
-            f"| `{p['test']}` | {p['head']} ({p['head_seconds']:.1f} s) | {p['base']} ({p['base_seconds']:.1f} s) |"
-            for p in r["test_proofs"]
+            f"| `{n}` | {p['head'][0]} ({p['head'][1]} s) | {p['base'][0]} ({p['base'][1]} s) |"
+            for n, p in proofs.items()
         ]
         lines.append("")
-    lines += ["## Checks", "", "| Check | Head | Base |", "| --- | --- | --- |"]
-    lines += [f"| {c['name']} | {c['head']} | {c['base']} |" for c in r["checks"]]
+
+    def brief(name, text):
+        if name == "precommit":
+            failed = re.findall(r"^(.+?)\.{3,}Failed$", text, re.M)
+            return f"failed: {', '.join(failed)}" if failed else "all hooks pass"
+        return text.strip().splitlines()[-1].strip("= ") if text.strip() else "-"
+
+    lines += ["## Checks (run by the supervisor)", "", "| Check | Head | Base |", "| --- | --- | --- |"]
+    lines += [f"| {k} | {brief(k, checks['head'][k])} | {brief(k, checks['base'][k])} |" for k in checks["head"]]
     if r["handoffs"]:
         lines += ["", "## Handoffs", ""] + [f"- **{h['owner']}**: {h['note']}" for h in r["handoffs"]]
     return "\n".join(lines) + "\n"
@@ -385,8 +446,9 @@ def main():
         print(f"bundle: {bundle}")
         return
 
-    prompt = PROMPT.format(pr=args.pr, head=head, base=base, bundle=bundle, python=args.python)
-    protocol = (HERE / "SKILL.md").read_text() + SCHEMA.read_text() + PROMPT
+    prompt = build_prompt(args, tree, head, base, bundle, ctx["files"])
+    (work / "prompt.txt").write_text(prompt)
+    protocol = (HERE / "SKILL.md").read_text() + SCHEMA.read_text() + PROMPT + Path(__file__).read_text()
     version = sh([args.agent, "--version"], check=False).stdout.strip().split()
     run_info = {
         "agent": f"{args.agent} {version[-1] if version else '?'}",
@@ -404,15 +466,13 @@ def main():
             result, usage = json.loads(args.result.read_text()), {"seconds": 0}
         else:
             result, usage = run_agent(args, work, prompt, f"a{attempt}")
-        sh(["git", "checkout", "-q", "--", "."], cwd=tree)
-        sh(["git", "clean", "-fdq"], cwd=tree)
         violations = validate(result, ctx, tree)
         if not violations:
             break
         print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
     run_info.update(usage, attempt=attempt)
     report = work / "review.md"
-    report.write_text(render(result, meta, head, base, run_info, violations))
+    report.write_text(render(result, meta, head, base, run_info, violations, ctx["proofs"], ctx["checks"]))
     (work / "review.json").write_text(json.dumps({"run": run_info, "violations": violations, **result}, indent=2))
     if not args.keep:
         shutil.rmtree(tree)
