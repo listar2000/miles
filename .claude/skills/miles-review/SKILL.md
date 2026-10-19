@@ -31,6 +31,9 @@ It has two users:
   reports only: never push to the PR branch and never comment on GitHub unless
   asked; the PR's owner applies fixes.
 
+The independent review can run on Codex under a pinned prompt and output
+schema: see `codex/README.md`.
+
 The reviewer's job is workflow and best practice: comments, tests, PR hygiene
 and fork conventions. It is never technical depth (whether the algorithm,
 memory math or recipe is right); that belongs to the PR's owner and its
