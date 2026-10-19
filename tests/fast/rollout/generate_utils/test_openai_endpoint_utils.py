@@ -739,3 +739,47 @@ async def test_create_selects_wire_fields_by_session_server_version(monkeypatch)
             args(True, 0.95, 32), evaluation=True, sampling_params=sampling_params(0.95, 32)
         )
     ).samples_wire_fields == COMPUTED_FIELDS
+
+
+# [fork fix-017] begin
+@pytest.mark.asyncio
+async def test_create_takes_the_collect_timeout_from_args(monkeypatch):
+    async def fake_post(url, payload, action="post"):
+        return {"session_id": "sid-1"}
+
+    monkeypatch.setattr("miles.rollout.generate_utils.openai_endpoint_utils.post", fake_post)
+    args = SimpleNamespace(
+        session_server_instances=[SessionServerInstance(addr="127.0.0.1:12345", instance_id="i-0")],
+        use_sampling_support_replay=False,
+        rollout_temperature=1.0,
+        rollout_top_p=1.0,
+        rollout_top_k=-1,
+        session_collect_timeout=1800.0,
+    )
+    assert (await OpenAIEndpointTracer.create(args)).collect_timeout == 1800.0
+
+
+@pytest.mark.asyncio
+async def test_collect_samples_waits_up_to_the_collect_timeout(monkeypatch):
+    seen: list[float] = []
+
+    async def fake_post_bytes(url, payload, *, timeout):
+        seen.append(timeout)
+        return _computed_reply_payload()
+
+    async def fake_wait_for(coro, timeout):
+        seen.append(timeout)
+        return await coro
+
+    async def fake_post(url, payload, action="post"):
+        return {}
+
+    monkeypatch.setattr("miles.rollout.generate_utils.openai_endpoint_utils.post_buffer_no_retry", fake_post_bytes)
+    monkeypatch.setattr("miles.rollout.generate_utils.openai_endpoint_utils.post", fake_post)
+    monkeypatch.setattr("miles.rollout.generate_utils.openai_endpoint_utils.asyncio.wait_for", fake_wait_for)
+    tracer = OpenAIEndpointTracer(router_url="http://127.0.0.1:12345", session_id="sid-1", collect_timeout=1800.0)
+    await tracer.collect_samples(Sample(), max_seq_len=7)
+    assert seen == [1800.0, 1800.0]
+
+
+# [fork fix-017] end
