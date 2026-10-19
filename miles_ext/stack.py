@@ -15,13 +15,13 @@ UPSTREAM_TAG = "v0.1.2"
 # The upstream commit main last merged: UPSTREAM_TAG itself, or between releases
 # the commit BASE_IMAGE was built from (RFC 0001). The ledger and the src
 # layer's whiteouts diff against it.
-UPSTREAM_BASE = "af4413b74f33f072883b6fbc760cccba3d56160d"  # upstream main 2026-10-14
+UPSTREAM_BASE = "69a147dfc2544f290923fa83b13467b9b17fc2f5"  # upstream main 2026-10-16
 # What image labels and W&B tags call the upstream: the tag, plus the commit when main is past it
 UPSTREAM_LABEL = UPSTREAM_TAG if UPSTREAM_BASE == UPSTREAM_TAG else f"{UPSTREAM_TAG}+{UPSTREAM_BASE[:10]}"
-# radixark/miles:dev built 2026-10-15 from Miles af4413b74, sglang-miles 7b6993a,
+# radixark/miles:dev-202610160544 built 2026-10-16 from Miles 69a147dfc, sglang-miles 7b6993a,
 # Megatron-LM miles-main 9df207f (read from the image's .git refs): the v0.1.2
 # Dockerfile and pins, plus 9 SGLang and 1 Megatron commits
-BASE_IMAGE = "radixark/miles:dev@sha256:b836fec3693e7cbf5104d6d7b8530cd9c82e2a187eee29449cc95f41f6f69159"
+BASE_IMAGE = "radixark/miles:dev@sha256:c64fa344e3a86715f03c0a1b6a422c474e0035355591a2f6da87bf52a74c52da"
 
 # Harbor: the branch Miles documents for v0.1.2 (harbor-miles-v0.20.0), pinned
 # by commit. Runtime changes we need go through Harbor's import_path (agents,
