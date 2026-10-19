@@ -9,9 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 from harbor.agents.installed import mini_swe_agent as stock
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.task.config import NetworkMode, NetworkPolicy
 
 from miles_ext.harbor import agent_function as af
+from miles_ext.harbor import sandbox_agent
 from miles_ext.harbor.sandbox_agent import SandboxMiniSweAgent
 
 NO_NETWORK = NetworkPolicy(network_mode=NetworkMode.NO_NETWORK)
@@ -87,3 +89,37 @@ def test_host_harness_adds_no_allowlist(monkeypatch):
     monkeypatch.setenv("MILES_EXT_HARNESS", af.HOST_HARNESS)
     config = af.build_trial_config({"instance_id": "x"}, "http://10.0.0.1:30000/sessions/s/v1", {})
     assert config.agent.extra_allowed_hosts == []
+
+
+class _NotInstalled:
+    """A sandbox where the harness is not yet installed."""
+
+    async def exec(self, command, **kwargs):
+        return SimpleNamespace(return_code=1, stdout="", stderr="")
+
+
+def _install(monkeypatch, tmp_path, failures):
+    calls = []
+
+    async def flaky_install(self, environment):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise NonZeroAgentExitCodeError("Command failed (exit 2): uv tool install mini-swe-agent")
+
+    async def noop_exec(self, environment, command, **kwargs):
+        return None
+
+    monkeypatch.setattr(stock.MiniSweAgent, "install", flaky_install)
+    monkeypatch.setattr(SandboxMiniSweAgent, "exec_as_agent", noop_exec)
+    monkeypatch.setattr(sandbox_agent, "INSTALL_BACKOFF_SECS", 0)
+    asyncio.run(SandboxMiniSweAgent(logs_dir=tmp_path, model_name="openai/m").install(_NotInstalled()))
+    return len(calls)
+
+
+def test_install_retries_a_dropped_download(monkeypatch, tmp_path):
+    assert _install(monkeypatch, tmp_path, failures=2) == 3
+
+
+def test_install_gives_up_after_the_last_attempt(monkeypatch, tmp_path):
+    with pytest.raises(NonZeroAgentExitCodeError):
+        _install(monkeypatch, tmp_path, failures=sandbox_agent.INSTALL_ATTEMPTS)

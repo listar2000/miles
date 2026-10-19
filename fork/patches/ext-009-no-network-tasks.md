@@ -20,6 +20,11 @@ Run 4's TB4 tasks had network, so neither showed up before.
 - `build_trial_config` adds the tunnel host to `AgentConfig.extra_allowed_hosts`, Harbor's
   own run-time allowlist for the agent phase. A no-network task becomes an allowlist with
   that one host; Harbor ignores the entry on a public task. The verifier phase is untouched.
+- `SandboxMiniSweAgent.install` retries Harbor's stock install on `NonZeroAgentExitCodeError`, up to
+  `INSTALL_ATTEMPTS` (4) attempts, 15/30/45 s apart (`INSTALL_BACKOFF_SECS`). The install downloads from
+  PyPI, astral.sh and the distro mirrors; a dropped connection otherwise aborts the trial before its first
+  model call and drops the sample's whole group. Each stock install step skips what is already in place,
+  so a repeat is safe.
 
 Rejected: allowlisting install hosts (PyPI, astral.sh, apt mirrors) in the environment
 baseline, which would also leave them open to the agent and a shared verifier.
