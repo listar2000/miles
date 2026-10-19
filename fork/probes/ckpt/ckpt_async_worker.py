@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import time
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -26,7 +27,17 @@ def _state_dict(gib: int, rank: int, world: int) -> tuple[dict, float]:
     return sd, total
 
 
-def _save(sd: dict, out: str, threads: int, use_async: bool, queue: AsyncCallsQueue | None) -> tuple[float, float]:
+def _finalize(queue: AsyncCallsQueue, poll: bool) -> None:
+    while poll and queue.get_num_unfinalized_calls():
+        queue.maybe_finalize_async_calls(blocking=False)
+        if queue.get_num_unfinalized_calls():
+            time.sleep(5)
+    queue.maybe_finalize_async_calls(blocking=True)
+
+
+def _save(
+    sd: dict, out: str, threads: int, use_async: bool, queue: AsyncCallsQueue | None, poll: bool
+) -> tuple[float, float]:
     strategy = TorchDistSaveShardedStrategy("torch_dist", 1)
     strategy.thread_count = threads
     kwargs = {"async_sharded_save": use_async}
@@ -42,7 +53,7 @@ def _save(sd: dict, out: str, threads: int, use_async: bool, queue: AsyncCallsQu
     dist.barrier()
     blocking = time.monotonic() - t0
     if use_async:
-        queue.maybe_finalize_async_calls(blocking=True)
+        _finalize(queue, poll)
         if dist.get_rank() == 0:
             print(f"rank 0: async save finalized after {time.monotonic() - t0:.1f}s", flush=True)
     dist.barrier()
@@ -67,10 +78,12 @@ def main() -> None:
     p.add_argument("--async-save", action="store_true")
     p.add_argument("--persistent-worker", action="store_true", help="Megatron's persistent async worker process")
     p.add_argument("--repeat", type=int, default=1, help="saves in a row (the 2nd reuses cached host buffers)")
+    p.add_argument("--poll-finalize", action="store_true", help="finalize in short rounds (fix-043)")
+    p.add_argument("--nccl-timeout-min", type=int, default=10, help="process group timeout")
     p.add_argument("--verify", action="store_true", help="load the last save back and compare checksums")
     a = p.parse_args()
 
-    dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=timedelta(minutes=a.nccl_timeout_min))
     rank, world = dist.get_rank(), dist.get_world_size()
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     sd, checksum = _state_dict(a.gib, rank, world)
@@ -81,7 +94,7 @@ def main() -> None:
         if rank == 0:
             os.makedirs(out, exist_ok=True)
         dist.barrier()
-        blocking, background = _save(sd, out, a.threads, a.async_save, queue)
+        blocking, background = _save(sd, out, a.threads, a.async_save, queue, a.poll_finalize)
         saves.append({"blocking_s": round(blocking, 1), "background_s": round(background, 1)})
     res = {
         "case": a.case,
@@ -89,6 +102,8 @@ def main() -> None:
         "gib_per_rank": a.gib,
         "threads": a.threads,
         "async": a.async_save,
+        "poll_finalize": a.poll_finalize,
+        "nccl_timeout_min": a.nccl_timeout_min,
         "saves": saves,
         "write_gbs_total": round(world * (a.gib << 30) / 1e9 / sum(saves[-1].values()), 3),
     }

@@ -66,7 +66,7 @@ the launcher watches live under `--save`, and a lost container loses them).
 - `modal run fork/probes/ckpt/ckpt_async_probe.py [--only <case>]`: one H100:8 node pushes random
   bf16 shards through Megatron's dist_checkpointing (the `--save` path) via
   `ckpt_async_worker.py` under torchrun. Cases: `sync-t1`/`sync-t8` (writer threads) and
-  `sync-t1-local`; `async-{nvrx,mcore}-{persistent,temporal}` at 8 GiB per GPU, plus `async-mcore-persistent-64` (nvrx +
+  `sync-t1-local`; `async-{nvrx,mcore}-{persistent,temporal}` at 8 GiB per GPU, plus `async-mcore-persistent-64` and fix-043's `async-64-nccl2[-poll]` (nvrx +
   persistent hangs; Megatron defaults to nvrx and `--async-save` needs the persistent worker, so
   async recipes need `--async-strategy mcore`); `local-then-copy[-diskload]` at 64 GiB per GPU.
   One CASE JSON line per case (blocking and background seconds, peak host RAM, `/dev/shm`).
