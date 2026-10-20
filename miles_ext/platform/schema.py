@@ -61,8 +61,8 @@ RESERVED_FLAGS = {
     "--pause-generation-mode": "async.pause_generation",
     "--async-single-pass": "async.single_pass",
     "--async-retry-aborted-tries": "async.retry_aborted_tries",
-    "--async-checkpoint-buffer": "fixed: buffered groups go to the write-ahead group log (ext-034)",
-    "--custom-async-data-buffer-path": "fixed: buffered groups go to the write-ahead group log (ext-034)",
+    "--async-checkpoint-buffer": "async.checkpoint_buffer",
+    "--custom-async-data-buffer-path": "async.checkpoint_buffer (log uses the write-ahead group log, ext-034)",
     "--partial-rollout": "unsupported: Miles rejects it in fully async mode",
 }
 
