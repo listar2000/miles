@@ -16,7 +16,12 @@ BUFFER = "miles_ext.rollout.group_log.GroupLogDataBuffer"
 
 def _fn(monkeypatch, save: Path, load: Path | None = None, **overrides):
     args = make_args(
-        save=str(save), load=str(load or save), rollout_batch_size=1, custom_async_data_buffer_path=BUFFER, **overrides
+        save=str(save),
+        load=str(load or save),
+        rollout_batch_size=1,
+        custom_async_data_buffer_path=BUFFER,
+        async_checkpoint_buffer="log",
+        **overrides,
     )
     return make_fn(monkeypatch, args, FakeDataSource())
 
@@ -129,7 +134,7 @@ async def test_single_pass_put_returns_once_the_group_is_ready(monkeypatch, tmp_
     monkeypatch.setattr(
         group_log, "write_group", lambda group, path: (started.set(), release.wait(5), write(group, path))
     )
-    args = make_args(save=str(tmp_path), rollout_batch_size=1, async_single_pass=True)
+    args = make_args(save=str(tmp_path), rollout_batch_size=1, async_single_pass=True, async_checkpoint_buffer="log")
     buffer = group_log.GroupLogDataBuffer(DataBufferConstructorInput(args=args, unused_handler_fn=print))
 
     put = asyncio.create_task(buffer.put(DataBufferInput(prompt_group=make_group(1), group=_r3_group(1, 5))))
@@ -149,3 +154,13 @@ async def test_a_default_buffer_checkpoint_loads_and_saves_again(monkeypatch, tm
     restored.load(tmp_path / "state")
     [prompts] = restored._retry_buffer
     assert [s.index for s in prompts] == [10, 11]
+
+
+async def test_a_log_checkpoint_refuses_another_mode(monkeypatch, tmp_path: Path):
+    fn = _fn(monkeypatch, tmp_path)
+    await _put(fn._output, 1)
+    fn.save(tmp_path / "state")
+
+    other = make_fn(monkeypatch, make_args(save=str(tmp_path), async_checkpoint_buffer="prompts"), FakeDataSource())
+    with pytest.raises(AssertionError, match="resume with log"):
+        other.load(tmp_path / "state")
