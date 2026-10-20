@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from miles.backends.megatron_utils import checkpoint
+from miles.backends.megatron_utils.lora.native.modules import NativeLoRAAdapter  # [fork fix-044]
 from miles.backends.training_utils.model_companion import ModelCompanion
 
 
@@ -105,3 +106,22 @@ class TestRawMbridgeCompanionIsolation:
             assert companion.weight_version.item() == 7
             assert companion.sample_consumptions.tolist() == [[1, 2, 3, 4, 0]]
             torch.testing.assert_close(model.weight, torch.full_like(model.weight, 5))
+
+
+def test_hf_loading_hides_native_lora_adapters(raw_mbridge_loader: Callable[[bool], list[set[str]]]) -> None:
+    """[fork fix-044] the HF checkpoint holds base weights only: mbridge must not see the adapters."""
+
+    class Adapter(NativeLoRAAdapter):
+        def __init__(self):
+            torch.nn.Module.__init__(self)
+            self.gate_A = torch.nn.Parameter(torch.ones(2, 2))
+
+    observed = raw_mbridge_loader(False)
+    model = torch.nn.Linear(2, 2)
+    adapter = Adapter()
+    model.add_module("lora_fc1_adapter", adapter)
+
+    checkpoint._load_hf_weights_with_mbridge(ddp_model=[model], args=Namespace(offload_train=False), load_path="/hf")
+
+    assert observed == [{"weight", "bias"}]
+    assert model.lora_fc1_adapter is adapter
