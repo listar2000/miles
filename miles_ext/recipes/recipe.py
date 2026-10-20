@@ -79,6 +79,9 @@ DEFAULTS: dict[str, Any] = {
         "cwd": None,  # None: where Harbor starts the agent (task.toml workdir, else the image WORKDIR)
         # True: a trial that fills the context window scores 0 whatever its verifier says
         "context_exhausted_scores_zero": False,
+        # "subproc": each trial in its own process, so one trial's blocking work cannot stall the others;
+        # "inline": trials share the rollout event loop
+        "function_mode": "subproc",
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -249,6 +252,7 @@ FIELD_RULES: dict[str, dict] = {
     "agent.verifier_timeout": {"type": "int", "min": 1},
     "agent.setup_timeout": {"type": "int", "min": 1},
     "agent.cwd": {"type": "str", "nullable": True},
+    "agent.function_mode": {"type": "str", "enum": ("subproc", "inline")},
     "sandbox.provider": {"type": "str", "enum": SANDBOX_PROVIDERS},
     "sandbox.lifetime_secs": {"type": "int", "min": 60},
     "sandbox.idle_secs": {"type": "int", "min": 1},
@@ -748,9 +752,9 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --optimizer adam --lr {algo["lr"]} --lr-decay-style constant
         --weight-decay {algo["weight_decay"]} --adam-beta1 {beta1} --adam-beta2 {beta2}
 
-        --custom-generate-function-path miles.rollout.generate_hub.agentic_tool_call.generate
+        --custom-generate-function-path miles_ext.obs.loop_watchdog.generate
         --custom-agent-function-path miles_ext.harbor.agent_function.run
-        --custom-agent-function-mode inline
+        --custom-agent-function-mode {recipe["agent"]["function_mode"]}
         --custom-rm-path miles_ext.harbor.reward.reward_func
         --dynamic-sampling-filter-path {GROUP_FILTERS[algo["group_filter"]]}
         --tito-model {preset.tito_model}
