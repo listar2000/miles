@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile  # [fork fix-050]
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,7 @@ class TestRoundTrip:
         original = make_samples_grouped(2, 3)
         save_debug_rollout_data(args_save, original, rollout_id=7, evaluation=False)
         assert (tmp_path / "rollout_7.pt").exists()
+        assert not zipfile.is_zipfile(tmp_path / "rollout_7.pt")  # [fork fix-050] the legacy format
 
         loaded, metadata = load_debug_rollout_data(args_load, rollout_id=7)
         assert len(loaded) == len(original)
