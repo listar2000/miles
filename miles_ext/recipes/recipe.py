@@ -700,12 +700,14 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         # which needs --use-session-server v2; on v1 the argv passes
         # --no-namespaced-radix-cache and keeps one shared cache, as before
         # upstream af4413b74.
+        # Buffered groups are checkpointed as prompts only (fix-046).
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
         --rollout-num-gpus {total_gpus - int(cluster["train_gpus"])} --num-gpus-per-node {GPUS_PER_NODE}
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
+        --async-checkpoint-buffer prompts
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         {"--async-single-pass" if aio["single_pass"] else ""}
         """
