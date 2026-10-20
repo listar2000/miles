@@ -426,6 +426,19 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "and are not recommended."
                 ),
             )
+            # [fork fix-045] begin
+            parser.add_argument(
+                "--stream-optimizer-state-host-gb",
+                type=float,
+                default=0.0,
+                help=(
+                    "Per-GPU budget, in GiB, of page-locked host memory for the streamed optimizer state. Buckets "
+                    "fill it in order and the rest stay on disk, so a step moves those bytes over PCIe instead of "
+                    "through the disk. The values are the same either way; size it to what the node's memory request "
+                    "leaves after every other host user (activation offload, Ray)."
+                ),
+            )
+            # [fork fix-045] end
             parser.add_argument(
                 "--offload-train-disk-dir",
                 type=str,
@@ -4022,6 +4035,10 @@ def miles_validate_args(args):
         )
     # [fork fix-006] end
 
+    # [fork fix-045] the host budget only feeds the Adam store; Muon's file-backed buffers ignore it
+    assert args.stream_optimizer_state_host_gb <= 0 or (
+        args.stream_optimizer_state_to_disk and "muon" not in (args.optimizer or "").lower()
+    ), "--stream-optimizer-state-host-gb needs --stream-optimizer-state-to-disk with Adam"
     if args.stream_optimizer_state_to_disk:
         assert args.offload_train_target == "disk" or not args.offload_train, (
             "--stream-optimizer-state-to-disk with --offload-train requires "
