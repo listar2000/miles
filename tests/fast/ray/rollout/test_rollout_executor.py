@@ -1,4 +1,5 @@
 import asyncio
+import threading  # [fork fix-050]
 from argparse import Namespace
 from collections import defaultdict
 from pathlib import Path
@@ -467,6 +468,31 @@ class TestOutputSnapshotReplay:
         await executor.save(2)
         data, _metadata = _load_executor_state(tmp_path, rollout_id=2)[None, 3]
         assert [sample.index for sample in data] == [7]
+
+    # [fork fix-050]
+    async def test_the_debug_dump_runs_after_the_capture_and_off_the_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        executor = _make_executor(tmp_path, _CountingRolloutFn())
+        caller_loop, caller_thread = asyncio.get_running_loop(), threading.get_ident()
+        saved_while_dumping = []
+
+        def dump(_args, data, **_kwargs) -> None:
+            assert threading.get_ident() != caller_thread, "the dump blocked the rollout loop"
+            asyncio.run_coroutine_threadsafe(executor.save(0), caller_loop).result(timeout=5)
+            captured, _metadata = _load_executor_state(tmp_path, rollout_id=0)[None, 1]
+            saved_while_dumping.extend(sample.index for sample in captured)
+
+        async def generate_rollout_data(*, rollout_id: int, trainer_model_id: str | None):
+            return [Sample(index=7)], {}
+
+        monkeypatch.setattr(executor, "_generate_rollout_data", generate_rollout_data)
+        monkeypatch.setattr(rollout_executor_module, "save_debug_rollout_data", dump)
+        monkeypatch.setattr(rollout_executor_module, "convert_samples_to_train_data", lambda *_args, **_kw: {})
+        monkeypatch.setattr(rollout_executor_module, "split_train_data_by_dp", lambda *_args: None)
+
+        await asyncio.wait_for(executor.get(rollout_id=1), timeout=5)
+        assert saved_while_dumping == [7]
 
 
 class TestSampleOwnershipRolloutId:

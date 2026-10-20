@@ -177,6 +177,16 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
             self._output_snapshotter.capture(
                 trainer_model_id=trainer_model_id, rollout_id=rollout_id, data=data, metadata=metadata
             )
+            # [fork fix-050] after the capture, in a thread: a dump is tens of GB and the loop keeps serving trials
+            await asyncio.to_thread(
+                save_debug_rollout_data,
+                self.args,
+                data,
+                rollout_id=rollout_id,
+                evaluation=False,
+                metadata=metadata,
+                trainer_model_id=trainer_model_id,
+            )
         else:
             data, metadata = replay.data, replay.metadata
 
@@ -211,14 +221,7 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
             data, metadata, metrics = await self._get_rollout_data(
                 rollout_id=rollout_id, trainer_model_id=trainer_model_id
             )
-        save_debug_rollout_data(
-            self.args,
-            data,
-            rollout_id=rollout_id,
-            evaluation=False,
-            metadata=metadata,
-            trainer_model_id=trainer_model_id,
-        )
+        # [fork fix-050]
         log_rollout_data(
             rollout_id, self.args, data, metrics, time.time() - start_time, trainer_model_id=trainer_model_id
         )

@@ -130,7 +130,14 @@ def save_debug_rollout_data(
 
         # TODO may improve the format
         dump_data = dict(samples=[sample.to_dict() for sample in samples])
-        torch.save(dict(rollout_id=rollout_id, metadata=metadata or {}, **dump_data), path)
+        # [fork fix-050] the legacy format with protocol 5 streams numpy buffers to the file; the zip format
+        # builds its records holding the GIL, which blocks the rollout loop even from a worker thread
+        torch.save(
+            dict(rollout_id=rollout_id, metadata=metadata or {}, **dump_data),
+            path,
+            _use_new_zipfile_serialization=False,
+            pickle_protocol=5,
+        )
 
 
 def _format_dump_path(path_template: str, *, stem: str) -> Path:
