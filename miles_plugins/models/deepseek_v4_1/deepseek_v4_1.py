@@ -1,5 +1,6 @@
 import copy
 import os
+from collections import deque  # [fork fix-047]
 
 import einops
 import torch
@@ -17,6 +18,7 @@ from megatron.core.tensor_parallel.mappings import (
     gather_from_sequence_parallel_region,
     scatter_to_sequence_parallel_region,
 )
+from megatron.core.tensor_parallel.random import is_checkpointing  # [fork fix-047]
 from megatron.core.transformer import transformer_block as _transformer_block
 from megatron.core.transformer.hyper_connection import BroadcastTensorFused, HyperConnectionModule
 from megatron.core.transformer.module import MegatronModule, mark_keep_in_fp32
@@ -444,6 +446,8 @@ class DeepSeekV41Attention(MegatronModule):
                 is_candidate_source=layer_id == config.v41_candidate_source_layer_id,
                 uses_candidates=0 <= config.v41_candidate_source_layer_id < layer_id,
             )
+            # [fork fix-047] top-k of checkpointed forwards awaiting their recompute, oldest first
+            self._recompute_topk = deque() if config.v41_reuse_indexer_topk else None
 
     def sharded_state_dict(self, prefix: str = "", sharded_offsets: tuple = (), metadata: dict | None = None):
         ans = super().sharded_state_dict(prefix, sharded_offsets, metadata)
@@ -530,7 +534,7 @@ class DeepSeekV41Attention(MegatronModule):
                 rt.latent[self.layer_id] = latent
             latent = rt.latent[self.kv_source_layer]
             if self.is_index_source:
-                topk_rel, candidates = self.core_attention.indexer(
+                topk_rel, candidates = self._index_topk(  # [fork fix-047]
                     x, qr, rt.index_k[self.kv_source_layer], freqs_cis, compress_lens, rt.candidates
                 )
                 rt.topk = topk_rel
@@ -561,6 +565,27 @@ class DeepSeekV41Attention(MegatronModule):
         if self.sequence_parallel:
             output = scatter_to_sequence_parallel_region(output, group=self.tp_group)
         return output, None
+
+    def train(self, mode: bool = True):
+        # [fork fix-047] each train pass starts with an empty stash, so a step that died between a forward and
+        # its recompute cannot hand its top-k to the next one
+        if getattr(self, "_recompute_topk", None):
+            self._recompute_topk.clear()
+        return super().train(mode)
+
+    def _index_topk(self, *indexer_args):
+        """[fork fix-047] Reuse the checkpointed forward's indexer top-k in its recompute, in forward order."""
+        stash = self._recompute_topk
+        if stash is None or not is_checkpointing():
+            return self.core_attention.indexer(*indexer_args)
+        if torch.is_grad_enabled():
+            topk_rel, dtype, candidates = stash.popleft()
+            return topk_rel.to(dtype), candidates
+        topk_rel, candidates = self.core_attention.indexer(*indexer_args)
+        stash.append((topk_rel.to(torch.int32), topk_rel.dtype, candidates))
+        depth = self.config.pipeline_model_parallel_size
+        assert len(stash) <= depth, f"layer {self.layer_id}: {len(stash)} top-k awaiting recompute, at most {depth}"
+        return topk_rel, candidates
 
 
 def _dsv41_attention_module_spec(config, backend=None):
@@ -622,6 +647,11 @@ def get_dsv41_spec(args, config, vp_stage):
     config.v41_hf_checkpoint = args.hf_checkpoint
     config.v41_runtime = V41Runtime()
     config.miles_dsa_topk_backend = args.miles_dsa_topk_backend
+    # [fork fix-047] indexer replay pops its own top-k in the recompute, so the two cannot be combined
+    assert not (
+        args.dsv4_reuse_indexer_topk and args.use_indexer_replay
+    ), "--dsv4-reuse-indexer-topk cannot be combined with indexer replay"
+    config.v41_reuse_indexer_topk = args.dsv4_reuse_indexer_topk
     _install_patches(config)
 
     _orig_get_spec = _eav_specs.get_experimental_attention_variant_module_spec

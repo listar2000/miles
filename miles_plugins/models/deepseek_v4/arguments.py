@@ -37,6 +37,16 @@ def add_dsv4_arguments(parser: ArgumentParser) -> ArgumentParser:
             "interchangeable."
         ),
     )
+    # [fork fix-047]
+    group.add_argument(
+        "--dsv4-reuse-indexer-topk",
+        action="store_true",
+        help=(
+            "DeepSeek-V4.1 with --dsv4-impl miles and full recompute: the recompute of an index-source layer "
+            "reuses the top-k its forward chose instead of re-running the indexer. Keeps one int32 top-k per "
+            "index-source layer and in-flight micro-batch on the GPU."
+        ),
+    )
     return parser
 
 
