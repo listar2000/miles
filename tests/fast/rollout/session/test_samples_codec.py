@@ -200,9 +200,21 @@ class TestSamplesWireCodec:
         assert out.rollout_indexer_topk.dtype == np.int32 and np.array_equal(out.rollout_indexer_topk, indexer)
 
     def test_tensor_fields_view_a_writable_payload_without_copying(self):
-        buffer = np.frombuffer(encode_samples([_computed_sample()], {}, None), dtype=np.uint8).copy()
+        # [fork fix-051] ids past int16 travel as int32, so the decode views the payload
+        routed = np.arange(70_000, 70_024, dtype=np.int32).reshape(4, 3, 2)
+        buffer = np.frombuffer(
+            encode_samples([_computed_sample(rollout_routed_experts=routed)], {}, None), dtype=np.uint8
+        ).copy()
         (out,) = decode_samples_and_merge_input_sample(buffer, Sample()).samples
         assert np.shares_memory(out.rollout_routed_experts, buffer)
+        np.testing.assert_array_equal(out.rollout_routed_experts, routed)
+
+    # [fork fix-051]
+    def test_routed_experts_travel_as_int16_when_they_fit(self):
+        payload = encode_samples([_computed_sample()], {}, None)
+        assert safetensors.numpy.load(payload)["rollout_routed_experts.0"].dtype == np.int16
+        (out,) = decode_samples_and_merge_input_sample(payload, Sample()).samples
+        assert out.rollout_routed_experts.dtype == np.int32
         np.testing.assert_array_equal(out.rollout_routed_experts, np.arange(24, dtype=np.int32).reshape(4, 3, 2))
 
     def test_bytes_payload_decodes_to_writable_tensors(self):
