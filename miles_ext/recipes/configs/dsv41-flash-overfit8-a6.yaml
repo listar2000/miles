@@ -1,0 +1,93 @@
+# overfit8 attempt a6 of the DeepSeek V4.1 overfitting run: a5's 8 tasks and agent, trained with LoRA on one
+# trainer node while two nodes serve rollouts. a1-a5 never got past 3-4 steps at ~1 h each; with LoRA the
+# optimizer step is no longer the fixed ~21 min NVMe pass, so a6 takes more, smaller steps. What differs from
+# dsv41-flash-overfit8-a5.yaml (branch a5-launch):
+# - LoRA rank 32 (hook-006 merged sync; engines serve merged full weights), trainer = the 1-node fit check's
+#   layout (TP4 CP2 PP1 EP8 on one B300:8, 206 GiB/GPU at 256k); no NVMe optimizer, no expert QAT (LoRA
+#   refuses both), no staged saves (a LoRA save is ~3 s);
+# - 2 rollout nodes = 4 TP4 engines, 128 tries in flight (32 per engine, two batches);
+# - batch 8 x 8 = 64 per step (a5: 8 x 16) and 16 steps: the same 1,024 tries as a5's plan, twice the steps;
+# - LR 3e-5 (a5 1e-6 full-parameter; the SWE-Gym LoRA run 1e-5);
+# - weight staleness 6 (a5 4): steps of ~25-30 min would drop 2-h telecom/software-009 tries at 4;
+# - fix-047 on (--dsv4-reuse-indexer-topk); main's subprocess trials (#60), int16 routing (#66) and the
+#   group-log checkpoint buffer (#63) are defaults.
+# No in-loop eval: evals run offline from saved weights. Needs $MILES_DATA/prompts/overfit8_a5.jsonl (made as
+# dsv41-flash-overfit8-a5.tasks says) and SAIL_API_KEY in .env.
+name: dsv41-flash-overfit8-a6
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 3
+  train_gpus: 8
+  cpu: 64  # session servers and the rollout manager share the trainer (head) node
+  memory_gib: 1280  # 1-node fit check peaked at 780 GiB host RAM at 256k (ckpt_offload's pinned pool)
+  timeout_hours: 12
+parallel:
+  tp: 4
+  pp: 1
+  cp: 2
+  ep: 8
+lora:
+  rank: 32
+  alpha: 32
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 262144
+  max_running_requests: 64
+taskset:
+  tasks_volume: miles-datasets:/tb4t-20261016/tasks
+  prompts: $MILES_DATA/prompts/overfit8_a5.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  # a5's agent (the 1017 eval's), so pass rates carry over
+  max_steps: 256
+  exec_timeout: 300
+  timeout: 7200
+  trial_timeout: 10800
+  verifier_timeout: 3600
+  setup_timeout: 1800
+  context_exhausted_scores_zero: true
+sandbox:
+  provider: sail
+  lifetime_secs: 14400
+  idle_secs: 3600
+  build_timeout_multiplier: 3
+algorithm:
+  mode: fully_async
+  num_rollout: 16
+  rollout_batch_size: 8  # = the task count
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 32768
+  max_seq_len: 262144
+  lr: 3.0e-5
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0
+  max_weight_staleness: 6
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  grpo_std_normalization: false
+  per_token_loss: true
+async:
+  max_concurrent_samples: 128
+checkpoint:
+  save_interval: 2
+  keep: 8  # every save (~3.75 GB each), for offline eval
+  save_optimizer: true  # adapter Adam state is small; a LoRA resume needs it
+  save_rollout_data: true  # a trainer failure replays on the trainer node alone
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab
+  tags: ["exp:overfit-a6"]
+extra_args:
+  # each layer's checkpointed input waits in pinned host memory between forward and backward (ext-020)
+  - --custom-megatron-init-path
+  - miles_ext.memory.ckpt_offload.install
+  - --distributed-timeout-minutes
+  - "60"
+  # fix-047: the full recompute reuses each index-source layer's forward top-k
+  - --dsv4-reuse-indexer-topk
