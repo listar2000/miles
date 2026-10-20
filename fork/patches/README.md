@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-050 | Fix | The debug rollout dump runs after the capture in a thread, in torch's legacy format with pickle protocol 5: a 3 GB dump pauses the rollout loop 0.14 s instead of 26 s | active; remove when upstream writes the dump off the loop | [fix-050-debug-dump-off-loop.md](fix-050-debug-dump-off-loop.md) |
 | ext-033 | Ext | Recipes run each Harbor trial in a subprocess (`agent.function_mode`, default `subproc`); a watchdog logs the rollout loop thread's stack whenever the loop stalls 5 s or more | active; remove when upstream monitors its rollout loop | [ext-033-rollout-loop.md](ext-033-rollout-loop.md) |
 | fix-048 | Fix | `--async-retry-aborted-tries`: fully async mode regenerates an aborted try at once and keeps its group's finished tries, instead of dropping the whole group; recipes retry once | active; remove when upstream retries tries individually | [fix-048-retry-aborted-tries.md](fix-048-retry-aborted-tries.md) |
 | review-supervisor | Infra | Independent PR reviews: one miles-review skill for any agent; `review.py` runs the ledger, lint, extension tests and new-test proofs, the agent (Codex first) only judges, and its JSON answer is checked before posting | active | [review-supervisor.md](review-supervisor.md) |
