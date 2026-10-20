@@ -36,7 +36,9 @@ frozen history: don't branch from them. If `upstream` is not a remote yet:
 ## Pick the kind of change
 
 Each commit is exactly one kind and carries exactly one `Fork-<Kind>:` trailer.
-Take the next free number from `ledger.py list` (numbers are never reused).
+Take the highest number of that kind ever taken (in `ledger.py list`, including ids on unmerged
+branches or retired), plus one. Never fill a gap, never reserve a block, and never reuse a number,
+even one whose PR closed.
 
 | You need to | Kind | Where | Trailer |
 | --- | --- | --- | --- |
