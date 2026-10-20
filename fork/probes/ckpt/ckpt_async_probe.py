@@ -14,6 +14,7 @@ import modal
 BASE_IMAGE = "radixark/miles:v0.1.2@sha256:c81d8ba7b91571aac8e0bb2be372c6a9664e1ff7b88f518a8891861bae83e3b7"
 VOL, LOCAL = "/vol", "/tmp/ckpt"
 WORKER = "/root/ckpt_async_worker.py"
+REPO = Path(__file__).resolve().parents[3] if modal.is_local() else Path("/")  # the container copy sits at /root
 
 app = modal.App("miles-ckpt-probe-h100")
 vol = modal.Volume.from_name("miles-ckpt-probe", version=2)
@@ -22,7 +23,10 @@ image = (
     .entrypoint([])
     .env({"PYTHONUNBUFFERED": "1"})
     .pip_install("py-spy")
+    .env({"PYTHONPATH": "/root/ext"})
     .add_local_file(Path(__file__).with_name("ckpt_async_worker.py"), WORKER)
+    .add_local_file(REPO / "miles_ext/__init__.py", "/root/ext/miles_ext/__init__.py")
+    .add_local_dir(REPO / "miles_ext/checkpoint", "/root/ext/miles_ext/checkpoint")
 )
 
 # name: (target, gib per GPU, threads, async, repeat, verify, disk load, async strategy, persistent worker, timeout min)
@@ -37,13 +41,18 @@ CASES = {
     "async-mcore-persistent-64": (VOL, 64, 8, True, 2, True, False, "mcore", True, 25),
     "async-64-nccl2-poll": (VOL, 64, 8, True, 2, True, False, "mcore", True, 30),
     "async-64-nccl2": (VOL, 64, 8, True, 2, True, False, "mcore", True, 30),
+    "async-sglang-patched": (VOL, 8, 8, True, 2, True, False, "mcore", True, 10),
+    "async-sglang-patched-expandable": (VOL, 8, 8, True, 2, True, False, "mcore", True, 6),
     "async-nvrx-temporal": (VOL, 8, 8, True, 2, True, False, "nvrx", False, 5),
     "async-mcore-temporal": (VOL, 8, 8, True, 2, True, False, "mcore", False, 5),
 }
 EXTRA_FLAGS = {
     "async-64-nccl2-poll": ["--nccl-timeout-min", "2", "--poll-finalize"],
     "async-64-nccl2": ["--nccl-timeout-min", "2"],
+    "async-sglang-patched": ["--sglang-patch", "--poll-finalize"],
+    "async-sglang-patched-expandable": ["--sglang-patch", "--poll-finalize"],
 }
+EXTRA_ENV = {"async-sglang-patched-expandable": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}}
 COPY_JOBS = 16
 RAM_LOG_SECS = 30
 DISK_LOAD = (
@@ -115,7 +124,7 @@ def _run_case(name: str) -> dict:
         + ["--verify"] * verify
         + EXTRA_FLAGS.get(name, [])
     )
-    env = os.environ | ({"ASYNC_STRATEGY": strategy} if strategy else {})
+    env = os.environ | ({"ASYNC_STRATEGY": strategy} if strategy else {}) | EXTRA_ENV.get(name, {})
     load = subprocess.Popen(["bash", "-c", DISK_LOAD]) if disk_load else None
     lines = []
     try:

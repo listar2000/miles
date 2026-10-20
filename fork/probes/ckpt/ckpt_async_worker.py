@@ -80,9 +80,20 @@ def main() -> None:
     p.add_argument("--repeat", type=int, default=1, help="saves in a row (the 2nd reuses cached host buffers)")
     p.add_argument("--poll-finalize", action="store_true", help="finalize in short rounds (fix-043)")
     p.add_argument("--nccl-timeout-min", type=int, default=10, help="process group timeout")
+    p.add_argument(
+        "--sglang-patch",
+        action="store_true",
+        help="apply sglang's torch patch here, as Miles' weight sync does, and start the worker through ext-032",
+    )
     p.add_argument("--verify", action="store_true", help="load the last save back and compare checksums")
     a = p.parse_args()
 
+    if a.sglang_patch:
+        from miles_ext.checkpoint import async_worker
+        from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+
+        monkey_patch_torch_reductions()
+        async_worker.install()
     dist.init_process_group("nccl", timeout=timedelta(minutes=a.nccl_timeout_min))
     rank, world = dist.get_rank(), dist.get_world_size()
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
@@ -103,6 +114,7 @@ def main() -> None:
         "threads": a.threads,
         "async": a.async_save,
         "poll_finalize": a.poll_finalize,
+        "sglang_patch": a.sglang_patch,
         "nccl_timeout_min": a.nccl_timeout_min,
         "saves": saves,
         "write_gbs_total": round(world * (a.gib << 30) / 1e9 / sum(saves[-1].values()), 3),
