@@ -107,6 +107,7 @@ def make_args(**overrides) -> Namespace:
         async_unused_samples_handler="drop",
         async_single_pass=False,  # [fork fix-004]
         async_checkpoint_buffer="groups",  # [fork fix-046]
+        async_retry_aborted_tries=0,  # [fork fix-048]
         custom_async_data_buffer_path=None,
         enable_sample_ownership_checker=False,
         custom_async_data_buffer_path_per_model=None,
@@ -375,6 +376,43 @@ async def test_aborted_group_recycled(monkeypatch):
     assert all(sample.response == "" and sample.weight_versions == [] for sample in aborted)
     assert output.metrics["rollout/fully_async/aborted_groups_filtered"] == 1
     assert "rollout/dynamic_filter/drop_group_has_missing_reward" not in output.metrics
+
+
+# [fork fix-048] begin
+@pytest.mark.parametrize("aborts, kept", [(1, True), (2, False)], ids=["retried", "aborts-again"])
+async def test_only_aborted_tries_are_regenerated(monkeypatch, aborts, kept):
+    """With one retry, an aborted try is regenerated on its own and its finished sibling is kept; a try that
+    aborts again leaves the group aborted, so it is dropped whole as before."""
+    attempts: dict[int, int] = {}
+    namespaces = set()
+
+    async def generate(state, group, sampling_params, evaluation=False, sample_done_callback=None):
+        result = []
+        for sample in group:
+            attempts[sample.index] = attempts.get(sample.index, 0) + 1
+            namespaces.add(sample.kv_cache_namespace)
+            aborted = sample.index == 11 and attempts[sample.index] <= aborts
+            status = Sample.Status.ABORTED if aborted else Sample.Status.COMPLETED
+            sample_done_callback()
+            result.append(replace(sample, status=status, reward=float(attempts[sample.index])))
+        return result
+
+    args = make_args(rollout_batch_size=1, async_max_concurrent_samples=2, async_retry_aborted_tries=1)
+    fn = make_fn(monkeypatch, args, FakeDataSource(scripted=[make_group(1), make_group(2)]), generate=generate)
+    try:
+        output = await asyncio.wait_for(fn(train_input(rollout_id=0)), timeout=5)
+    finally:
+        await fn.dispose()
+
+    assert [attempts[10], attempts[11]] == [1, 2]
+    assert namespaces == {"train:-:0"}  # a retry keeps its group's KV cache namespace
+    [group] = output.samples
+    assert [(s.group_index, s.reward) for s in group] == ([(1, 1.0), (1, 2.0)] if kept else [(2, 1.0), (2, 1.0)])
+    assert output.metrics["rollout/fully_async/retried_tries"] == 1
+    assert output.metrics.get("rollout/fully_async/retried_try_reward_mean") == (2.0 if kept else None)
+
+
+# [fork fix-048] end
 
 
 async def test_missing_reward_group_dropped_without_recycling(monkeypatch):

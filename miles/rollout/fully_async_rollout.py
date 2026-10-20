@@ -37,6 +37,7 @@ from miles.rollout.base_types import (
     compute_kv_cache_namespace,
     stamp_kv_cache_namespace,
 )
+from miles.rollout.filter_hub.base_types import iter_samples  # [fork fix-048]
 from miles.rollout.fully_async_data_buffer import (
     DataBuffer,
     DataBufferConstructorInput,
@@ -104,6 +105,15 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
             DefaultMultiDataBuffer,
         ), "--async-checkpoint-buffer prompts needs the default fully async data buffer"
         self._retry_buffer: deque[list[Sample]] = deque()
+        # [fork fix-048] begin: a try regenerated on its own gets neither its group's reward nor its own seed
+        assert input.args.async_retry_aborted_tries >= 0, "--async-retry-aborted-tries must be 0 or more"
+        assert not input.args.async_retry_aborted_tries or not (
+            getattr(input.args, "group_rm", False)
+            or getattr(input.args, "sglang_enable_deterministic_inference", False)
+        ), "--async-retry-aborted-tries runs each try alone: no --group-rm or deterministic inference"
+        self._retried_tries = 0
+        self._try_rewards: dict[bool, list[float]] = {False: [], True: []}
+        # [fork fix-048] end
         self._running_tasks: list[_RunningTask] = []
         # [fork fix-004] begin
         self._single_pass = input.args.async_single_pass
@@ -174,6 +184,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         return task
 
     async def _generate_group(self, prompt_group: list[Sample]) -> DataBufferInput:
+        if self.args.async_retry_aborted_tries:  # [fork fix-048]
+            return DataBufferInput(prompt_group=prompt_group, group=await self._generate_tries(prompt_group))
         result = await generate_and_rm_group(
             self.state,
             prompt_group,
@@ -182,6 +194,53 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
             sample_done_callback=self._scheduler.sample_done_callback,
         )
         return DataBufferInput(prompt_group=prompt_group, group=result)
+
+    # [fork fix-048] begin
+    async def _generate_tries(self, prompt_group: list[Sample]) -> list:
+        """Run each try of the group on its own, so an aborted one is regenerated at once while its siblings go on."""
+        tasks = [asyncio.create_task(self._generate_try(sample)) for sample in prompt_group]
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            # as generate_and_rm_group: no try outlives its group
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+    async def _generate_try(self, prompt_sample: Sample) -> Sample | list[Sample]:
+        attempt = prompt_sample
+        for retry in range(self.args.async_retry_aborted_tries + 1):
+            if retry:
+                logger.info(f"Regenerating aborted try: index={prompt_sample.index}, retry {retry}")
+                [attempt] = _copy_and_reset_for_retry([prompt_sample])
+                stamp_kv_cache_namespace(attempt, namespace=self._curr_kv_cache_namespace)  # the reset cleared it
+                self._scheduler.on_submit([[attempt]])  # the retry frees its own in-flight slot when done
+            [item] = await generate_and_rm_group(
+                self.state,
+                [attempt],
+                sampling_params=self.state.sampling_params.copy(),
+                evaluation=False,
+                sample_done_callback=self._scheduler.sample_done_callback,
+            )
+            if not _has_aborted(item):
+                rewards = (sample.get_reward_value(self.args) for sample in iter_samples([item]))
+                self._try_rewards[bool(retry)].extend(r for r in rewards if r is not None)
+                break
+        self._retried_tries += retry
+        return item
+
+    def _try_metrics(self) -> dict[str, float]:
+        """Tries regenerated so far, and the mean reward of tries finished since the last step, first try vs retry."""
+        prefix = "rollout/fully_async/"
+        metrics = {f"{prefix}retried_tries": self._retried_tries}
+        for retried, name in ((False, "first_try_reward_mean"), (True, "retried_try_reward_mean")):
+            if rewards := self._try_rewards[retried]:
+                metrics[prefix + name] = sum(rewards) / len(rewards)
+        self._try_rewards = {False: [], True: []}
+        return metrics
+
+    # [fork fix-048] end
 
     async def _worker_loop(self) -> None:
         active: set[asyncio.Task] = set()
@@ -291,7 +350,10 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
             args=args, before=before_filter, after=data, reason="rollout_sample_filter"
         )
 
-        return RolloutFnTrainOutput(samples=data, metrics=self._output.get_metrics(input.trainer_model_id))
+        metrics = self._output.get_metrics(input.trainer_model_id)
+        if self.args.async_retry_aborted_tries:  # [fork fix-048]
+            metrics = {**metrics, **self._try_metrics()}
+        return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
     # [fork fix-004] begin
     async def _get_from_pass(self, *, num_groups: int, **context) -> list[DataBufferInput]:
@@ -370,6 +432,11 @@ def _copy_and_reset_for_retry(prompt_group: list[Sample]) -> list[Sample]:
     for sample in copied:
         sample.reset_for_retry()
     return copy.deepcopy(copied)
+
+
+# [fork fix-048]
+def _has_aborted(item: Sample | list[Sample]) -> bool:
+    return any(sample.status == Sample.Status.ABORTED for sample in iter_samples([item]))
 
 
 async def _end_worker(worker: asyncio.Task) -> None:
