@@ -223,3 +223,16 @@ def _native_lora_args(argv: list[str], **overrides):
         expert_tensor_parallel_size=int(_value(argv, "--expert-tensor-parallel-size")),
         **overrides,
     )
+
+
+@pytest.mark.parametrize(
+    "mode, buffer",
+    [("log", "miles_ext.rollout.group_log.GroupLogDataBuffer"), ("prompts", None), ("groups", None)],
+)
+def test_checkpoint_buffer_modes(mode, buffer):
+    r = _recipe(**{"async": {"checkpoint_buffer": mode}})
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    assert _value(argv, "--async-checkpoint-buffer") == mode
+    path = "--custom-async-data-buffer-path"
+    assert (_value(argv, path) if path in argv else None) == buffer

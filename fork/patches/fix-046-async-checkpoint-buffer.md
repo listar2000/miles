@@ -20,7 +20,8 @@ A launch flag `--async-checkpoint-buffer {groups,prompts}`:
 - `prompts` needs the default data buffers (a list of `DataBufferInput` as state); a custom
   buffer is refused at startup.
 
-Our recipes always pass `prompts` (one route; ext-012). Not done here: moving the save off the
+Recipes choose it with `async.checkpoint_buffer: prompts`; the default is `log` (ext-034, via hook-008),
+which keeps the groups without one large write. Not done here: moving the save off the
 event loop. Checkpoint size and save time after the change are not yet measured on a GPU run.
 
 ## How it is applied
