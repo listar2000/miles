@@ -62,7 +62,8 @@ the launcher watches live under `--save`, and a lost container loses them).
 - `modal run fork/probes/ckpt/ckpt_save_probe.py [--quick]`: CPU containers write `streams` files
   of `file_gb` GiB each to the volume (one thread per file, fsync per file, commit timed apart),
   several containers at once, then a local-disk-to-volume copy; `CKPT_PROBE_VOLUME` picks another
-  volume. One JSON line per case and a SUMMARY.
+  volume, and `CKPT_PROBE_GCS_BUCKET=<bucket>` writes to a GCS bucket mount instead (HMAC key in
+  the Modal secret `miles-gcs-hmac`). One JSON line per case and a SUMMARY.
 - `modal run fork/probes/ckpt/ckpt_async_probe.py [--only <case>]`: one H100:8 node pushes random
   bf16 shards through Megatron's dist_checkpointing (the `--save` path) via
   `ckpt_async_worker.py` under torchrun. Cases: `sync-t1`/`sync-t8` (writer threads) and
