@@ -100,10 +100,14 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
             DataBufferConstructorInput(args=self.args, unused_handler_fn=self._handle_unused)
         )
         # [fork fix-046] prompts mode reads the default buffers' state: a list of DataBufferInput
-        assert self.args.async_checkpoint_buffer == "groups" or buffer_cls in (
+        assert self.args.async_checkpoint_buffer != "prompts" or buffer_cls in (  # [fork hook-008] != prompts
             DefaultDataBuffer,
             DefaultMultiDataBuffer,
         ), "--async-checkpoint-buffer prompts needs the default fully async data buffer"
+        # [fork hook-008] log: the custom buffer stores the groups and its state_dict is saved as is
+        assert (
+            self.args.async_checkpoint_buffer != "log" or self.args.custom_async_data_buffer_path
+        ), "--async-checkpoint-buffer log needs a --custom-async-data-buffer-path buffer that stores the groups"
         self._retry_buffer: deque[list[Sample]] = deque()
         # [fork fix-048] begin: a try regenerated on its own gets neither its group's reward nor its own seed
         assert input.args.async_retry_aborted_tries >= 0, "--async-retry-aborted-tries must be 0 or more"
@@ -411,6 +415,10 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         assert self._worker is None, "restore the fully async rollout state before producer startup"
         state: _FullyAsyncRolloutState = load_simple_checkpoint(directory=directory)
         assert not self._retry_buffer, "restore the fully async rollout state before any group was recycled"
+        # [fork hook-008] a log-mode save holds the custom buffer's own state, which the default buffers cannot read
+        assert self.args.async_checkpoint_buffer == "log" or isinstance(
+            state.output, list
+        ), "this checkpoint was saved with --async-checkpoint-buffer log: resume with log"
         self._retry_buffer = deque([*state.retry_buffer, *state.running])
         self._output.load_state_dict(state.output)
 
