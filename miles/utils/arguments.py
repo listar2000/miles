@@ -990,6 +990,19 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "--dynamic-sampling-filter-path are always dropped."
                 ),
             )
+            # [fork fix-048] begin
+            parser.add_argument(
+                "--async-retry-aborted-tries",
+                type=int,
+                default=0,
+                help=(
+                    "Fully async mode regenerates an aborted try at once, up to this many times, and keeps "
+                    "its group's other tries, instead of handing the whole group to "
+                    "--async-unused-samples-handler. A group with a try still aborted after the last retry "
+                    "is handled as before. 0 (default) turns it off."
+                ),
+            )
+            # [fork fix-048] end
             # [fork fix-004] begin
             parser.add_argument(
                 "--async-single-pass",
