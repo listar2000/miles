@@ -1,0 +1,16 @@
+# The 8 tasks of dsv41-flash-overfit8-a5.yaml, one instance_id per line (the source of truth): the
+# task directory names on miles-datasets:/tb4t-20261016/tasks. a4's four tasks plus four with mixed
+# outcomes, aiming at a ~0.5-0.6 pass rate with 16 tries each. Note: pass rate in training (a3/a4, a
+# trial that hit 256k scored 0) or eval passes/3 (dsv41-1017-eval-a), median minutes per try.
+# Spare: sail200-hardware-028-20261001 (0.79 in a1+a2, 29 min).
+# The prompt file keeps only these tasks' rows of the eval's prompt file (eval1017_A.jsonl):
+#   grep -F -f <(grep -v '^#' dsv41-flash-overfit8-a5.tasks | awk '{print "\"instance_id\": \"" $1 "\""}') \
+#     eval1017_A.jsonl > $MILES_DATA/prompts/overfit8_a5.jsonl
+atrx-vep-crispr-05-go-obsolete-term-remediation          # 0.64 (a4), 21 min
+science-017                                              # 0.61 (a4), 25 min
+wal-recovery-ordering-11-persist-queue-ack-recovery      # 0.54 (a4), 35 min
+bp105-security-email-auth-policy-r01                     # 0.79 (a4), 25 min
+telecom-entity-resolution-r2-cms-hospital-ccn-crosswalk  # 0.55 (a3, 11 tries), 71 min, often fills 256k
+software-009                                             # 1/3, 70 min
+mp-checkpoint-consolidation-04-gptq-mixed-packing-to-fp16  # 2/3, 39 min
+media-parallel-013-20260919                              # 1/3, 47 min, 8 min verifier

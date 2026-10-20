@@ -147,7 +147,9 @@ def _task_ids(name: str) -> list[str]:
     return [line.split()[0] for line in lines if line.strip() and not line.startswith("#")]
 
 
-@pytest.mark.parametrize("name", ["dsv41-flash-tb4-overfit16", "dsv41-flash-overfit8", "dsv41-flash-overfit8-a3"])
+@pytest.mark.parametrize(
+    "name", ["dsv41-flash-tb4-overfit16", "dsv41-flash-overfit8", "dsv41-flash-overfit8-a3", "dsv41-flash-overfit8-a5"]
+)
 def test_task_list_fills_a_step(name):
     ids = _task_ids(f"{name}.tasks")
     assert len(set(ids)) == len(ids) == _recipe(f"{name}.yaml")["algorithm"]["rollout_batch_size"]
