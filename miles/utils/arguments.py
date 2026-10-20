@@ -1022,14 +1022,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--async-checkpoint-buffer",
                 type=str,
-                choices=["groups", "prompts"],
+                choices=["groups", "prompts", "log"],  # [fork hook-008] log
                 default="groups",
                 help=(
                     "What a fully async rollout checkpoint keeps of the finished groups waiting in the "
                     "data buffer: groups (default) saves them whole, so a resume trains on them; prompts "
                     "saves only their prompts, so a resume regenerates them. Use prompts for long "
                     "agentic trajectories: whole groups carry every token, logprob and routing replay "
-                    "array (tens of GB), and the save runs on the rollout event loop."
+                    "array (tens of GB), and the save runs on the rollout event loop. "
+                    "log: the --custom-async-data-buffer-path buffer stores each group as it enters "
+                    "and saves its own state, so a resume trains on them without one large write."  # [fork hook-008]
                 ),
             )
             # [fork fix-046] end
