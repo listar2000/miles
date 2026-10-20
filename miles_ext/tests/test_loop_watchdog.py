@@ -4,6 +4,7 @@ import threading
 import time
 
 from miles_ext.obs import loop_watchdog
+from miles_ext.recipes import recipe as R
 
 
 def _blocking_write():
@@ -26,3 +27,14 @@ def test_stall_logs_the_blocking_frame_and_its_length(caplog):
     assert "_blocking_write" in stalled and "thread MainThread (loop)" in stalled
     assert resampled and all("still stalled" in m and "_blocking_write" in m for m in resampled)
     assert float(ended.split("after ")[1].rstrip("s")) >= 0.5
+
+
+def test_recipe_runs_trials_in_subprocesses_unless_set_inline():
+    def mode(recipe):
+        argv = R.miles_args(recipe, "t-1", resume=False)
+        return argv[argv.index("--custom-agent-function-mode") + 1]
+
+    recipe = R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}})
+    assert mode(recipe) == "subproc"
+    recipe = R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}, "agent": {"function_mode": "inline"}})
+    assert mode(recipe) == "inline"
