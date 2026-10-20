@@ -42,9 +42,10 @@ record only which groups are buffered.
 
 - `miles_ext/rollout/group_log.py`: `GroupLogDataBuffer`, a `DefaultDataBuffer` subclass. `put` repeats the
   default capacity wait and append around the write; the filters, `get`, staleness and metrics are inherited.
-  It requires `--async-checkpoint-buffer groups`.
-- `miles_ext/recipes/recipe.py`: fully async recipes pass `--async-checkpoint-buffer groups
-  --custom-async-data-buffer-path miles_ext.rollout.group_log.GroupLogDataBuffer`; both flags are reserved.
+  It requires `--async-checkpoint-buffer log` (hook-008).
+- `miles_ext/recipes/recipe.py`: `async.checkpoint_buffer` (default `log`) passes `--async-checkpoint-buffer log
+  --custom-async-data-buffer-path miles_ext.rollout.group_log.GroupLogDataBuffer`; `prompts` keeps fix-046 as a
+  fallback. Both flags are reserved.
 - Single policy only: the buffer refuses a multi-policy run (`DefaultMultiDataBuffer` saves nothing either).
 - Verify: `python -m pytest miles_ext/tests/test_group_log.py`. In a run, look for `group log: restored` after
   a resume and `group log: deleted` after each save.
@@ -54,4 +55,4 @@ record only which groups are buffered.
 ## Remove when
 
 Upstream Miles checkpoints buffered groups without one blocking write, or stops buffering finished groups across
-saves. After this lands, fix-046's `prompts` mode has no caller and can go.
+saves. fix-046's `prompts` mode stays as a fallback (`async.checkpoint_buffer: prompts`).
