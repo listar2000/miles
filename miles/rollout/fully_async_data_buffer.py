@@ -44,6 +44,7 @@ NO_PROGRESS_WARN_SECS = 30.0
 class UnusedReason(str, Enum):
     ABORTED = "aborted"
     STALE = "stale"
+    UNRESTORED = "unrestored"  # [fork fix-049] a checkpointed group the buffer could not read back
 
 
 def add_data_buffer_arguments(parser: ArgumentParser) -> None:

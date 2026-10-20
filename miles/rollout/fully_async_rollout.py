@@ -388,6 +388,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         self._group_recycled.set()  # [fork fix-004]
 
     def _drop_unused(self, prompt_group: list[Sample], reason: UnusedReason) -> None:
+        if reason is UnusedReason.UNRESTORED:  # [fork fix-049] never trained on, so regenerate it under "drop" too
+            return self._recycle(prompt_group, reason)
         SampleOwnershipRecorder.log_dropped_samples(args=self.args, samples=prompt_group, reason=reason.value)
 
     def save(self, directory: Path) -> None:
