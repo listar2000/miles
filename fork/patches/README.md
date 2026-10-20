@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-051 | Fix | R3 routing crosses the samples wire as int16 when the ids fit and is decoded back to int32: half of each 165-200 MB collect reply | active; remove when upstream narrows routed experts on the wire | [fix-051-r3-wire-int16.md](fix-051-r3-wire-int16.md) |
 | fix-050 | Fix | The debug rollout dump runs after the capture in a thread, in torch's legacy format with pickle protocol 5: a 3 GB dump pauses the rollout loop 0.14 s instead of 26 s | active; remove when upstream writes the dump off the loop | [fix-050-debug-dump-off-loop.md](fix-050-debug-dump-off-loop.md) |
 | ext-033 | Ext | Recipes run each Harbor trial in a subprocess (`agent.function_mode`, default `subproc`); a watchdog logs the rollout loop thread's stack whenever the loop stalls 5 s or more | active; remove when upstream monitors its rollout loop | [ext-033-rollout-loop.md](ext-033-rollout-loop.md) |
 | fix-048 | Fix | `--async-retry-aborted-tries`: fully async mode regenerates an aborted try at once and keeps its group's finished tries, instead of dropping the whole group; recipes retry once | active; remove when upstream retries tries individually | [fix-048-retry-aborted-tries.md](fix-048-retry-aborted-tries.md) |
