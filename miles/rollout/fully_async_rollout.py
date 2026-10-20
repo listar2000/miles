@@ -98,6 +98,11 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         self._output: DataBuffer = buffer_cls(
             DataBufferConstructorInput(args=self.args, unused_handler_fn=self._handle_unused)
         )
+        # [fork fix-046] prompts mode reads the default buffers' state: a list of DataBufferInput
+        assert self.args.async_checkpoint_buffer == "groups" or buffer_cls in (
+            DefaultDataBuffer,
+            DefaultMultiDataBuffer,
+        ), "--async-checkpoint-buffer prompts needs the default fully async data buffer"
         self._retry_buffer: deque[list[Sample]] = deque()
         self._running_tasks: list[_RunningTask] = []
         # [fork fix-004] begin
@@ -324,11 +329,18 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         SampleOwnershipRecorder.log_dropped_samples(args=self.args, samples=prompt_group, reason=reason.value)
 
     def save(self, directory: Path) -> None:
+        # [fork fix-046] begin
+        output = self._output.state_dict()
+        regenerate = []
+        if self.args.async_checkpoint_buffer == "prompts":  # a reset keeps prompt, label and metadata only
+            regenerate = [_copy_and_reset_for_retry(entry.prompt_group) for entry in output]
+            output = []
         state = _FullyAsyncRolloutState(
             retry_buffer=list(self._retry_buffer),
-            running=[_copy_and_reset_for_retry(x.prompt_group) for x in self._running_tasks],
-            output=self._output.state_dict(),
+            running=[_copy_and_reset_for_retry(x.prompt_group) for x in self._running_tasks] + regenerate,
+            output=output,
         )
+        # [fork fix-046] end
         save_simple_checkpoint(directory=directory, data=state)
 
     def load(self, directory: Path) -> None:
@@ -353,10 +365,11 @@ class _FullyAsyncRolloutState:
 
 
 def _copy_and_reset_for_retry(prompt_group: list[Sample]) -> list[Sample]:
-    copied = copy.deepcopy(prompt_group)
+    # [fork fix-046] reset a shallow copy first so the deep copy skips the generated outputs
+    copied = [copy.copy(sample) for sample in prompt_group]
     for sample in copied:
         sample.reset_for_retry()
-    return copied
+    return copy.deepcopy(copied)
 
 
 async def _end_worker(worker: asyncio.Task) -> None:
