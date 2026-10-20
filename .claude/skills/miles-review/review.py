@@ -266,6 +266,20 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "diffstat.txt").write_text(git("diff", "--stat", base, head))
     (bundle / "files.txt").write_text("\n".join(files) + "\n")
     (bundle / "ledger_list.txt").write_text(sh([args.python, "fork/tools/ledger.py", "list"], cwd=tree).stdout)
+    sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
+    taken = sh(
+        [
+            "git",
+            "log",
+            "--remotes=origin",
+            "--format=%D %(trailers:key=Fork-Fix,key=Fork-Hook,key=Fork-Ext,valueonly,separator=%x20)",
+        ],
+        cwd=args.repo,
+    ).stdout
+    ids = sorted({i for i in re.findall(r"\b(?:fix|hook|ext)-\d{3}\b", taken)})
+    (bundle / "ids_on_branches.txt").write_text(
+        "ids in commits on any branch of origin, merged or not:\n" + " ".join(ids)
+    )
     if args.board:
         reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
         (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
