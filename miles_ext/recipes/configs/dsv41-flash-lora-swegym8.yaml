@@ -1,0 +1,74 @@
+# First real DeepSeek V4.1 LoRA run: a toy overfit on the 8 SWE-Gym tasks of the Qwen overfit runs
+# (qwen35-9b-swegym8-sail.yaml), 10 steps, one rollout node and one trainer node. It checks that LoRA
+# works end to end (adapters move, engines serve the merged weights, saves land) and records the
+# training loop's timing and memory against full-parameter a5 (dsv41-flash-overfit8-a5.yaml).
+# Trainer layout = the 1-node LoRA fit check (TP4 CP2 PP1 EP8 on one B300:8, 206 GiB/GPU at 256k).
+# LoRA keeps Adam on the GPU (no NVMe optimizer) and refuses expert QAT: routed experts stay frozen.
+# Needs MILES_DATA with swegym-lite-sandbox/ and prompts/train8_sandbox.jsonl, SAIL_API_KEY in .env.
+name: dsv41-flash-lora-swegym8
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 2
+  train_gpus: 8
+  cpu: 32
+  memory_gib: 768
+  timeout_hours: 4
+parallel:
+  tp: 4
+  pp: 1
+  cp: 2
+  ep: 8
+lora:
+  rank: 32
+  alpha: 32
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 65536
+  max_running_requests: 64
+taskset:
+  tasks_dir: $MILES_DATA/swegym-lite-sandbox
+  prompts: $MILES_DATA/prompts/train8_sandbox.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 100
+  exec_timeout: 120
+  timeout: 3600
+sandbox:
+  provider: sail
+algorithm:
+  mode: fully_async
+  num_rollout: 10
+  rollout_batch_size: 8  # = the task count
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 16384
+  max_seq_len: 65536
+  lr: 1.0e-5  # LoRA at 10x a5's full-parameter LR
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0
+  max_weight_staleness: 2
+  group_filter: no_aborted  # all-correct and all-wrong groups are kept
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  grpo_std_normalization: false
+  per_token_loss: true
+async:
+  max_concurrent_samples: 128  # two batches in flight
+checkpoint:
+  save_interval: 5
+  keep: 1
+  save_optimizer: true  # adapter Adam state is small; a LoRA resume needs it
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab
+  tags: ["exp:lora-swegym8"]
+extra_args:
+  # the same layer-input host offload (ext-020) the fit check ran with
+  - --custom-megatron-init-path
+  - miles_ext.memory.ckpt_offload.install
