@@ -1,14 +1,17 @@
 # overfit8 attempt a6 of the DeepSeek V4.1 overfitting run: a5's 8 tasks and agent, trained with LoRA on one
-# trainer node while two nodes serve rollouts. a1-a5 never got past 3-4 steps at ~1 h each; with LoRA the
+# trainer node while one node serves rollouts. a1-a5 never got past 3-4 steps at ~1 h each; with LoRA the
 # optimizer step is no longer the fixed ~21 min NVMe pass, so a6 takes more, smaller steps. What differs from
 # dsv41-flash-overfit8-a5.yaml (branch a5-launch):
 # - LoRA rank 32 (hook-006 merged sync; engines serve merged full weights), trainer = the 1-node fit check's
 #   layout (TP4 CP2 PP1 EP8 on one B300:8, 206 GiB/GPU at 256k); no NVMe optimizer, no expert QAT (LoRA
 #   refuses both), no staged saves (a LoRA save is ~3 s);
-# - 2 rollout nodes = 4 TP4 engines, 128 tries in flight (32 per engine, two batches);
+# - 1 rollout node = 2 TP4 engines, 128 tries in flight (two batches). Below the engines' knee (a5 ran 256 on
+#   this node with KV at most a third used), throughput follows tries in flight, not engine count: a5 tries
+#   averaged 61 min, so 128 in flight give ~2.1 tries/min, ~30 min per 64, against a ~25 min trainer step;
 # - batch 8 x 8 = 64 per step (a5: 8 x 16) and 16 steps: the same 1,024 tries as a5's plan, twice the steps;
 # - LR 3e-5 (a5 1e-6 full-parameter; the SWE-Gym LoRA run 1e-5);
-# - weight staleness 6 (a5 4): steps of ~25-30 min would drop 2-h telecom/software-009 tries at 4;
+# - weight staleness 4, as a5: at ~30 min steps a group must finish within ~2 h; software-009 (p90 148 min in
+#   a5) and some media-parallel groups will be dropped as stale;
 # - fix-047 on (--dsv4-reuse-indexer-topk); main's subprocess trials (#60), int16 routing (#66) and the
 #   group-log checkpoint buffer (#63) are defaults.
 # No in-loop eval: evals run offline from saved weights. Needs $MILES_DATA/prompts/overfit8_a5.jsonl (made as
@@ -19,11 +22,11 @@ model:
   revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
 cluster:
   gpu: B300
-  nodes: 3
+  nodes: 2
   train_gpus: 8
   cpu: 64  # session servers and the rollout manager share the trainer (head) node
   memory_gib: 1280  # 1-node fit check peaked at 780 GiB host RAM at 256k (ckpt_offload's pinned pool)
-  timeout_hours: 12
+  timeout_hours: 14
 parallel:
   tp: 4
   pp: 1
@@ -36,7 +39,7 @@ rollout:
   gpus_per_engine: 4
   precision: fp8_fp4
   context_length: 262144
-  max_running_requests: 64
+  max_running_requests: 128  # 64 per engine on average; headroom for uneven routing
 taskset:
   tasks_volume: miles-datasets:/tb4t-20261016/tasks
   prompts: $MILES_DATA/prompts/overfit8_a5.jsonl
@@ -67,13 +70,13 @@ algorithm:
   eps_clip: 0.2
   eps_clip_high: 0.28
   tis_clip: 2.0
-  max_weight_staleness: 6
+  max_weight_staleness: 4
   sglang_mem_fraction: 0.75
   routing_replay: true
   grpo_std_normalization: false
   per_token_loss: true
 async:
-  max_concurrent_samples: 128
+  max_concurrent_samples: 128  # two batches in flight
 checkpoint:
   save_interval: 2
   keep: 8  # every save (~3.75 GB each), for offline eval
