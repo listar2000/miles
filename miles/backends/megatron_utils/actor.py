@@ -2,11 +2,13 @@ import atexit
 import logging
 import os
 import shutil
+import time  # [fork fix-043]
 from contextlib import ExitStack, nullcontext
 from functools import partial
 
 import torch
 import torch.distributed as dist
+from megatron.training.async_utils import is_empty_async_queue  # [fork fix-043]
 from megatron.training.async_utils import maybe_finalize_async_save
 from torch_memory_saver import torch_memory_saver
 
@@ -96,6 +98,7 @@ from .replay_utils import register_replay_list_moe
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+ASYNC_SAVE_POLL_SECS = 5  # [fork fix-043]
 
 CRITIC_VALUES_VALUE_SPEC: dict[str, ValueSpec] = {"values": ValueSpec(codec="typed_ragged")}
 
@@ -450,6 +453,11 @@ class MegatronTrainRayActor(TrainRayActor):
         if not self.args.async_save:
             return
 
+        # [fork fix-043] short rounds every rank joins; a blocking finalize parks finished ranks in one all-reduce
+        while not is_empty_async_queue():
+            maybe_finalize_async_save(blocking=False)
+            if not is_empty_async_queue():
+                time.sleep(ASYNC_SAVE_POLL_SECS)
         maybe_finalize_async_save(blocking=True)
 
     @with_logs
@@ -864,6 +872,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if force_sync:
             self._finalize_pending_async_save()
 
+        if self.args.custom_megatron_post_save_hook_path is not None:  # [fork fix-043] the finalize needs every rank
+            self._finalize_pending_async_save()
         if self.args.custom_megatron_post_save_hook_path is not None and dist.get_rank() == 0:
             self._finalize_pending_async_save()
 
