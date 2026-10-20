@@ -32,7 +32,8 @@ on #48 and #49; on held-out #45 it was slightly stricter than Claude.
 `python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python
 [--board coord/BOARD.md] [--prior <review.md>]` on the launch host. "Stacked on #N." PRs
 are diffed against #N's head; prompts over Codex's 1M-character limit fall back to the
-diff. Verify a change to the protocol with `--result <saved answer>`: the saved answer replaces
+diff. Fork ids used on any branch (merged or not) and the board's reservations are passed
+in, so an id taken on an abandoned branch counts as taken. Verify a change to the protocol with `--result <saved answer>`: the saved answer replaces
 the first agent call (a protocol break still triggers the one real retry).
 Upstream sync PRs (merge diffs) are too large for one prompt and stay with a Claude
 reviewer.

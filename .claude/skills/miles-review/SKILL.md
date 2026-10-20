@@ -271,6 +271,8 @@ modal and pyyaml, and a full (not partial or shallow) clone.
 **The bundle** stands in for Setup and the required checks: `pr.json` (title,
 body, head), `commits.txt` (log with trailers), `diff.patch`, `diffstat.txt`,
 `files.txt`, `ledger_list.txt` (every fork id at the head),
+`ids_on_branches.txt` (ids used on any branch, merged or not; they count as
+taken),
 `reserved_ids.txt` (id reservations from the coordination board, given with
 `--board`; a reserved id counts as taken), `ledger.txt`,
 `precommit.txt` (failing hooks and exit code) and `pytest.txt` (head and base),
