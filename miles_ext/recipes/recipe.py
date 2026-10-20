@@ -154,11 +154,10 @@ DEFAULTS: dict[str, Any] = {
     # Engines receive merged full weights; they need no native LoRA support.
     # target_modules uses Miles' selector syntax; None selects attention and MLP groups.
     "lora": {"rank": 0, "alpha": 32, "target_modules": None},
-    # fully async rollout knobs (Miles' --async-* flags); None: Miles' default or, for
-    # max_concurrent_samples, rollout_batch_size * n_samples. single_pass: hand each prompt out
-    # once and let a step wait for every group (evals: num_rollout 1, rollout_batch_size = tasks)
+    # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
+    # for max_concurrent_samples; retry_aborted_tries: fork/patches/fix-048-retry-aborted-tries.md
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
-              "pause_generation": "in_place", "single_pass": False},
+              "pause_generation": "in_place", "single_pass": False, "retry_aborted_tries": 1},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
@@ -296,6 +295,7 @@ FIELD_RULES: dict[str, dict] = {
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
+    "async.retry_aborted_tries": {"type": "int", "min": 0},
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
@@ -711,7 +711,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
-        --async-checkpoint-buffer prompts
+        --async-checkpoint-buffer prompts --async-retry-aborted-tries {aio["retry_aborted_tries"]}
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         {"--async-single-pass" if aio["single_pass"] else ""}
         """
