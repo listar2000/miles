@@ -47,6 +47,16 @@ def add_dsv4_arguments(parser: ArgumentParser) -> ArgumentParser:
             "index-source layer and in-flight micro-batch on the GPU."
         ),
     )
+    # [fork fix-052]
+    group.add_argument(
+        "--dsv4-indexer-tp-split",
+        action="store_true",
+        help=(
+            "DeepSeek-V4.1 with --dsv4-impl miles: the tensor-parallel ranks, which all hold the same indexer "
+            "queries, each score a share of the query chunks and all-reduce the top-k, instead of every rank "
+            "scoring every query. Same top-k; one top-k all-reduce per index-source layer."
+        ),
+    )
     return parser
 
 

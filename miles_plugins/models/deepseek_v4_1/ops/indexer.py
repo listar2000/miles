@@ -2,6 +2,7 @@ import functools
 import os
 
 import torch
+import torch.distributed as dist  # [fork fix-052]
 import torch.nn as nn
 import torch.nn.functional as F
 from megatron.core.extensions.transformer_engine import TELinear
@@ -89,6 +90,7 @@ def indexer_select(
     topk_fn,
     allow_deep_select: bool,
     query_chunk: int | None,
+    split_group: dist.ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     bsz, seqlen = q.shape[:2]
     n_kv = index_k.size(1)
@@ -101,9 +103,15 @@ def indexer_select(
         if pad_kv:
             k_t = torch.nn.functional.pad(k_t, (0, 0, 0, 0, 0, pad_kv))
     chunk = seqlen if not query_chunk or query_chunk >= seqlen else query_chunk
+    starts = range(0, seqlen, chunk)
+    world = dist.get_world_size(split_group) if split_group is not None else 1
+    if world > 1:  # [fork fix-052] this rank scores every world-th of world-times smaller query chunks
+        _check_same_chunk(query_chunk or 0, split_group, q.device)  # the configured value, not one clamped to seqlen
+        chunk = -(-chunk // world)
+        starts = range(0, seqlen, chunk)[dist.get_rank(split_group) :: world]
     idx_parts: list[torch.Tensor] = []
     cand_parts: list[torch.Tensor] = []
-    for s in range(0, seqlen, chunk):
+    for s in starts:
         e = min(s + chunk, seqlen)
         lens = compress_lens[s:e]
         scores = indexer_logits_sbhd(
@@ -143,10 +151,41 @@ def indexer_select(
         idx = topk_fn(scores.reshape(bsz * (e - s), scores.size(-1)), topk)
         idx = idx.reshape(bsz, e - s, topk).sort(dim=-1).values.to(torch.int64)
         idx_parts.append(torch.where(idx < lens.unsqueeze(-1), idx, -1))
+    if world > 1:  # [fork fix-052]
+        gather = functools.partial(_gather_query_chunks, starts=starts, chunk=chunk, seqlen=seqlen, group=split_group)
+        idx = gather(idx_parts, shape=(bsz, topk), dtype=torch.int64, device=q.device)
+        if is_candidate_source:
+            width = min(candidate_topk_blocks, -(-n_kv // candidate_block_size))
+            candidates = gather(cand_parts, shape=(bsz, width), dtype=torch.int16, device=q.device)
+        return idx, candidates
     idx = idx_parts[0] if len(idx_parts) == 1 else torch.cat(idx_parts, dim=1)
     if is_candidate_source:
         candidates = cand_parts[0] if len(cand_parts) == 1 else torch.cat(cand_parts, dim=1)
     return idx, candidates
+
+
+_checked_split_groups: set[int] = set()  # [fork fix-052]
+
+
+def _check_same_chunk(chunk: int, group: dist.ProcessGroup, device: torch.device) -> None:
+    """[fork fix-052] Fail once, loudly, if the split ranks disagree on the query chunk (a per-process env var)."""
+    if id(group) in _checked_split_groups:
+        return
+    bounds = torch.tensor([chunk, -chunk], dtype=torch.int64, device=device)
+    dist.all_reduce(bounds, op=dist.ReduceOp.MIN, group=group)
+    assert bounds.tolist() == [chunk, -chunk], f"split ranks disagree on the indexer query chunk: {chunk} here"
+    _checked_split_groups.add(id(group))
+
+
+def _gather_query_chunks(parts, *, starts, chunk, seqlen, shape, dtype, device, group) -> torch.Tensor:
+    """[fork fix-052] Sum query rows that have exactly one writer each; int16 travels as int32 for NCCL."""
+    bsz, width = shape
+    wire = torch.int32 if dtype == torch.int16 else dtype
+    full = torch.zeros(bsz, seqlen, width, dtype=wire, device=device)
+    for s, part in zip(starts, parts, strict=True):
+        full[:, s : min(s + chunk, seqlen)] = part
+    dist.all_reduce(full, group=group)
+    return full.to(dtype)
 
 
 class DeepSeekV41Indexer(MegatronModule):
@@ -159,9 +198,11 @@ class DeepSeekV41Indexer(MegatronModule):
         owns_k: bool,
         is_candidate_source: bool,
         uses_candidates: bool,
+        split_group: dist.ProcessGroup | None = None,
     ):
         super().__init__(config=config)
         self.layer_id = layer_id
+        self.split_group = split_group  # [fork fix-052] the ranks that hold the same queries and split them
         self.compress_ratio = compress_ratio
         self.owns_k = owns_k
         self.is_candidate_source = is_candidate_source
@@ -243,5 +284,6 @@ class DeepSeekV41Indexer(MegatronModule):
             topk_fn=topk_fn,
             allow_deep_select=not indexer_replay_manager.enabled or indexer_replay_manager.stage == "fallthrough",
             query_chunk=INDEXER_QUERY_CHUNK,
+            split_group=self.split_group,  # [fork fix-052]
         )
         return idx, candidates
