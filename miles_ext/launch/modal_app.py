@@ -41,6 +41,7 @@ import threading
 import time
 
 import modal
+from pathlib import Path
 
 from miles_ext import stack
 from miles_ext.checkpoint import staged_save
@@ -132,6 +133,9 @@ if RECIPE is None:
     image = modal.Image.debian_slim()  # placeholder: inside the container the function's own image is used
 else:
     image = fork_image(FROM_COMMIT or None, IMAGE or None)
+    # smoke-dspark-1021 only (not for main): DSpark decode forwards R3 rows (patches/dspark_r3.py, upstream bug)
+    image = image.add_local_file(Path(__file__).with_name("smoke_dspark_r3.py"), "/tmp/smoke_dspark_r3.py", copy=True) \
+        .run_commands("python /tmp/smoke_dspark_r3.py")
     if (LAUNCH or {}).get("trainer"):
         image = image.env({TRAINER_ENV: LAUNCH["trainer"]})
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",

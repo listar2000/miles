@@ -1,0 +1,85 @@
+# smoke-dspark-1021: does DSpark speculative decoding (with the R3 forwarding patch, applied to the image by
+# modal_app.py on this branch only) keep the train/rollout logprob gap at ~0.03 across LoRA merged weight syncs?
+# a6's recipe with: DSpark on, 3 steps of 8 tasks x 4, staleness 1 (steps 1-2 train on post-sync samples),
+# agent capped at 40 turns (short trials; reward is not the point).
+name: dsv41-flash-smoke-dspark
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 2
+  train_gpus: 8
+  cpu: 64  # session servers and the rollout manager share the trainer (head) node
+  memory_gib: 1280  # 1-node fit check peaked at 780 GiB host RAM at 256k (ckpt_offload's pinned pool)
+  timeout_hours: 14
+parallel:
+  tp: 4
+  pp: 1
+  cp: 2
+  ep: 8
+lora:
+  rank: 32
+  alpha: 32
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 262144
+  max_running_requests: 128  # 64 per engine on average; headroom for uneven routing
+taskset:
+  tasks_volume: miles-datasets:/tb4t-20261016/tasks
+  prompts: $MILES_DATA/prompts/overfit8_a5.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  # a5's agent (the 1017 eval's), so pass rates carry over
+  max_steps: 40
+  exec_timeout: 300
+  timeout: 7200
+  trial_timeout: 10800
+  verifier_timeout: 3600
+  setup_timeout: 1800
+  context_exhausted_scores_zero: true
+sandbox:
+  provider: sail
+  lifetime_secs: 14400
+  idle_secs: 3600
+  build_timeout_multiplier: 3
+algorithm:
+  mode: fully_async
+  num_rollout: 3
+  rollout_batch_size: 8  # = the task count
+  n_samples: 4
+  temperature: 1.0
+  max_response_len: 32768
+  max_seq_len: 262144
+  lr: 3.0e-5
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0
+  max_weight_staleness: 1
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  grpo_std_normalization: false
+  per_token_loss: true
+async:
+  max_concurrent_samples: 64  # two batches in flight
+checkpoint:
+  save_interval: 100
+  keep: 8  # every save (~3.75 GB each), for offline eval
+  save_optimizer: true  # adapter Adam state is small; a LoRA resume needs it
+  save_rollout_data: true  # a trainer failure replays on the trainer node alone
+tracking:
+  wandb_project: miles-dsv41  # smoke- run ids go to miles-smoke
+  wandb_entity: mobiuslab
+  tags: ["exp:smoke-dspark"]
+extra_args:
+  # each layer's checkpointed input waits in pinned host memory between forward and backward (ext-020)
+  - --custom-megatron-init-path
+  - miles_ext.memory.ckpt_offload.install
+  - --distributed-timeout-minutes
+  - "60"
+  # fix-047: the full recompute reuses each index-source layer's forward top-k
+  - --dsv4-reuse-indexer-topk
+  # DSpark speculative decoding (static verify, the image default)
+  - --sglang-speculative-algorithm
+  - DSPARK
