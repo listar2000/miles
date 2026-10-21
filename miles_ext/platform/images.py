@@ -27,6 +27,9 @@ def image_commit() -> str:
     return _first_env(COMMIT_ENVS) or "unknown"
 
 
+_COMMIT_PIN = "from miles_ext.stack import SGLANG_COMMIT as c; print(c)"  # the checked-out commit's pin
+
+
 def fork_image(commit: str | None = None, image: str | None = None) -> modal.Image:
     """The published fork image: ``image`` (a ``repo@sha256:...`` from ``versions.resolve``)
     or else ``stack.FORK_IMAGE``; or the same image built by Modal from a pushed fork
@@ -41,8 +44,13 @@ def fork_image(commit: str | None = None, image: str | None = None) -> modal.Ima
         image = (
             modal.Image.from_registry(stack.BASE_IMAGE)
             .run_commands(stack.DEPS_INSTALL)
-            .run_commands(f"cd {stack.MILES_SRC} && git fetch --no-tags {stack.FORK_REPO} {commit} "
-                          f"&& git checkout --force --detach {commit} && python fork/tools/ledger.py markers")
+            .run_commands(
+                f"cd {stack.MILES_SRC} && git fetch --no-tags {stack.FORK_REPO} {commit} "
+                f"&& git checkout --force --detach {commit} "
+                "&& { [ ! -f fork/deps/sglang/apply.py ] "  # commits before SGLang patches
+                f"|| python fork/deps/sglang/apply.py {stack.SGLANG_SRC} \"$(python -c '{_COMMIT_PIN}')\"; }} "
+                "&& python fork/tools/ledger.py markers"
+            )
             .env({"PYTHONPATH": str(stack.MILES_SRC), "MILES_MOBIUS_VERSION": f"commit@{commit[:10]}",
                   "MILES_MOBIUS_COMMIT": commit})
         )

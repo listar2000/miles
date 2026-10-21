@@ -49,8 +49,8 @@ Every fork commit has exactly one trailer saying what it is.
 
 | Kind (trailer) | What it is | Where it lives | Can it conflict on a sync? |
 | --- | --- | --- | --- |
-| **Fix** (`Fork-Fix: fix-NNN`) | a bug fix to upstream code | in place, in the upstream file | yes: it is the only thing that can (with hooks) |
-| **Hook** (`Fork-Hook: hook-NNN`) | an extension point upstream lacks, so an extension can plug in | in place, in the upstream file | yes |
+| **Fix** (`Fork-Fix: fix-NNN`) | a bug fix to upstream code | in place, in the upstream file; in SGLang, a patch file (SGLang patches, below) | yes: it is the only thing that can (with hooks) |
+| **Hook** (`Fork-Hook: hook-NNN`) | an extension point upstream lacks, so an extension can plug in | in place, in the upstream file; in SGLang, a patch file | yes |
 | **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | no (new files only) |
 | **Ext** (`Fork-Ext: ext-NNN`) | new capability: harnesses, recipes, algorithms, sandbox providers | `miles_ext/` | no (new files only) |
 
@@ -81,7 +81,7 @@ find without reading commit messages. Those get a page.
 
 - **Where:** `fork/patches/<fork-id>-<slug>.md`, e.g. `fork/patches/ext-003-harbor-sail.md`,
   and one row in the index `fork/patches/README.md`.
-- **When:** required for every Hook, every vendored upstream file (below) and
+- **When:** required for every Hook, every SGLang patch, every vendored upstream file (below) and
   any change that needed a design choice someone may revisit (several
   alternatives, a workaround, a dependency-of-a-dependency problem). Optional
   for a small, obvious fix: its commit message is enough.
@@ -105,8 +105,9 @@ subclass or wrapper next to it. Load it through an extension point (for
 Harbor, `import_path`), not by patching the installed package. A vendored
 file is an Ext change and always gets a patch page.
 
-Edits to installed dependency code (not whole files) are not done in this
-repo; see Harbor below for when that becomes a dependency fork.
+Edits to installed dependency code (not whole files) are done in this repo
+only for SGLang, as patch files (SGLang patches, below). For any other
+dependency, see Harbor below for when that becomes a dependency fork.
 
 ## Layout
 
@@ -121,6 +122,7 @@ fork/
   rfcs/README.md        index of RFCs (process and design proposals); rfcs/NNNN-<slug>.md
   vendored.json         upstream files carried verbatim in miles_ext/ (blob-checked)
   deps/harbor/          offline Harbor patches (task-set generation only; see Harbor)
+  deps/sglang/          SGLang patches (<fix|hook>-NNN-<slug>.patch) and apply.py, applied at image build
 .claude/skills/miles-fork/  the workflow for agents changing this fork
 .claude/skills/miles-review/  the review checklist every fork PR goes through
 miles_ext/              extensions (top-level package next to miles/, on PYTHONPATH in the image)
@@ -149,7 +151,7 @@ brings the new version and API drift fails at import, not silently.
 | Layer | Contents | Made by |
 | --- | --- | --- |
 | upstream (117 layers) | CUDA, torch, SGLang, Megatron, compiled extensions, `/root/miles` at the upstream tag | radixark; mounted from `radixark/miles` on Docker Hub, never re-uploaded |
-| deps | Harbor at `HARBOR_COMMIT`, mini-swe-agent and the Sail SDK (`stack.DEPS_INSTALL`): exactly the files of the distributions `uv pip install` added or replaced (their `RECORD`s), whiteouts for the versions it removed | a Modal container of the base image runs the install |
+| deps | Harbor at `HARBOR_COMMIT`, mini-swe-agent and the Sail SDK (`stack.DEPS_INSTALL`): exactly the files of the distributions `uv pip install` added or replaced (their `RECORD`s), whiteouts for the versions it removed; plus the SGLang files our SGLang patches change | a Modal container of the base image runs the install and `fork/deps/sglang/apply.py` |
 | src | the built commit of `main` (`git archive`) over `/root/miles`, whiteouts for files the commit deletes | local `git` |
 
 The image env adds `PYTHONPATH=/root/miles` (so the top-level `miles_ext`
@@ -301,7 +303,8 @@ release fixed the bug, take upstream's side and drop the markers, and mark the
 patch page removed; otherwise re-apply the same intent to the new code and
 keep the markers. After the merge: set `HARBOR_COMMIT` from the new tag's
 `examples/experimental/harbor/README.md`, recheck vendored files (drop any
-that upstream now ships), read the `REVIEW_PATHS` diff for API drift in what
+that upstream now ships), recheck SGLang patches when the base image's SGLang
+moved (SGLang patches, "On a sync"), read the `REVIEW_PATHS` diff for API drift in what
 `miles_ext` builds on, then land and build as usual and run the launcher's
 `--check-only`, a save/stop/resume smoke and one recipe. The build becomes
 `latest`; staging decides whether it becomes stable.
@@ -321,6 +324,90 @@ RFC 0001 changes some tools as well as these rules. Until those changes land:
   frozen: they are what the platform runs until it resolves versions, and
   `validate`'s deep check, `finalize_hf` and the weights download still use
   `FORK_IMAGE`. Landings do not change them.
+
+## SGLang patches
+
+The image's SGLang is upstream's: `BASE_IMAGE` ships the `sglang-miles`
+branch of sgl-project/sglang, installed editable at `stack.SGLANG_SRC`
+(`/sgl-workspace/sglang`) at commit `stack.SGLANG_COMMIT`. Upstream Miles
+changes its dependencies in two ways: commits on a branch it keeps in the
+dependency (`sglang-miles`, Megatron-LM `miles-main`), and `.patch` files
+in `docker/patch/` (flash-linear-attention, TileLang, TileKernels) that the
+Dockerfile applies with `patch --fuzz=0`, each with its upstream PR and a
+"drop when" line, failing the build when one does not apply. We cannot commit
+to `sglang-miles`, so we carry SGLang changes the second way.
+
+**What may be patched.** A Fix or a Hook, under the same rules as in Miles
+code: a bug fix, or the smallest extension point an extension needs. It
+copies a pattern SGLang already uses for the same job (name it on the patch
+page) and stays small: about 30 changed lines; a larger one needs the user's
+OK on its PR. No new server flags, kernels, model support or features: those
+go to SGLang. Never change SGLang at runtime from `miles_ext`
+(monkeypatching, a script that edits the installed files): what is not a patch
+file is not in the image's record. A runtime applier is fine on a throwaway
+image during an investigation; it never lands.
+
+**How.**
+
+- One patch per id: `fork/deps/sglang/<id>-<slug>.patch`, the `git diff`
+  of the SGLang checkout at `SGLANG_COMMIT` (paths from the SGLang repo
+  root). Ids are the ordinary `fix-NNN` / `hook-NNN` series.
+- Every file it edits gets an added line carrying `[fork <id>]`, so grep finds
+  it in the image.
+- One commit, touching only the patch file, with the usual trailers.
+  `Touches:` lists the SGLang files as `sglang:python/sglang/...`;
+  `Upstream-Status:` is the SGLang PR, or `not filed; also on sgl-project/sglang
+  main <sha9>` (or `not on main <sha9>`); `Remove-When:` names the SGLang
+  release or `sglang-miles` commit that has the fix.
+- A patch page, always, in its own `patch-<id>` infra commit as usual. Its
+  *Decision* names the SGLang code it mirrors; *Remove when* repeats the
+  upstream status checked against SGLang main.
+- Every SGLang patch is also an upstream candidate: list it wherever the
+  project tracks fixes worth sending upstream.
+
+`ledger.py check` enforces the shape: the file name, the `sglang:` touches
+matching the files the patch edits, a marker in each, and that only the
+patch's own commit (or a `sync-` commit) adds, changes or deletes it.
+
+**Build.** `fork/deps/sglang/apply.py` applies every patch with one `git
+apply` (exact context, no fuzz, all or none). When there is at least one
+patch, the checkout must be at `SGLANG_COMMIT`. `build.py --main` runs it in
+the deps layer's container and puts the changed files in the deps layer; the
+image label `miles.mobius.sglang-patches` lists the patches. The launcher's
+build-from-commit image (`MILES_FORK_COMMIT`) runs it after the checkout,
+then `ledger.py markers`, which finds each patch's marker in the installed
+SGLang. A patch that no longer applies, or an SGLang that moved, fails both
+builds.
+
+**Tests.**
+
+1. `python fork/tools/ledger.py check`.
+2. The patch applies at the pin and, for the upstream status, on SGLang main
+   (CPU, seconds):
+
+   ```bash
+   git clone --filter=blob:none https://github.com/sgl-project/sglang /tmp/sglang
+   git -C /tmp/sglang checkout <SGLANG_COMMIT>
+   python fork/deps/sglang/apply.py /tmp/sglang <SGLANG_COMMIT> --check
+   git -C /tmp/sglang checkout origin/main && git -C /tmp/sglang apply --check "$PWD"/fork/deps/sglang/<patch>
+   ```
+
+3. The launcher's `--check-only` from the pushed commit: the image builds
+   and `ledger.py markers` lists the patch.
+4. Evidence that it fixes what it says: a GPU run on the patched image beside
+   the same run without the patch, both cited with numbers in the patch page.
+   Run SGLang's own unit test of the area too when one runs on CPU.
+
+**On a sync.** When the new `BASE_IMAGE` ships another SGLang commit, set
+`SGLANG_COMMIT` from it (`git -C /sgl-workspace/sglang rev-parse HEAD` in the
+image) and run step 2. A patch whose fix SGLang now has is deleted and its
+page marked removed; one that no longer applies is redone against the new
+code with the same id and markers. Both happen in the `sync-` commit.
+
+**When to switch to a fork.** More than about five live SGLang patches, or one
+that needs redoing on most syncs: propose a `listar2000/sglang` branch off the
+pinned `sglang-miles` commit (as for Harbor below), so the patches become
+commits that merge like ours.
 
 ## Harbor
 

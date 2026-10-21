@@ -111,6 +111,18 @@ Each break is **blocking** unless marked otherwise.
 - **Upstream edits.** The smallest possible insertion, a `[fork fix-NNN]`
   marker at every touched spot, and the `Touches:`, `Evidence:`,
   `Upstream-Status:` and `Remove-When:` trailers.
+- **SGLang patches** (`fork/README.md` "SGLang patches"). A file
+  `fork/deps/sglang/<id>-<slug>.patch` in a fix or hook commit that touches
+  nothing else. Blocking: it adds a feature, server flag, kernel or model
+  support; the PR or patch page does not name the existing SGLang code it
+  copies; it changes SGLang at runtime from `miles_ext` instead; or
+  Verification lacks `apply.py ... --check` passing at `stack.SGLANG_COMMIT`.
+  Should-fix: over about 30 changed lines without the user's OK on the PR;
+  `Upstream-Status:` without SGLang main checked at a named sha; evidence
+  without the same run on an unpatched image beside it, or without proof the
+  run used the patched image (the launcher's marker line or the
+  `miles.mobius.sglang-patches` label). In a deep review, also ask whether the
+  patch changes any SGLang path other than the one it fixes.
 - **Extensions.** New files under `miles_ext/`, plugged in through Miles' flags
   or Harbor's `import_path`. A vendored file is never edited; adaptations go in
   a subclass next to it.
