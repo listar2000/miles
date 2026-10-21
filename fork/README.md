@@ -62,6 +62,8 @@ Rules for **fixes and hooks** (enforced by `ledger.py check`):
   so `grep -rn "\[fork "` finds every place we changed.
 - Trailers: `Touches:` (the upstream files), `Evidence:` (the failure it fixes),
   `Upstream-Status:` (not filed / PR link / merged in vX), `Remove-When:`.
+- Add a row to [UPSTREAM.md](UPSTREAM.md) in the same PR, or say in the PR why
+  the fix is not an upstream candidate.
 - No ordering rule: with merges there is no replay order, so a fix lands
   on `main` like any other commit.
 
@@ -120,6 +122,7 @@ fork/
   patches/README.md     index of patch pages; patches/<fork-id>-<slug>.md, one page each
   rfcs/README.md        index of RFCs (process and design proposals); rfcs/NNNN-<slug>.md
   vendored.json         upstream files carried verbatim in miles_ext/ (blob-checked)
+  UPSTREAM.md           our fixes worth sending to upstream Miles or SGLang, and whether upstream still has each bug
   deps/harbor/          offline Harbor patches (task-set generation only; see Harbor)
 .claude/skills/miles-fork/  the workflow for agents changing this fork
 .claude/skills/miles-review/  the review checklist every fork PR goes through
