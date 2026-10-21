@@ -236,3 +236,12 @@ def test_checkpoint_buffer_modes(mode, buffer):
     assert _value(argv, "--async-checkpoint-buffer") == mode
     path = "--custom-async-data-buffer-path"
     assert (_value(argv, path) if path in argv else None) == buffer
+
+
+@pytest.mark.parametrize("mode, controller", [("fixed", None), ("auto", R.AUTO_IN_FLIGHT)])
+def test_in_flight_modes(mode, controller):
+    r = _recipe(**{"async": {"in_flight": mode}})
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    path = "--async-in-flight-controller-path"
+    assert (_value(argv, path) if path in argv else None) == controller

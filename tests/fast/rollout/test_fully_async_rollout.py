@@ -108,6 +108,7 @@ def make_args(**overrides) -> Namespace:
         async_single_pass=False,  # [fork fix-004]
         async_checkpoint_buffer="groups",  # [fork fix-046]
         async_retry_aborted_tries=0,  # [fork fix-048]
+        async_in_flight_controller_path=None,  # [fork hook-009]
         custom_async_data_buffer_path=None,
         enable_sample_ownership_checker=False,
         custom_async_data_buffer_path_per_model=None,
@@ -628,6 +629,52 @@ async def test_async_max_concurrent_samples_caps_in_flight_groups(monkeypatch):
     release.set()
     output = await drain
     assert len(output.samples) == 4
+
+
+# [fork hook-009] begin
+class OneGroupController:
+    """Budget of one group whatever the cap; records what the rollout reports."""
+
+    events: list[str] = []
+
+    def __init__(self, args):
+        OneGroupController.events = []
+
+    def on_submit(self, task):
+        self.events.append("submit")
+
+    def on_drain(self):
+        self.events.append("drain")
+
+    def budget(self, cap):
+        return 1
+
+    def metrics(self):
+        return {"rollout/fully_async/in_flight_budget_groups": 1}
+
+
+async def test_an_in_flight_controller_sets_the_budget(monkeypatch):
+    release = asyncio.Event()
+
+    async def blocking_generate(state, group, sampling_params, evaluation=False, sample_done_callback=None):
+        await release.wait()
+        return group
+
+    data_source = FakeDataSource()
+    args = make_args(rollout_batch_size=2, async_in_flight_controller_path=f"{__name__}.OneGroupController")
+    fn = make_fn(monkeypatch, args, data_source, generate=blocking_generate)
+
+    drain = asyncio.create_task(fn(train_input(rollout_id=0)))
+    await asyncio.sleep(0.05)
+    assert data_source.num_get_calls == 1  # the cap is 2 groups
+
+    release.set()
+    output = await drain
+    assert {"submit", "drain"} <= set(OneGroupController.events)
+    assert output.metrics["rollout/fully_async/in_flight_budget_groups"] == 1
+
+
+# [fork hook-009] end
 
 
 async def test_worker_failure_beats_queued_groups(monkeypatch):

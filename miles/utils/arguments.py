@@ -1048,6 +1048,19 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             # [fork fix-046] end
+            # [fork hook-009] begin
+            parser.add_argument(
+                "--async-in-flight-controller-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a class that sizes the fully async in-flight group budget each step, constructed "
+                    "with args. It sees each group's task at submit and each drain, and its budget(cap) "
+                    "replaces --async-max-concurrent-samples // --n-samples-per-prompt, which stays the upper "
+                    "bound. Unset (default): the budget is fixed."
+                ),
+            )
+            # [fork hook-009] end
             parser.add_argument(
                 "--custom-async-data-buffer-path",
                 type=str,

@@ -119,6 +119,9 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         self._try_rewards: dict[bool, list[float]] = {False: [], True: []}
         # [fork fix-048] end
         self._running_tasks: list[_RunningTask] = []
+        # [fork hook-009] an optional controller sizes the in-flight budget from group and step times
+        controller_cls = load_function(input.args.async_in_flight_controller_path)
+        self._in_flight = controller_cls(input.args) if controller_cls else None
         # [fork fix-004] begin
         self._single_pass = input.args.async_single_pass
         if self._single_pass:
@@ -175,8 +178,10 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
     def _max_in_flight_groups(self) -> int:
         if (x := self.args.async_max_concurrent_samples) is not None:
             # Whole groups are submitted, so the sample budget floors to a group count.
-            return max(1, x // self.args.n_samples_per_prompt)
-        return self.args.rollout_batch_size
+            cap = max(1, x // self.args.n_samples_per_prompt)
+        else:
+            cap = self.args.rollout_batch_size
+        return self._in_flight.budget(cap) if self._in_flight else cap  # [fork hook-009]
 
     def _submit_one_group(self) -> asyncio.Task:
         samples = [self._retry_buffer.popleft()] if self._retry_buffer else self.data_source.get_samples(1)
@@ -184,6 +189,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         self._scheduler.on_submit(samples)
         [prompt_group] = samples
         task = asyncio.create_task(self._generate_group(prompt_group))
+        if self._in_flight:  # [fork hook-009]
+            self._in_flight.on_submit(task)
         self._running_tasks.append(_RunningTask(prompt_group=prompt_group, task=task))
         return task
 
@@ -318,6 +325,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
             trainer_model_id=input.trainer_model_id,
         )
         self._worker_error_cancel_targets.discard(asyncio.current_task())
+        if self._in_flight:  # [fork hook-009]
+            self._in_flight.on_drain()
 
         data: list[Group] = []
         do_print = True
@@ -357,6 +366,8 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         metrics = self._output.get_metrics(input.trainer_model_id)
         if self.args.async_retry_aborted_tries:  # [fork fix-048]
             metrics = {**metrics, **self._try_metrics()}
+        if self._in_flight:  # [fork hook-009]
+            metrics = {**metrics, **self._in_flight.metrics()}
         return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
     # [fork fix-004] begin
