@@ -1,0 +1,40 @@
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_verify.py b/python/sglang/srt/speculative/dspark_components/dspark_verify.py
+index dd45c0d90c..bf855cb625 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_verify.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_verify.py
+@@ -76,6 +76,10 @@ def verify_logits_adjustments_are_noop(sampling_info) -> bool:
+ class TargetVerifyResult(msgspec.Struct, frozen=True):
+     logits_output: object
+     can_run_cuda_graph: bool
++    # [fork fix-053] the verify forward's R3 outputs, carried to GenerationBatchResult as DFlash does
++    routed_experts_output: object = None
++    indexer_topk_output: object = None
++    kv_weight_version_record: object = None
+ 
+ 
+ def candidate_request_length_bound(
+@@ -349,6 +353,9 @@ class TargetVerifyExecutor:
+         return TargetVerifyResult(
+             logits_output=target_out.logits_output,
+             can_run_cuda_graph=target_out.can_run_cuda_graph,
++            routed_experts_output=target_out.routed_experts_output,
++            indexer_topk_output=target_out.indexer_topk_output,
++            kv_weight_version_record=target_out.kv_weight_version_record,
+         )
+ 
+     def commit_hidden(
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py b/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
+index e40b4afaf1..da433ded14 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
+@@ -981,6 +981,10 @@ class DSparkWorkerV2(BaseSpecWorker):
+             next_draft_input=next_draft_input,
+             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
+             new_seq_lens=accept.new_seq_lens,
++            # [fork fix-053] R3 rows for the decoded tokens, as DFlash passes them
++            routed_experts_output=target_verify.routed_experts_output,
++            indexer_topk_output=target_verify.indexer_topk_output,
++            kv_weight_version_record=target_verify.kv_weight_version_record,
+         )
+ 
+     def _commit_target_mamba_states_after_verify(
