@@ -36,7 +36,10 @@ diff. Fork ids used on any branch (merged or not) and the board's reservations a
 in, so an id taken on an abandoned branch counts as taken. Verify a change to the protocol with `--result <saved answer>`: the saved answer replaces
 the first agent call (a protocol break still triggers the one real retry).
 Upstream sync PRs (merge diffs) are too large for one prompt and stay with a Claude
-reviewer.
+reviewer. A PR that claims a measured improvement gets `--deep`: the agent also checks
+whether the numbers hold (like-for-like baseline, same work, noise, what the timers span)
+and what the change can break (RL correctness, numerics, memory, R3, LoRA sync), reading
+the code passed with `--context` and the logs passed with `--evidence`.
 
 ## Remove when
 

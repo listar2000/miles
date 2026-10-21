@@ -18,7 +18,7 @@
             "enum": [
               "ledger", "lint", "fits-fork", "one-commit", "ledger-shape", "ids", "upstream-edit",
               "extension", "vendored", "patch-page", "evidence", "contract", "comment", "test",
-              "pr-body", "attribution", "claim", "secret"
+              "pr-body", "attribution", "claim", "secret", "measurement", "technical"
             ]
           },
           "title": {"type": "string"},
