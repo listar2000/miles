@@ -30,7 +30,7 @@ def main() -> int:
     if result.returncode:
         raise SystemExit(f"sglang patches: they do not apply to SGLang {pin}:\n{result.stderr}")
     if not check:
-        git(src, "apply", "--intent-to-add", *files).check_returncode()  # new files show in git diff
+        git(src, "apply", *files).check_returncode()
     print(f"sglang patches: {'checked' if check else 'applied'} {', '.join(p.name for p in PATCHES)} on {head[:10]}")
     return 0
 
