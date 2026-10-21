@@ -92,8 +92,8 @@ def _dists() -> dict[str, list[str]]:
 def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
     """Absolute paths of the SGLang files the fork's patches name: (present, deleted).
 
-    Taken from the patches, not ``git diff HEAD``: the base image's checkout has no git index, so git
-    reports every file the patches did not add with ``--intent-to-add`` as deleted.
+    Taken from the patches, not ``git diff HEAD``: in Modal's build of the base image the SGLang checkout has
+    no git index, so git reports every file the patches did not add with ``--intent-to-add`` as deleted.
     """
     patches = sorted(str(p) for p in Path(PATCHES_IN_IMAGE).glob("*.patch"))
     if not patches:
