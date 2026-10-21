@@ -445,6 +445,7 @@ class DeepSeekV41Attention(MegatronModule):
                 owns_k=self.is_kv_source,
                 is_candidate_source=layer_id == config.v41_candidate_source_layer_id,
                 uses_candidates=0 <= config.v41_candidate_source_layer_id < layer_id,
+                split_group=self.tp_group if config.v41_indexer_tp_split else None,  # [fork fix-052]
             )
             # [fork fix-047] top-k of checkpointed forwards awaiting their recompute, oldest first
             self._recompute_topk = deque() if config.v41_reuse_indexer_topk else None
@@ -652,6 +653,11 @@ def get_dsv41_spec(args, config, vp_stage):
         args.dsv4_reuse_indexer_topk and args.use_indexer_replay
     ), "--dsv4-reuse-indexer-topk cannot be combined with indexer replay"
     config.v41_reuse_indexer_topk = args.dsv4_reuse_indexer_topk
+    # [fork fix-052] indexer replay records and replays whole-sequence top-k per rank
+    assert not (
+        args.dsv4_indexer_tp_split and args.use_indexer_replay
+    ), "--dsv4-indexer-tp-split cannot be combined with indexer replay"
+    config.v41_indexer_tp_split = args.dsv4_indexer_tp_split
     _install_patches(config)
 
     _orig_get_spec = _eav_specs.get_experimental_attention_variant_module_spec
