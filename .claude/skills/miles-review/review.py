@@ -27,6 +27,10 @@ every changed file at the head. Do not run commands. REVIEW.md (upstream's revie
 on purpose; .agents/rules is the same as .claude/rules, included when the PR touches miles/. Answer
 with the JSON object the skill describes.
 """
+DEEP = """This is a deep review: do section 5 of the skill as well. The `head:` files include the
+--context files, and `evidence/` holds the logs and results behind the PR's numbers.
+"""
+MAX_EVIDENCE_CHARS = 200_000  # per evidence file; the head and the tail are kept
 CONTEXT_FILES = (
     ".claude/skills/miles-review/SKILL.md",
     "fork/README.md",
@@ -319,14 +323,48 @@ def build_prompt(args, tree, head, base, bundle, files):
     sections += [(str(r.relative_to(tree)), r.read_text()) for r in rules]
     sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())]
     head_files = [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in files if (tree / f).is_file()]
+    if args.deep:
+        # context files and evidence have no stand-in in the diff, so they are never dropped
+        sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in context_files(args, tree, files)]
+        sections += [(f"evidence/{name}", text) for name, text in evidence(args)]
     body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections + head_files)
     if len(body) > MAX_PROMPT_CHARS:  # too big for the agent: the diff in bundle/ has to stand in for full files
         body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
     if len(body) > MAX_PROMPT_CHARS:
         sys.exit(
-            f"the bundle alone is {len(body)} characters, over {MAX_PROMPT_CHARS}; split the PR or review it by hand"
+            f"the bundle{', context and evidence' if args.deep else ''} alone are {len(body)} characters, over "
+            f"{MAX_PROMPT_CHARS}; narrow them, split the PR or review it by hand"
         )
-    return PROMPT.format(pr=args.pr, head=head, base=base) + body
+    return PROMPT.format(pr=args.pr, head=head, base=base) + (DEEP if args.deep else "") + body
+
+
+def context_files(args, tree, files):
+    """The --context paths at the head (globs allowed), minus the changed files already inlined."""
+    found = sorted({str(p.relative_to(tree)) for g in args.context for p in tree.glob(g) if p.is_file()} - set(files))
+    missing = [g for g in args.context if not any(tree.glob(g))]
+    if missing:
+        sys.exit(f"--context matches nothing at the head: {', '.join(missing)}")
+    return found
+
+
+def evidence(args):
+    """(name, text) for each --evidence file, or each text file under an --evidence directory."""
+    if not args.evidence:
+        return []
+    roots = [Path(e).resolve() for e in args.evidence]
+    top = Path(os.path.commonpath([r if r.is_dir() else r.parent for r in roots]))  # names stay distinct
+    out = []
+    for root in roots:
+        paths = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else [root]
+        for p in paths:
+            text = p.read_text(errors="replace")
+            if "\0" in text[:4096]:
+                continue  # binary
+            if len(text) > MAX_EVIDENCE_CHARS:
+                half = MAX_EVIDENCE_CHARS // 2
+                text = f"{text[:half]}\n[... {len(text) - 2 * half} characters cut ...]\n{text[-half:]}"
+            out.append((str(p.relative_to(top)), text))
+    return out
 
 
 def run_agent(args, work, prompt, tag):
@@ -359,7 +397,7 @@ def validate(r, ctx, tree):
         bad.append(f"verdict is '{r['verdict']}' but the findings make it '{VERDICT_FOR[worst]}'")
     for i, f in enumerate(r["findings"], 1):
         loc = f["location"]
-        if loc in ctx["files"]:
+        if loc in ctx["files"] or loc in ctx.get("context", ()):
             path = tree / loc
             if f["line"] > 0 and path.exists() and f["line"] > len(path.read_text(errors="replace").splitlines()):
                 bad.append(f"finding {i}: {loc}:{f['line']} is past the end of the file")
@@ -389,7 +427,8 @@ def render(r, meta, head, base, run_info, violations, proofs, checks):
         f"# PR #{meta['number']} review: {meta['title']}",
         "",
         f"Head `{head[:10]}`, base `{base[:10]}`. Reviewer: {run_info['agent']} `{run_info['model']}` "
-        f"(effort {run_info['effort']}), protocol `{run_info['protocol']}`, {run_info['seconds']} s, "
+        f"(effort {run_info['effort']}{', deep review' if run_info.get('deep') else ''}), "
+        f"protocol `{run_info['protocol']}`, {run_info['seconds']} s, "
         f"{run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out tokens, "
         f"attempt {run_info['attempt']}.",
         "",
@@ -463,6 +502,9 @@ def main():
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--bundle-only", action="store_true", help="run the checks and build the bundle, skip the agent")
     ap.add_argument("--keep", action="store_true", help="keep the checkout after the review")
+    ap.add_argument("--deep", action="store_true", help="also review the change itself (SKILL.md section 5)")
+    ap.add_argument("--context", nargs="+", default=[], help="deep: more repo paths or globs to inline at the head")
+    ap.add_argument("--evidence", nargs="+", default=[], help="deep: local logs or result files behind the claims")
     args = ap.parse_args()
     args.model = args.model or DEFAULT_MODELS[args.agent]
     args.out = args.out.resolve()
@@ -477,6 +519,8 @@ def main():
         print(f"bundle: {bundle}")
         return
 
+    if args.deep:
+        ctx["context"] = context_files(args, tree, ctx["files"])
     prompt = build_prompt(args, tree, head, base, bundle, ctx["files"])
     (work / "prompt.txt").write_text(prompt)
     protocol = (HERE / "SKILL.md").read_text() + SCHEMA.read_text() + PROMPT + Path(__file__).read_text()
@@ -485,6 +529,7 @@ def main():
         "agent": f"{args.agent} {version[-1] if version else '?'}",
         "model": args.model,
         "effort": args.effort,
+        "deep": args.deep,
         "protocol": hashlib.sha256(protocol.encode()).hexdigest()[:12],
     }
     violations = []

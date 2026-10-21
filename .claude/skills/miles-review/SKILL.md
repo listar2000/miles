@@ -39,7 +39,9 @@ The reviewer's job is workflow and best practice: comments, tests, PR hygiene
 and fork conventions. It is never technical depth (whether the algorithm,
 memory math or recipe is right); that belongs to the PR's owner and its
 technical reviewers. A technical doubt noticed in passing goes under Handoffs,
-not into the verdict.
+not into the verdict. The exception is a deep review (`review.py --deep`, asked
+for a PR that claims a measured improvement): it adds section 5, and its
+technical findings count toward the verdict.
 
 ## Setup
 
@@ -205,11 +207,50 @@ green on the head and red on `$BASE` the same way before you report it.
   `gh api -X PATCH repos/listar2000/miles/pulls/N -F body=@<file>`, or the
   GitHub MCP `update_pull_request` tool.
 
+## 5. Technical depth (deep reviews only)
+
+Read the change itself and the evidence behind its claims (`evidence/` files
+and the code the PR touches or calls, given with `--context`). Two questions:
+
+**Does the claimed improvement hold?** Check each number in the Outcome:
+- Like for like: baseline and candidate differ only by this change (same base
+  commit, recipe, hardware, node count, parallelism, seeds), or the PR says
+  what else differs.
+- Same work: the same samples, tokens and sequence lengths in both arms. A
+  speedup from doing less work (fewer tokens, a skipped pass, a smaller batch)
+  is reported as such, not as speed.
+- Noise: repeated runs or a stated spread. A gain within run-to-run variation,
+  or from one warm-up-affected step, is not a result.
+- Timers: the timer spans what the claim names (CUDA work synchronized before
+  the clock stops; overlapped or moved work counted once; first step and
+  compile time treated consistently). A metric's formula matches its name.
+- Scope: a result from a small model, one pipeline stage or one node is not
+  extrapolated to the full run without saying so.
+
+**Is it safe?** Trace what the change alters on every path it can reach:
+- RL correctness: old/new logprobs, importance-sampling ratios and off-policy
+  corrections when a logprob pass is skipped, cached or reused; staleness
+  above 0; several minibatches per rollout; advantage and loss masks.
+- Numerics: dtypes, casts, reductions, determinism, NaN/inf handling.
+- Memory: peak GPU and host memory, pinned buffers and their lifetime.
+- State: routing replay (R3), LoRA adapter and weight sync to the engines,
+  checkpoint save and resume, process restarts.
+- Switches: the change is off by default or behind a flag, and off restores the
+  old behavior exactly; an invalid combination is refused at startup.
+
+Rules `measurement` (a claim the evidence does not support as stated) and
+`technical` (a correctness, numerics, memory or state risk). Evidence quotes the
+code lines or the evidence file; `fix` is the exact code change, or the exact
+command and comparison that would settle it (marked unproven). A finding may
+anchor in a `--context` file the change affects.
+
 ## Severity
 
 - **Blocking**: a broken hard rule (ledger fails, wrong kind or paths, unmarked
   upstream edit, edited vendored file, a secret, lint failing on added lines),
-  or a test that cannot go red.
+  or a test that cannot go red. In a deep review also: a headline claim the
+  evidence does not support, or a correctness risk on a path the PR enables by
+  default or in its recipe.
 - **Should-fix**: a convention or clarity problem the author fixes before merge.
 - **Nit**: optional.
 
@@ -245,8 +286,13 @@ shape and the same checks, whichever agent does it:
 
 ```bash
 python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python \
-    [--agent codex] [--board coord/BOARD.md] [--prior <earlier review.md>] [--out <dir>]
+    [--agent codex] [--board coord/BOARD.md] [--prior <earlier review.md>] [--out <dir>] \
+    [--deep --context <repo path>... --evidence <file or dir>...]
 ```
+
+`--deep` adds section 5. `--context` inlines more files at the head (the code
+the change calls or feeds, such as the loss or the weight sync); `--evidence`
+inlines the logs and result files behind the PR's numbers, as `evidence/<name>`.
 
 It needs `gh`, `uv`, the agent's CLI logged in, a Python with pytest, aiohttp,
 modal and pyyaml, and a full (not partial or shallow) clone.
@@ -290,15 +336,16 @@ proposes goes in `fix` marked unproven; the PR's owner proves it. Upstream's
 
 - one finding per problem; a problem repeated across files is one finding
   anchored at the first location, listing the others in `evidence`;
-- `location` is a path from `files.txt`, `PR body` or `commit <sha8>`; `line`
-  is 1-based at the head, 0 for a whole file, the body or a commit;
+- `location` is a path from `files.txt` (or a `--context` file in a deep
+  review), `PR body` or `commit <sha8>`; `line` is 1-based at the head, 0 for
+  a whole file, the body or a commit;
 - `evidence` quotes the text, or the bundle file and lines it comes from;
   `fix` is the exact replacement text or a diff, never advice;
 - `rule` names the broken rule, `severity` follows Severity, and `verdict`
   follows from them (any blocking: blocked; any should-fix: ready after the
   should-fixes; else ready);
 - `summary` is at most three sentences a non-specialist can read; technical
-  doubts go in `handoffs`.
+  doubts go in `handoffs`, except in a deep review, where they are findings.
 
 **The supervisor rejects** an answer whose verdict does not follow from its
 severities; a finding off the changed files, the body or a commit, past the end
