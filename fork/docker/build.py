@@ -11,7 +11,8 @@ The image is ``BASE_IMAGE`` (amd64) with every upstream layer untouched, then:
         Python. Modal runs ``uv pip install`` in a container of the base image;
         the layer is exactly the files of the distributions that install added
         or replaced (their RECORD files), plus whiteouts for the files of the
-        versions it removed. Nothing else in the environment can differ.
+        versions it removed, plus the SGLang files the fork's patches
+        (fork/deps/sglang/) changed. Nothing else in the environment can differ.
   src   the fork commit's tree (``git archive``) over /root/miles, the base
         image's own checkout of the upstream tag, plus whiteouts for files the
         fork commit deletes relative to that tag.
@@ -57,10 +58,15 @@ if modal.is_local():
     LATEST_TAG, STABLE_RE = stack.LATEST_TAG, stack.STABLE_RE
 else:
     BASE_IMAGE = DEPS_INSTALL = LATEST_TAG = STABLE_RE = "unused-in-container"
+SGLANG_PATCHES = "fork/deps/sglang"
 
 app = modal.App("miles-fork-build")
 base_image = modal.Image.from_registry(BASE_IMAGE).entrypoint([])
 deps_image = base_image.run_commands(DEPS_INSTALL)
+if modal.is_local():  # SGLang patches go in the deps layer (fork/README.md "SGLang patches")
+    deps_image = deps_image.add_local_dir(ROOT / SGLANG_PATCHES, "/tmp/sglang-patches", copy=True).run_commands(
+        f"python /tmp/sglang-patches/apply.py {stack.SGLANG_SRC} {stack.SGLANG_COMMIT}"
+    )
 volume = modal.Volume.from_name(BUILD_VOLUME, create_if_missing=True)
 
 
@@ -82,19 +88,30 @@ def _dists() -> dict[str, list[str]]:
     return out
 
 
+def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
+    """Absolute paths of the SGLang files the fork's patches changed in this container: (present, deleted)."""
+    out = subprocess.run(
+        ["git", "-C", src, "diff", "HEAD", "--name-status", "--no-renames"], check=True, capture_output=True, text=True
+    ).stdout
+    changed = [line.split("\t", 1) for line in out.splitlines()]
+    present = [os.path.join(src, path) for status, path in changed if status != "D"]
+    return present, [os.path.join(src, path) for status, path in changed if status == "D"]
+
+
 @app.function(image=base_image, cpu=2, memory=4096, timeout=1200)
 def base_dists() -> dict[str, list[str]]:
     return _dists()
 
 
 @app.function(image=deps_image, cpu=4, memory=8192, timeout=1800, volumes={"/out": volume})
-def deps_layer(base: dict[str, list[str]], name: str) -> dict:
+def deps_layer(base: dict[str, list[str]], name: str, sglang_src: str) -> dict:
     after = _dists()
     added = sorted(set(after) - set(base))
     removed = sorted(set(base) - set(after))
-    files = sorted({p for d in added for p in after[d] if os.path.lexists(p)})
+    patched, deleted = _patched_sglang(sglang_src)
+    files = sorted({p for d in added for p in after[d] if os.path.lexists(p)} | set(patched))
     keep = set(files)
-    gone = sorted({p for d in removed for p in base[d]} - keep)
+    gone = sorted(({p for d in removed for p in base[d]} | set(deleted)) - keep)
     with tarfile.open(f"/out/{name}", "w:gz") as tar:
         dirs = set()
         for path in files:
@@ -136,7 +153,7 @@ def src_layer(commit: str, path: Path):
 
 def build_deps_layer(name: str, dest: Path):
     with modal.enable_output(), app.run():
-        summary = deps_layer.remote(base_dists.remote(), name)
+        summary = deps_layer.remote(base_dists.remote(), name, stack.SGLANG_SRC)
     print(f"deps layer: +{summary['added']} -{summary['removed']} "
           f"({summary['files']} files, {summary['whiteouts']} whiteouts)", flush=True)
     with dest.open("wb") as f:
@@ -180,6 +197,11 @@ def main():
     if args.mark_stable:
         return mark_stable(args, repo, user, token)
     commit = git("rev-parse", args.commit)
+    if git("diff", commit, "--", SGLANG_PATCHES) or git("ls-files", "--others", "--", SGLANG_PATCHES):
+        raise SystemExit(
+            f"{SGLANG_PATCHES} differs from {commit[:10]}: the image ships the working tree's patches, "
+            "so build from a clean checkout of the commit"
+        )
     if not git("branch", "-r", "--contains", commit):
         raise SystemExit(f"{commit[:10]} is not on any remote branch; push it first")
     if args.main:
@@ -214,7 +236,11 @@ def main():
         print(f"release {args.release}: commit {commit[:10]} on {base_amd64}", flush=True)
 
         deps_name = f"deps-{args.release}-{commit[:10]}.tar.gz"
-        pins = hashlib.sha256((BASE_IMAGE + DEPS_INSTALL).encode()).hexdigest()[:12]
+        patches = sorted((ROOT / SGLANG_PATCHES).glob("*.patch"))
+        sglang_inputs = [ROOT / SGLANG_PATCHES / "apply.py", *patches]
+        inputs = [BASE_IMAGE, DEPS_INSTALL, stack.SGLANG_SRC, stack.SGLANG_COMMIT]
+        inputs += [p.read_bytes().hex() for p in sglang_inputs]
+        pins = hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:12]
         deps_tar = work / f"deps-{pins}.tar.gz"
         if deps_tar.exists():  # --workdir from an earlier attempt with the same base and pins
             print("deps layer: reusing", deps_tar)
@@ -238,6 +264,7 @@ def main():
             "miles.mobius.harbor": f"{stack.HARBOR_REPO}@{stack.HARBOR_COMMIT}",
             "miles.mobius.mini-swe-agent": stack.MINI_SWE_AGENT_VERSION,
             "miles.mobius.sail": stack.SAIL_SDK_VERSION,
+            "miles.mobius.sglang-patches": ",".join(p.stem for p in patches) or "none",
         }
         # MILES_FORK_*: the names images before 2026-10-15 carried, for readers of that age
         envs = {"PYTHONPATH": str(stack.MILES_SRC), "MILES_MOBIUS_VERSION": version, "MILES_MOBIUS_COMMIT": commit,

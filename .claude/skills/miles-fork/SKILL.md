@@ -44,6 +44,7 @@ even one whose PR closed.
 | --- | --- | --- | --- |
 | fix a bug in upstream code | Fix | in place, in the upstream file | `Fork-Fix: fix-NNN` |
 | add an extension point upstream lacks | Hook | in place, smallest possible edit | `Fork-Hook: hook-NNN` |
+| fix a bug in SGLang, or add a hook there | Fix or Hook | `fork/deps/sglang/<id>-<slug>.patch` (below) | `Fork-Fix: fix-NNN` / `Fork-Hook: hook-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
 | change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
@@ -74,6 +75,29 @@ separate Hook commit; never edit upstream code from an Ext commit.
    the PR why it is not a candidate. Every fix upstream accepts is one the next
    sync drops.
 
+## Fix or Hook in SGLang
+
+Rules and reasons: `fork/README.md` "SGLang patches". Only a bug fix or a
+small hook that copies a pattern SGLang already has; never a runtime patch
+from `miles_ext`.
+
+```bash
+SGL=$(python -c 'from miles_ext import stack; print(stack.SGLANG_COMMIT)')
+git clone --filter=blob:none https://github.com/sgl-project/sglang /tmp/sglang && git -C /tmp/sglang checkout $SGL
+# edit /tmp/sglang, with a `[fork fix-NNN]` comment on an added line in every file you touch
+git -C /tmp/sglang diff > fork/deps/sglang/fix-NNN-<slug>.patch && git -C /tmp/sglang checkout -- .
+python fork/deps/sglang/apply.py /tmp/sglang $SGL --check
+git -C /tmp/sglang checkout origin/main && git -C /tmp/sglang apply --check "$PWD"/fork/deps/sglang/fix-NNN-<slug>.patch
+git add fork/deps/sglang/fix-NNN-<slug>.patch
+git commit   # trailers as below, with Touches: sglang:python/sglang/<path>, ...
+```
+
+`Upstream-Status:` records the last command: the SGLang PR, or `not filed;
+also on sgl-project/sglang main <sha9>`. Add the patch page (always required)
+in its own commit, then run the launcher's `--check-only` from the pushed
+commit: its output lists the patch's marker in the installed SGLang. The
+evidence is a GPU run on the patched image beside the same run without it.
+
 ## Ext: new code in miles_ext/
 
 - New files only, plugged in through Miles' flags
@@ -101,8 +125,9 @@ When the code you need exists upstream only at a newer version:
 5. Write a patch page (always required for vendored files).
 
 If what you need is an edit inside an installed dependency rather than a whole
-file, stop and read `fork/README.md` "Harbor": that is the trigger for a
-dependency fork, not a patch in this repo.
+file: for SGLang, see "Fix or Hook in SGLang" above; for anything else, stop
+and read `fork/README.md` "Harbor": that is the trigger for a dependency fork,
+not a patch in this repo.
 
 ## Patch pages
 
@@ -234,6 +259,7 @@ Only after the platform's owner reports that a `latest` build passed staging
 
 - Don't edit upstream files from Infra or Ext commits, even "just one line".
 - Don't edit a vendored file; subclass it.
+- Don't patch SGLang at runtime (monkeypatching, appliers) from `miles_ext`; carry a patch file.
 - Don't rebase `main` onto upstream; merge the tag. Don't force-push `main` or move a tag.
 - Don't add `miles_ext` to upstream's `setup.py`; the image puts
   `/root/miles` on `PYTHONPATH`.

@@ -9,7 +9,8 @@ so the history is the record and nothing has to be kept in sync by hand.
     python fork/tools/ledger.py list              # table of fork commits since the upstream base
     python fork/tools/ledger.py check             # touch-point audit (exit 1 on any violation)
     python fork/tools/ledger.py markdown          # the table for fork/README.md
-    python fork/tools/ledger.py markers           # file-only check (no git history; used in the image)
+    python fork/tools/ledger.py markers           # file-only check (no git history; used in the image,
+                                                  # where it also finds each SGLang patch's markers in SGLang)
 
 ``check`` enforces the layout rules:
   1. outside the fork's own paths (OWN_PATHS) the only files
@@ -19,7 +20,11 @@ so the history is the record and nothing has to be kept in sync by hand.
      only upstream files, infra and extensions only the fork's own paths;
   4. every file in fork/vendored.json (third-party code copied verbatim) still
      has the git blob of its upstream source (also checked by ``markers``);
-  5. ids follow their kind (``ID_FORMATS``): ``fix-NNN``, ``hook-NNN``, ``ext-NNN``,
+  5. an SGLang fix or hook is one patch, ``fork/deps/sglang/<id>-<slug>.patch``,
+     added or changed only by its own commit, which lists every file the patch
+     edits as ``Touches: sglang:<path>``; each of those files gets a line with its
+     ``[fork <id>]`` marker. Otherwise only a ``sync-`` commit changes or deletes a patch;
+  6. ids follow their kind (``ID_FORMATS``): ``fix-NNN``, ``hook-NNN``, ``ext-NNN``,
      and a kebab-case name for infra (``infra-NNN``, ``release-<tag>-rN``, or a
      short name such as ``repo-refs``). One id names one change; a change may span
      several commits (an extension grows release by release), and a fix or hook
@@ -55,6 +60,8 @@ OWN_PATHS = (
 KINDS = ("Fix", "Hook", "Infra", "Ext")
 UPSTREAM_KINDS = ("Fix", "Hook")  # the only kinds allowed to edit upstream files
 MARKER = re.compile(r"\[fork ((?:fix|hook)-\d{3})\]")
+SGLANG_PATCHES = "fork/deps/sglang/"
+SGLANG = "sglang:"  # Touches: prefix for a file of the SGLang checkout (stack.SGLANG_SRC)
 ID_FORMATS = {"Fix": r"fix-\d{3}", "Hook": r"hook-\d{3}", "Ext": r"ext-\d{3}", "Infra": r"[a-z0-9]+(?:[.-][a-z0-9]+)*"}
 
 
@@ -90,6 +97,25 @@ def require_full_history():
 
 def own(path: str) -> bool:
     return path.startswith(OWN_PATHS)
+
+
+def sglang_patch_id(path: str) -> str | None:
+    """The fork id of an SGLang patch file (``fork/deps/sglang/fix-001-x.patch`` -> ``fix-001``)."""
+    m = re.fullmatch(re.escape(SGLANG_PATCHES) + r"((?:fix|hook)-\d{3})-[a-z0-9-]+\.patch", path)
+    return m.group(1) if m else None
+
+
+def patch_files(text: str, fork_id: str) -> dict[str, bool]:
+    """{file a unified diff edits: whether its added lines carry the ``[fork <fork_id>]`` marker}."""
+    out: dict[str, bool] = {}
+    current = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[1]
+            out[current] = False
+        elif current and line.startswith("+") and not line.startswith("+++") and fork_id in MARKER.findall(line):
+            out[current] = True
+    return out
 
 
 @dataclass
@@ -173,6 +199,7 @@ def cmd_check(base: str) -> int:
     problems = vendored_problems()
     series = commits(base)
     declared: dict[str, set[str]] = {}
+    sglang: dict[str, set[str]] = {}  # fork id -> the SGLang files its commit declares
     for c in series:
         if c.kind is None:
             problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
@@ -187,17 +214,32 @@ def cmd_check(base: str) -> int:
                 if key not in c.trailers:
                     problems.append(f"{c.sha} {c.fork_id}: missing {key} trailer")
             for f in c.files:
+                if sglang_patch_id(f) == c.fork_id:
+                    continue
                 if own(f):
                     problems.append(f"{c.sha} {c.fork_id}: a {c.kind.lower()} must not touch fork paths ({f})")
                 elif f not in touches:
                     problems.append(f"{c.sha} {c.fork_id}: edits {f} but Touches: does not list it")
-            for f in touches:
+            sglang_touches = {t.removeprefix(SGLANG) for t in touches if t.startswith(SGLANG)}
+            if sglang_touches:
+                sglang[c.fork_id] = sglang_touches
+                if len(c.files) != 1 or sglang_patch_id(c.files[0]) != c.fork_id:
+                    problems.append(
+                        f"{c.sha} {c.fork_id}: an SGLang fix or hook commit touches exactly one file, "
+                        f"{SGLANG_PATCHES}{c.fork_id}-<slug>.patch"
+                    )
+            for f in touches - {SGLANG + t for t in sglang_touches}:
                 declared.setdefault(f, set()).add(c.fork_id)
         else:
             for f in c.files:
                 if not own(f):
                     problems.append(f"{c.sha} {c.fork_id}: {c.kind.lower()} commits may only touch "
                                     f"{', '.join(OWN_PATHS)} ({f})")
+                elif f.startswith(SGLANG_PATCHES) and f.endswith(".patch") and not c.fork_id.startswith("sync-"):
+                    problems.append(
+                        f"{c.sha} {c.fork_id}: only its own fix or hook commit or a sync- commit "
+                        f"changes an SGLang patch ({f})"
+                    )
     changed = [f for f in git("diff", "--name-only", base, "HEAD").split() if not own(f)]
     for f in changed:
         if f not in declared:
@@ -208,9 +250,31 @@ def cmd_check(base: str) -> int:
         missing = ids - markers_in(ROOT / f)
         if missing:
             problems.append(f"{f}: no [fork <id>] marker for {sorted(missing)}")
+    patches: dict[str, Path] = {}
+    for path in sorted((ROOT / SGLANG_PATCHES).glob("*.patch")):
+        rel, fid = path.relative_to(ROOT), sglang_patch_id(str(path.relative_to(ROOT)))
+        if fid in patches:
+            problems.append(f"{rel}: a second patch for {fid} ({patches[fid].name})")
+            continue
+        if fid not in sglang:
+            problems.append(
+                f"{rel}: not named <fix|hook>-NNN-<slug>.patch, or no commit of that id declares "
+                "its files (Touches: sglang:<path>)"
+            )
+            continue
+        patches[fid] = path
+        edited = patch_files(path.read_text(), fid)
+        if set(edited) != sglang[fid]:
+            problems.append(f"{rel}: edits {sorted(edited)} but {fid} declares {sorted(sglang[fid])}")
+        unmarked = sorted(f for f, marked in edited.items() if not marked)
+        if unmarked:
+            problems.append(f"{rel}: no added [fork {fid}] line in {unmarked}")
     counts = ", ".join(f"{sum(c.kind == k for c in series)} {k.lower()}" for k in KINDS)
-    print(f"base {base}: {len(series)} fork commits ({counts}), "
-          f"{len(declared)} upstream files touched: {', '.join(sorted(declared)) or 'none'}")
+    print(
+        f"base {base}: {len(series)} fork commits ({counts}), "
+        f"{len(declared)} upstream files touched: {', '.join(sorted(declared)) or 'none'}; "
+        f"SGLang patches: {', '.join(sorted(patches)) or 'none'}"
+    )
     for p in problems:
         print("  FAIL", p)
     print("ledger check:", "ok" if not problems else f"{len(problems)} problem(s)")
@@ -227,10 +291,27 @@ def cmd_markers() -> int:
     if not found:
         print("no fork markers found: is this the fork's source tree?")
         return 1
-    problems = vendored_problems()
+    problems = vendored_problems() + sglang_marker_problems()
     for p in problems:
         print("  FAIL", p)
     return 1 if problems else 0
+
+
+def sglang_marker_problems() -> list[str]:
+    """In an image: every SGLang patch's marker is in each SGLang file it edits."""
+    src = Path(_stack_value("SGLANG_SRC"))
+    patches = sorted((ROOT / SGLANG_PATCHES).glob("*.patch"))
+    if patches and not src.is_dir():
+        return [f"{src}: missing, so {len(patches)} SGLang patch(es) cannot be checked; run this in the image"]
+    problems = []
+    for path in patches:
+        fid = sglang_patch_id(str(path.relative_to(ROOT)))
+        for f in patch_files(path.read_text(), fid):
+            if fid in markers_in(src / f):
+                print(f"{fid}: {src / f}")
+            else:
+                problems.append(f"{src / f}: no [fork {fid}] marker; {path.name} is not applied in this image")
+    return problems
 
 
 def main():

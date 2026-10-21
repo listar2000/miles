@@ -22,6 +22,10 @@ UPSTREAM_LABEL = UPSTREAM_TAG if UPSTREAM_BASE == UPSTREAM_TAG else f"{UPSTREAM_
 # Megatron-LM miles-main 9df207f (read from the image's .git refs): the v0.1.2
 # Dockerfile and pins, plus 9 SGLang and 1 Megatron commits
 BASE_IMAGE = "radixark/miles:dev@sha256:c64fa344e3a86715f03c0a1b6a422c474e0035355591a2f6da87bf52a74c52da"
+# The SGLang checkout BASE_IMAGE ships (sglang-miles, installed editable). The fork's SGLang
+# patches (fork/deps/sglang/) are pinned to this commit: a sync that moves it re-checks them.
+SGLANG_SRC = "/sgl-workspace/sglang"
+SGLANG_COMMIT = "7b6993a"
 
 # Harbor: the branch Miles documents for v0.1.2 (harbor-miles-v0.20.0), pinned
 # by commit. Runtime changes we need go through Harbor's import_path (agents,
