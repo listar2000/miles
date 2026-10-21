@@ -59,13 +59,14 @@ if modal.is_local():
 else:
     BASE_IMAGE = DEPS_INSTALL = LATEST_TAG = STABLE_RE = "unused-in-container"
 SGLANG_PATCHES = "fork/deps/sglang"
+PATCHES_IN_IMAGE = "/tmp/sglang-patches"
 
 app = modal.App("miles-fork-build")
 base_image = modal.Image.from_registry(BASE_IMAGE).entrypoint([])
 deps_image = base_image.run_commands(DEPS_INSTALL)
 if modal.is_local():  # SGLang patches go in the deps layer (fork/README.md "SGLang patches")
-    deps_image = deps_image.add_local_dir(ROOT / SGLANG_PATCHES, "/tmp/sglang-patches", copy=True).run_commands(
-        f"python /tmp/sglang-patches/apply.py {stack.SGLANG_SRC} {stack.SGLANG_COMMIT}"
+    deps_image = deps_image.add_local_dir(ROOT / SGLANG_PATCHES, PATCHES_IN_IMAGE, copy=True).run_commands(
+        f"python {PATCHES_IN_IMAGE}/apply.py {stack.SGLANG_SRC} {stack.SGLANG_COMMIT}"
     )
 volume = modal.Volume.from_name(BUILD_VOLUME, create_if_missing=True)
 
@@ -89,13 +90,20 @@ def _dists() -> dict[str, list[str]]:
 
 
 def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
-    """Absolute paths of the SGLang files the fork's patches changed in this container: (present, deleted)."""
+    """Absolute paths of the SGLang files the fork's patches name: (present, deleted).
+
+    Taken from the patches, not ``git diff HEAD``: the base image's checkout has no git index, so git
+    reports every file the patches did not add with ``--intent-to-add`` as deleted.
+    """
+    patches = sorted(str(p) for p in Path(PATCHES_IN_IMAGE).glob("*.patch"))
+    if not patches:
+        return [], []
     out = subprocess.run(
-        ["git", "-C", src, "diff", "HEAD", "--name-status", "--no-renames"], check=True, capture_output=True, text=True
-    ).stdout
-    changed = [line.split("\t", 1) for line in out.splitlines()]
-    present = [os.path.join(src, path) for status, path in changed if status != "D"]
-    return present, [os.path.join(src, path) for status, path in changed if status == "D"]
+        ["git", "-C", src, "apply", "--numstat", "--summary", *patches], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    named = [line.split("\t")[2] for line in out if line.count("\t") == 2]
+    deleted = {line.split()[-1] for line in out if line.startswith(" delete mode ")}
+    return [os.path.join(src, p) for p in named if p not in deleted], [os.path.join(src, p) for p in sorted(deleted)]
 
 
 @app.function(image=base_image, cpu=2, memory=4096, timeout=1200)
