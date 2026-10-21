@@ -71,7 +71,8 @@ separate Hook commit; never edit upstream code from an Ext commit.
 
 4. There is no ordering rule (merges have no replay order): the commit lands
    on `main` like any other. Never reorder or rewrite `main`.
-5. File it upstream when you can: every fix upstream accepts is one the next
+5. Add its row to `fork/UPSTREAM.md` (the upstream candidate list), or say in
+   the PR why it is not a candidate. Every fix upstream accepts is one the next
    sync drops.
 
 ## Fix or Hook in SGLang
@@ -209,7 +210,8 @@ there, and only one a published upstream image was built from
 Don't run `sync.py` without `--dry-run`: it still does the old rebase onto a
 `fork/<tag>` branch. On a conflict (only in files fixes and hooks touch), read
 the commit message and its patch page. If upstream fixed it, take upstream's
-side and mark the page's status as removed. Otherwise re-apply the same intent
+side, mark the page's status as removed and move its `fork/UPSTREAM.md` row to
+"Fixed upstream". Otherwise re-apply the same intent
 and keep the markers. Then refresh `HARBOR_COMMIT`, recheck vendored files
 against the new upstream (drop any that upstream now ships), land, build and
 validate as in `fork/README.md` "Sync".
