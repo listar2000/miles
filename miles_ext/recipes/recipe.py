@@ -155,10 +155,10 @@ DEFAULTS: dict[str, Any] = {
     # target_modules uses Miles' selector syntax; None selects attention and MLP groups.
     "lora": {"rank": 0, "alpha": 32, "target_modules": None},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
-    # for max_concurrent_samples; retry_aborted_tries: fix-048, checkpoint_buffer: hook-008 (fork/patches/)
+    # for max_concurrent_samples; retry_aborted_tries: fix-048, checkpoint_buffer: hook-008, in_flight: ext-035
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
               "pause_generation": "in_place", "single_pass": False, "retry_aborted_tries": 1,
-              "checkpoint_buffer": "log"},
+              "checkpoint_buffer": "log", "in_flight": "fixed"},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
@@ -221,6 +221,7 @@ ADVANTAGE_ESTIMATORS = ("grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_p
 UNUSED_SAMPLES = ("drop", "retry")
 CHECKPOINT_BUFFERS = ("log", "prompts", "groups")
 GROUP_LOG_BUFFER = "miles_ext.rollout.group_log.GroupLogDataBuffer"
+AUTO_IN_FLIGHT = "miles_ext.rollout.in_flight.AutoInFlight"
 PAUSE_GENERATION = ("in_place", "retract")
 GROUP_FILTERS = {
     "no_aborted": "miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted",
@@ -300,6 +301,7 @@ FIELD_RULES: dict[str, dict] = {
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
     "async.retry_aborted_tries": {"type": "int", "min": 0},
     "async.checkpoint_buffer": {"type": "str", "enum": CHECKPOINT_BUFFERS},
+    "async.in_flight": {"type": "str", "enum": ("fixed", "auto")},
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
@@ -717,6 +719,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --async-checkpoint-buffer {aio["checkpoint_buffer"]}
         {f"--custom-async-data-buffer-path {GROUP_LOG_BUFFER}" if aio["checkpoint_buffer"] == "log" else ""}
         --async-retry-aborted-tries {aio["retry_aborted_tries"]}
+        {f"--async-in-flight-controller-path {AUTO_IN_FLIGHT}" if aio["in_flight"] == "auto" else ""}
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         {"--async-single-pass" if aio["single_pass"] else ""}
         """
