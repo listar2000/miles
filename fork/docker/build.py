@@ -59,13 +59,14 @@ if modal.is_local():
 else:
     BASE_IMAGE = DEPS_INSTALL = LATEST_TAG = STABLE_RE = "unused-in-container"
 SGLANG_PATCHES = "fork/deps/sglang"
+PATCHES_IN_IMAGE = "/tmp/sglang-patches"
 
 app = modal.App("miles-fork-build")
 base_image = modal.Image.from_registry(BASE_IMAGE).entrypoint([])
 deps_image = base_image.run_commands(DEPS_INSTALL)
 if modal.is_local():  # SGLang patches go in the deps layer (fork/README.md "SGLang patches")
-    deps_image = deps_image.add_local_dir(ROOT / SGLANG_PATCHES, "/tmp/sglang-patches", copy=True).run_commands(
-        f"python /tmp/sglang-patches/apply.py {stack.SGLANG_SRC} {stack.SGLANG_COMMIT}"
+    deps_image = deps_image.add_local_dir(ROOT / SGLANG_PATCHES, PATCHES_IN_IMAGE, copy=True).run_commands(
+        f"python {PATCHES_IN_IMAGE}/apply.py {stack.SGLANG_SRC} {stack.SGLANG_COMMIT}"
     )
 volume = modal.Volume.from_name(BUILD_VOLUME, create_if_missing=True)
 
@@ -89,13 +90,21 @@ def _dists() -> dict[str, list[str]]:
 
 
 def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
-    """Absolute paths of the SGLang files the fork's patches changed in this container: (present, deleted)."""
-    out = subprocess.run(
-        ["git", "-C", src, "diff", "HEAD", "--name-status", "--no-renames"], check=True, capture_output=True, text=True
-    ).stdout
-    changed = [line.split("\t", 1) for line in out.splitlines()]
-    present = [os.path.join(src, path) for status, path in changed if status != "D"]
-    return present, [os.path.join(src, path) for status, path in changed if status == "D"]
+    """Absolute (present, deleted) paths of the SGLang files the fork's patches change."""
+    patches = sorted(str(p.resolve()) for p in Path(PATCHES_IN_IMAGE).glob("*.patch"))
+    if not patches:
+        return [], []
+    with tempfile.TemporaryDirectory() as tmp:  # a scratch index: the checkout's own index plays no part
+        env = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, "index")}
+        for args in (["read-tree", "HEAD"], ["apply", "--cached", *patches]):
+            subprocess.run(["git", "-C", src, *args], env=env, check=True, capture_output=True)
+        out = subprocess.run(["git", "-C", src, "diff", "--cached", "HEAD", "--name-status", "--no-renames", "-z"],
+                             env=env, check=True, capture_output=True).stdout
+    fields = out.split(b"\0")[:-1]
+    present, deleted = [], []
+    for status, path in zip(fields[::2], fields[1::2], strict=True):
+        (deleted if status == b"D" else present).append(os.path.join(src, os.fsdecode(path)))
+    return present, deleted
 
 
 @app.function(image=base_image, cpu=2, memory=4096, timeout=1200)
@@ -112,6 +121,9 @@ def deps_layer(base: dict[str, list[str]], name: str, sglang_src: str) -> dict:
     files = sorted({p for d in added for p in after[d] if os.path.lexists(p)} | set(patched))
     keep = set(files)
     gone = sorted(({p for d in removed for p in base[d]} | set(deleted)) - keep)
+    root = sglang_src.rstrip("/") + "/"
+    if stray := [p for p in gone if p.startswith(root) and p not in set(deleted)]:
+        raise SystemExit(f"deps layer would delete {len(stray)} SGLang files no patch deletes, e.g. {stray[:3]}")
     with tarfile.open(f"/out/{name}", "w:gz") as tar:
         dirs = set()
         for path in files:
@@ -160,6 +172,19 @@ def build_deps_layer(name: str, dest: Path):
         for chunk in volume.read_file(name):
             f.write(chunk)
     volume.remove_file(name)
+
+
+def check_image(ref: str) -> None:
+    """Fail unless the pushed image imports SGLang and has every fork marker (before :main moves to it)."""
+    cmd = f"python -c 'import sglang' && cd {stack.MILES_SRC} && python fork/tools/ledger.py markers"
+    with modal.enable_output(), app.run():
+        sb = modal.Sandbox.create("bash", "-c", cmd, image=modal.Image.from_registry(ref), app=app,
+                                  cpu=2, memory=4096, timeout=1800)
+        sb.wait()
+        out = (sb.stdout.read() + sb.stderr.read())[-2000:]
+    if sb.returncode:
+        raise SystemExit(f"{ref}: image check failed, {LATEST_TAG} not moved:\n{out}")
+    print(f"image check: import sglang and ledger.py markers ok on {ref}", flush=True)
 
 
 def crane_binary(workdir: Path) -> Path:
@@ -237,7 +262,7 @@ def main():
 
         deps_name = f"deps-{args.release}-{commit[:10]}.tar.gz"
         patches = sorted((ROOT / SGLANG_PATCHES).glob("*.patch"))
-        sglang_inputs = [ROOT / SGLANG_PATCHES / "apply.py", *patches]
+        sglang_inputs = [Path(__file__).resolve(), ROOT / SGLANG_PATCHES / "apply.py", *patches]
         inputs = [BASE_IMAGE, DEPS_INSTALL, stack.SGLANG_SRC, stack.SGLANG_COMMIT]
         inputs += [p.read_bytes().hex() for p in sglang_inputs]
         pins = hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:12]
@@ -277,6 +302,7 @@ def main():
         pushed = run_crane(*mutate)
         digest = run_crane("digest", target)
         if args.main:  # latest: what a run with trainer "latest" resolves to (miles_ext/platform/versions.py)
+            check_image(f"{target}@{digest}")
             run_crane("tag", f"{target}@{digest}", LATEST_TAG)
     print(f"pushed {pushed} in {(time.monotonic() - t0) / 60:.1f} min\n"
           f'FORK_IMAGE = "{target}@{digest}"')

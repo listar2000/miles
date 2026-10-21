@@ -37,6 +37,18 @@ patch's marker in the installed SGLang. `ledger.py check` enforces names, `sglan
 touches and markers. Rules for authors and reviewers: `fork/README.md` "SGLang
 patches", the miles-fork and miles-review skills. With no patch, builds are unchanged.
 
+The deps layer carries exactly the files the patches change, read from a scratch git index
+(`read-tree HEAD`, `apply --cached`, `diff --cached --no-renames -z`), so the checkout's own
+index plays no part, a rename's source becomes a whiteout and paths keep their spaces. A
+whiteout under the SGLang checkout that no patch deletes fails the build. `build.py --main`
+moves `:main` only after a sandbox on the pushed image runs `import sglang` and
+`ledger.py markers`. The deps-layer cache key includes `build.py` itself.
+
+The first `--main` build with a patch (2026-10-21, `7d37cde5c6`) shipped no SGLang: `apply.py`
+ran `git apply --intent-to-add` without `--index`, which replaced the checkout's index with one
+holding only the patched paths, and the layer then took `git diff HEAD` (9,950 files "deleted")
+as whiteouts. `apply.py` now runs a plain `git apply`.
+
 ## Remove when
 
 Never as a mechanism; replaced by a `listar2000/sglang` branch if the patches outgrow
