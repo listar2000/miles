@@ -11,8 +11,9 @@ release's FP4 experts the wrap fails at engine start: `'Mxfp4FlashinferTrtllmMoE
 ## Decision
 - Backport the gate from sgl-project/sglang#39798 (on SGLang main since 2026-10-13 and on `sglang-miles`
   `3a938213c1`): skip a module when the model defines `should_apply_lora` and it returns false. 4 lines, the
-  same code and place as upstream; the rest of #39798 (NemotronH VL support, the `meta_mlp` check move) is not
-  needed.
+  same code and place as upstream. The rest of #39798 (NemotronH VL support) is left out, and so is its move of
+  the Intern-S2-Mobius `model.meta_mlp` ValueError above the gate: with the gate alone, that model's
+  `should_apply_lora` skips its routed banks silently instead of raising. We do not serve Intern-S2-Mobius.
 - Models without `should_apply_lora` are unchanged.
 
 ## How it is applied
