@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-054 | Fix | `--max-token-weighted-staleness`: fully async groups must also pass a bound on the mean weight-version lag of their tokens, beside the oldest-token `--max-weight-staleness`, so long trajectories made mostly on recent weights are kept | active; remove when upstream bounds staleness per token | [fix-054-token-weighted-staleness.md](fix-054-token-weighted-staleness.md) |
 | fix-053 | Fix (SGLang) | DSpark speculative decoding passes the verify pass's R3 routing, indexer top-k and weight-version record to the batch result, as DFlash does; without it overlap scheduling loses decoded-token routing | active; remove when SGLang's DSpark passes them through | [fix-053-dspark-r3.md](fix-053-dspark-r3.md) |
 | sglang-patches | Infra | SGLang bug fixes and small hooks carried as `fork/deps/sglang/<id>-<slug>.patch`, applied with no fuzz at image build against the pinned SGLang commit; the build fails when one does not apply | active | [sglang-patches.md](sglang-patches.md) |
 | fix-051 | Fix | R3 routing crosses the samples wire as int16 when the ids fit and is decoded back to int32: half of each 165-200 MB collect reply | active; remove when upstream narrows routed experts on the wire | [fix-051-r3-wire-int16.md](fix-051-r3-wire-int16.md) |
