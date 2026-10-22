@@ -696,6 +696,7 @@ def _fully_async_candidate_args(**overrides) -> SimpleNamespace:
         colocate=False,
         partial_rollout=False,
         mask_offpolicy_in_partial_rollout=False,
+        max_token_weighted_staleness=None,  # [fork fix-054]
         pause_generation_mode="retract",
         recompute_logprobs_via_prefill=False,
         rollout_all_samples_process_path=None,
@@ -705,6 +706,14 @@ def _fully_async_candidate_args(**overrides) -> SimpleNamespace:
         ft_components=[],
     )
     return SimpleNamespace(**(defaults | overrides))
+
+
+# [fork fix-054]
+@pytest.mark.parametrize("limit", [float("nan"), -1.0])
+def test_an_invalid_token_weighted_staleness_bound_is_rejected(limit):
+    args = _fully_async_candidate_args(fully_async=True, max_token_weighted_staleness=limit)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        _resolve_rollout_functions(args)
 
 
 def test_naming_the_fully_async_class_enables_the_mode():
@@ -777,6 +786,7 @@ def _make_fully_async_args(**overrides) -> SimpleNamespace:
         offload_rollout_level=["kv_cache", "weight"],
         update_weights_interval=1,
         partial_rollout=False,
+        max_token_weighted_staleness=None,  # [fork fix-054]
         pause_generation_mode="retract",
         namespaced_radix_cache=False,
         recompute_logprobs_via_prefill=False,

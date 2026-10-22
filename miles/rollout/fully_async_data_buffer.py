@@ -19,6 +19,7 @@ from typing import Any
 
 from miles.backends.megatron_utils.megatron_config import resolve_megatron_config
 from miles.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, iter_samples
+from miles.rollout.filter_hub.common_filters import group_stale_reason  # [fork fix-054]
 from miles.rollout.filter_hub.common_filters import (
     GroupWeightVersionStats,
     apply_aborted_filter,
@@ -175,6 +176,7 @@ class DefaultDataBuffer(DataBuffer):
         self._metric_gatherer = MetricGatherer()
         self._metric_aborted_groups = 0
         self._metric_stale_groups = 0
+        self._metric_token_stale_groups = 0  # [fork fix-054]
         self._metric_consumed_staleness: list[int] = []
         self._metric_selected_newest_lag: list[int] = []
         self._metric_selected_version_span: list[int] = []
@@ -247,28 +249,33 @@ class DefaultDataBuffer(DataBuffer):
                 self._record_selected_version_stats(version_stats, current_version)
             return entries
 
-    # [fork fix-004]
+    # [fork fix-004] [fork fix-054]
     def num_ready(self, *, current_version: int | None = None, **_) -> int:
         # the groups get() would not drop as stale; it drops them itself, under the lock
-        limit = self._args.max_weight_staleness
-        return sum(
-            1
-            for entry in self._buffer
-            if limit is None
-            or (staleness := group_staleness(entry.group, current_version)) is None
-            or staleness <= limit
+        return sum(1 for entry in self._buffer if self._stale_reason(entry.group, current_version) is None)
+
+    # [fork fix-054] begin
+    def _stale_reason(self, group: Group, current_version: int | None) -> str | None:
+        return group_stale_reason(
+            group,
+            current_version,
+            max_staleness=self._args.max_weight_staleness,
+            max_token_weighted_staleness=self._args.max_token_weighted_staleness,
         )
 
+    # [fork fix-054] end
+
     def _drop_stale(self, current_version: int | None) -> None:
-        limit = self._args.max_weight_staleness
         kept: list[DataBufferInput] = []
         for entry in self._buffer:
-            staleness = group_staleness(entry.group, current_version)
-            if limit is None or staleness is None or staleness <= limit:
+            # [fork fix-054] both bounds, oldest token and token-weighted
+            reason = self._stale_reason(entry.group, current_version)
+            if reason is None:
                 kept.append(entry)
             else:
-                logger.info(f"Filtered stale group ({staleness=} > max={limit})")
+                logger.info(f"Filtered stale group ({reason})")
                 self._metric_stale_groups += 1
+                self._metric_token_stale_groups += reason.startswith("token_weighted")  # [fork fix-054]
                 self._unused_handler_fn(entry.prompt_group, UnusedReason.STALE)
 
         if len(kept) != len(self._buffer):
@@ -308,6 +315,7 @@ class DefaultDataBuffer(DataBuffer):
             f"{prefix}queue_size": len(self._buffer),
             f"{prefix}aborted_groups_filtered": self._metric_aborted_groups,
             f"{prefix}stale_groups_filtered": self._metric_stale_groups,
+            f"{prefix}token_weighted_stale_groups_filtered": self._metric_token_stale_groups,  # [fork fix-054]
             **self._metric_gatherer.collect(),
         }
         if consumed := self._metric_consumed_staleness:
@@ -343,6 +351,7 @@ class DefaultDataBuffer(DataBuffer):
         self._metric_selected_samples = 0
         self._metric_selected_versioned_samples = 0
         self._metric_aborted_groups = self._metric_stale_groups = 0
+        self._metric_token_stale_groups = 0  # [fork fix-054]
         return metrics
 
 

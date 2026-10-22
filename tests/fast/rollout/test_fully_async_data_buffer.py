@@ -91,6 +91,7 @@ def _make_args() -> Namespace:
         custom_async_data_buffer_path_per_model=None,
         dynamic_sampling_filter_path=None,
         max_weight_staleness=None,
+        max_token_weighted_staleness=None,  # [fork fix-054]
         megatron_config=encode_megatron_config("solver", "verifier"),
         reward_key=None,
         rollout_batch_size=1,
@@ -147,11 +148,25 @@ def _make_single_policy_args(**overrides) -> Namespace:
         dynamic_sampling_filter_path=None,
         enable_sample_ownership_checker=False,
         max_weight_staleness=None,
+        max_token_weighted_staleness=None,  # [fork fix-054]
         reward_key=None,
         rollout_batch_size=1,
     )
     defaults.update(overrides)
     return Namespace(**defaults)
+
+
+# [fork fix-054]
+def _make_versioned_group(group_index: int, *, spans: list[tuple[int, int]]) -> list[Sample]:
+    """Build a finished group from (weight version, token count) spans."""
+    group = _make_finished_group(group_index)
+    start, version_spans = 0, []
+    for version, count in spans:
+        version_spans.append(WeightVersionSpan(version=str(version), abs_start=start, abs_end=start + count))
+        start += count
+    for sample in group:
+        sample.weight_versions = [WeightVersionsPerCall(spans=list(version_spans))]
+    return group
 
 
 def _make_finished_group(
@@ -269,6 +284,24 @@ class TestStalenessFiltering:
 
         assert (await _get_one(under_test.buffer, current_version=5)).group is group
         assert "rollout/fully_async/avg_staleness" not in under_test.buffer.get_metrics()
+
+    # [fork fix-054] begin
+    async def test_a_group_must_pass_both_the_oldest_and_the_token_weighted_bound(self) -> None:
+        under_test = _make_buffer(max_weight_staleness=4, max_token_weighted_staleness=2)
+        mostly_fresh = _make_versioned_group(1, spans=[(7, 10), (9, 30)])  # oldest lag 3, mean lag 1.5
+        mostly_old = _make_versioned_group(2, spans=[(7, 30), (9, 10)])  # oldest lag 3, mean lag 2.5
+        too_old = _make_versioned_group(3, spans=[(5, 1), (10, 99)])  # oldest lag 5, mean lag 0.05
+        for group in (mostly_fresh, mostly_old, too_old):
+            await _put(under_test.buffer, group)
+
+        assert under_test.buffer.num_ready(current_version=10) == 1
+        assert (await _get_one(under_test.buffer, current_version=10)).group is mostly_fresh
+        assert under_test.unused == [(mostly_old, UnusedReason.STALE), (too_old, UnusedReason.STALE)]
+        metrics = under_test.buffer.get_metrics()
+        assert metrics["rollout/fully_async/stale_groups_filtered"] == 2
+        assert metrics["rollout/fully_async/token_weighted_stale_groups_filtered"] == 1
+
+    # [fork fix-054] end
 
     async def test_a_stale_group_is_recycled_without_waiting_for_the_consumer_to_reach_it(self) -> None:
         """A buffer filled with stale groups would block the producer while the consumer starves."""

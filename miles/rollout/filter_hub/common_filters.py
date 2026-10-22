@@ -103,3 +103,26 @@ def apply_reward_nonzero_std_filter(args, samples: list[Sample | list[Sample]], 
 
 def group_staleness(group: Group, current_version: int | None) -> int | None:
     return group_weight_version_stats(group).oldest_lag(current_version)
+
+
+# [fork fix-054] begin
+def group_stale_reason(
+    group: Group,
+    current_version: int | None,
+    *,
+    max_staleness: int | None,
+    max_token_weighted_staleness: float | None,
+) -> str | None:
+    """Return the first exceeded staleness bound, or None."""
+    stats = group_weight_version_stats(group)
+    oldest = stats.oldest_lag(current_version)
+    if max_staleness is not None and oldest is not None and oldest > max_staleness:
+        return f"staleness={oldest} > max={max_staleness}"
+    token_weighted = stats.token_weighted_lag(current_version)
+    if max_token_weighted_staleness is not None and token_weighted is not None:
+        if token_weighted > max_token_weighted_staleness:
+            return f"token_weighted_staleness={token_weighted:.2f} > max={max_token_weighted_staleness}"
+    return None
+
+
+# [fork fix-054] end
