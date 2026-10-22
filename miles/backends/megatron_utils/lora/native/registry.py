@@ -172,9 +172,10 @@ def resolve_adapter_targets(
 
 def validate_native_lora_args(args) -> None:
     """Reject run configurations native LoRA has not been validated with; needs Megatron's resolved args."""
-    assert args.colocate or not lora_rollout_enabled(args), (
-        "native LoRA syncs adapters only to colocated engines; use --colocate, --lora-train-only, "
-        "or --megatron-to-hf-mode bridge"
+    # [fork hook-011] without PP the full adapter is on every sender, so the broadcast protocol carries it
+    assert args.colocate or args.pipeline_model_parallel_size == 1 or not lora_rollout_enabled(args), (
+        "native LoRA syncs adapters to non-colocated engines only without pipeline parallelism; use --colocate, "
+        "--pipeline-model-parallel-size 1, --lora-train-only, or --megatron-to-hf-mode bridge"
     )
     assert not args.overlap_param_gather, (
         "native LoRA does not support --overlap-param-gather: sibling-module adapter attachment has not "
