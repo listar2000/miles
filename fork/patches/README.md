@@ -6,6 +6,8 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| hook-011 | Hook | Native LoRA syncs the adapter to non-colocated engines when PP is 1 (upstream allows only colocated) | active; remove when upstream lifts the guard | [hook-011-native-lora-disaggregated.md](hook-011-native-lora-disaggregated.md) |
+| hook-010 | Hook (SGLang) | SGLang serves LoRA on DeepSeek-V4/V4.1 attention and the shared expert (sgl-project/sglang#45231), so `lora.serving: adapter` keeps the FP8/FP4 base and the bf16 adapter apart | active; remove when SGLANG_COMMIT includes #45231 | [hook-010-dsv4-lora-serving.md](hook-010-dsv4-lora-serving.md) |
 | fix-053 | Fix (SGLang) | DSpark speculative decoding passes the verify pass's R3 routing, indexer top-k and weight-version record to the batch result, as DFlash does; without it overlap scheduling loses decoded-token routing | active; remove when SGLang's DSpark passes them through | [fix-053-dspark-r3.md](fix-053-dspark-r3.md) |
 | sglang-patches | Infra | SGLang bug fixes and small hooks carried as `fork/deps/sglang/<id>-<slug>.patch`, applied with no fuzz at image build against the pinned SGLang commit; the build fails when one does not apply | active | [sglang-patches.md](sglang-patches.md) |
 | fix-051 | Fix | R3 routing crosses the samples wire as int16 when the ids fit and is decoded back to int32: half of each 165-200 MB collect reply | active; remove when upstream narrows routed experts on the wire | [fix-051-r3-wire-int16.md](fix-051-r3-wire-int16.md) |
