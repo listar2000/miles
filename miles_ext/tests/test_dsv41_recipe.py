@@ -193,19 +193,27 @@ def test_policy_loss_keeps_tis():
     assert "MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO" not in R.harbor_env(r, "run1")
 
 
-def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec):
+@pytest.mark.parametrize("serving", ["merged", "adapter"])
+def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec, serving):
     from miles.backends.megatron_utils.lora.native import validate_native_lora_args
 
-    lora = {"rank": 32, "alpha": 32}
-    r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, rollout={"expert_qat": False})
+    lora = {"rank": 32, "alpha": 32, "serving": serving}
+    # adapter serving to separate rollout nodes needs PP 1 (hook-011), as the LoRA overfit recipes run
+    layout = {} if serving == "merged" else {"parallel": {"pp": 1}, "cluster": {"nodes": 3, "train_gpus": 8}}
+    r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, rollout={"expert_qat": False}, **layout)
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--lora-rank") == "32" and "--lora-merged-sync" in argv
+    assert _value(argv, "--lora-rank") == "32" and ("--lora-merged-sync" in argv) == (serving == "merged")
     assert _value(argv, "--custom-lora-spec-path") == "miles_ext.lora.dsv41"
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "deepseek_v41"}))
     validate_native_lora_args(_native_lora_args(argv, hf_checkpoint=str(tmp_path)))
     with pytest.raises(ValueError, match="drop rollout.expert_qat"):
         R.validate(_recipe(lora=lora, optimizer={"offload": None}), local_inputs=False)
+    if serving == "adapter":
+        lone_w3 = lora | {"target_modules": "attn.wq_a,ffn.shared_experts.w3"}
+        with pytest.raises(ValueError, match="lone w3"):
+            R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, rollout={"expert_qat": False}, **layout),
+                       local_inputs=False)
 
 
 def _native_lora_args(argv: list[str], **overrides):
@@ -221,6 +229,7 @@ def _native_lora_args(argv: list[str], **overrides):
         lora_train_only=False,
         lora_merged_sync="--lora-merged-sync" in argv,
         expert_tensor_parallel_size=int(_value(argv, "--expert-tensor-parallel-size")),
+        pipeline_model_parallel_size=int(_value(argv, "--pipeline-model-parallel-size")),
         **overrides,
     )
 
