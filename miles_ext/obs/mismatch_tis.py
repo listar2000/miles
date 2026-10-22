@@ -10,16 +10,15 @@ with r = pi / mu (trainer over engine):
 
 `mis_with_mask_health` runs Miles' MIS (examples/.../mis.py) unchanged and adds metrics that show whether its ratio
 band masks the tokens whose probability actually moved (prime-rl docs/ipo.md): a ratio band masks a rare token going
-0.01 -> 0.06 (ratio 6) and keeps a likely one going 0.9 -> 0.2 (ratio 0.22). With dp = |pi - mu|, each a mean over
-all loss tokens:
+0.01 -> 0.06 (ratio 6) and keeps a likely one going 0.9 -> 0.2 (ratio 0.22). "Masked" is a loss token that MIS's
+returned mask drops (TIS mask, RS and veto alike). With dp = |pi - mu|, each value is reduced like every other loss
+metric (per-sample mean by default, per-token mean with --calculate-per-token-loss):
 
 - `mis_prob_absdiff`: dp. `mis_masked_prob_absdiff` / `mis_masked_logprob_absdiff`: dp and |log pi - log mu| on
-  masked tokens, 0 elsewhere (divide by the mask fraction for the masked-token mean).
+  masked tokens, 0 elsewhere.
 - `mis_prob_absdiff_gt_0.3`: what IPO at its default eps 0.3 would mask.
 - `mis_kept_prob_absdiff_gt_0.3`: kept by MIS although dp > 0.3 (drift the band misses).
 - `mis_masked_prob_absdiff_lt_0.05`: masked by MIS although dp < 0.05 (rare tokens that barely moved).
-
-The band is the token-level mask: `rs_` bounds with `use_rs`, else `tis_` bounds with `tis_mode: mask`.
 """
 
 from argparse import Namespace
@@ -69,21 +68,8 @@ def vanilla_tis_with_mismatch_metrics(
     return pg_loss, loss_masks, metrics
 
 
-def mis_mask_band(args: Namespace) -> tuple[float, float]:
-    tis_lower = getattr(args, "tis_lower_bound", None) or 1.0 / args.tis_upper_bound
-    if getattr(args, "use_rs", False) and args.rs_level == "token":
-        lower = getattr(args, "rs_lower_bound", None) or tis_lower
-        return lower, getattr(args, "rs_upper_bound", None) or args.tis_upper_bound
-    if args.tis_mode == "mask" and args.tis_level == "token":
-        return tis_lower, args.tis_upper_bound
-    raise ValueError("mis_with_mask_health needs a token-level mask: use_rs with rs_level token, or tis_mode mask")
-
-
-def mis_mask_health(args: Namespace, train_log_probs: torch.Tensor, rollout_log_probs: torch.Tensor) -> dict:
-    lower, upper = mis_mask_band(args)
+def mis_mask_health(train_log_probs: torch.Tensor, rollout_log_probs: torch.Tensor, masked: torch.Tensor) -> dict:
     log_ratio = (train_log_probs - rollout_log_probs).detach()
-    ratio = torch.exp(log_ratio)
-    masked = ((ratio < lower) | (ratio > upper)).float()
     prob_absdiff = (train_log_probs.exp() - rollout_log_probs.exp()).abs().detach()
     moved = (prob_absdiff > PROB_MOVED).float()
     return {
@@ -103,18 +89,36 @@ def mis_with_mask_health(
     train_log_probs: list[torch.Tensor],
     rollout_log_probs: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
     **kwargs: Any,
 ) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
     from examples.infra_features.train_infer_mismatch_helper.mis import compute_mis_weights_with_cp
 
-    mis_mask_band(args)
-    pg_loss, loss_masks, metrics = compute_mis_weights_with_cp(
+    from miles.backends.training_utils.data.context_parallel import slice_log_prob_with_cp
+
+    pg_loss, modified_masks, metrics = compute_mis_weights_with_cp(
         args,
         pg_loss=pg_loss,
         train_log_probs=train_log_probs,
         rollout_log_probs=rollout_log_probs,
         loss_masks=loss_masks,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
         **kwargs,
     )
-    metrics |= mis_mask_health(args, torch.cat(train_log_probs, dim=0), torch.cat(rollout_log_probs, dim=0))
-    return pg_loss, loss_masks, metrics
+    max_seq_lens = kwargs.get("max_seq_lens")
+    masked = torch.cat(
+        [
+            slice_log_prob_with_cp(
+                loss_mask.float() * (1 - modified_mask.float()),
+                total_lengths[i],
+                response_lengths[i],
+                args.qkv_format,
+                max_seq_lens[i] if max_seq_lens is not None else None,
+            )
+            for i, (loss_mask, modified_mask) in enumerate(zip(loss_masks, modified_masks, strict=True))
+        ]
+    )
+    metrics |= mis_mask_health(torch.cat(train_log_probs, dim=0), torch.cat(rollout_log_probs, dim=0), masked)
+    return pg_loss, modified_masks, metrics
