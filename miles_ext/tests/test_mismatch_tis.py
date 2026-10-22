@@ -79,7 +79,7 @@ def test_masked_matches_upstream_mis(monkeypatch, config):
     gen = torch.Generator().manual_seed(0)
     lengths = [64, 32]
     train = [-torch.rand(n, generator=gen) * 3 for n in lengths]
-    rollout = [t + torch.randn(n, generator=gen) * 0.8 for t, n in zip(train, lengths)]
+    rollout = [t + torch.randn(n, generator=gen) * 0.8 for t, n in zip(train, lengths, strict=True)]
     masks = [torch.ones(64), (torch.arange(32) % 5 != 0).float()]
     _, upstream_masks, _ = compute_mis_weights(
         args, train_log_probs=train, rollout_log_probs=rollout, loss_masks=masks
@@ -93,5 +93,5 @@ def test_masked_matches_upstream_mis(monkeypatch, config):
         total_lengths=[n + 8 for n in lengths],
         response_lengths=lengths,
     )
-    expected = torch.cat([m * (1 - u) for m, u in zip(masks, upstream_masks)])
+    expected = torch.cat([m * (1 - u) for m, u in zip(masks, upstream_masks, strict=True)])
     assert torch.equal((metrics["mis_masked_logprob_absdiff"] > 0).float(), expected)
