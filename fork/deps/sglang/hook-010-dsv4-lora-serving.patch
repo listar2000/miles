@@ -1,0 +1,350 @@
+diff --git a/python/sglang/srt/lora/backend/base_backend.py b/python/sglang/srt/lora/backend/base_backend.py
+index 911ac19..9a2fe82 100644
+--- a/python/sglang/srt/lora/backend/base_backend.py
++++ b/python/sglang/srt/lora/backend/base_backend.py
+@@ -133,6 +133,15 @@ class BaseLoRABackend(LoRABackendLmHeadMixing):
+         """
+         raise NotImplementedError
+ 
++    # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++    def grouped_sgemm_batch_infos(
++        self, num_groups: int, num_tokens: int
++    ) -> Tuple[LoRABatchInfo, LoRABatchInfo]:
++        """A/B segment routing for a grouped projection; see ``TritonLoRABackend``."""
++        raise NotImplementedError(
++            f"grouped LoRA projections (DeepSeek-V4 wo_a) need --lora-backend triton, not {self.name!r}"
++        )
++
+     def run_lora_a_sgemm(
+         self, x: torch.Tensor, weights: torch.Tensor, *args, **kwargs
+     ) -> torch.Tensor:
+diff --git a/python/sglang/srt/lora/backend/triton_backend.py b/python/sglang/srt/lora/backend/triton_backend.py
+index 30560a0..2120003 100644
+--- a/python/sglang/srt/lora/backend/triton_backend.py
++++ b/python/sglang/srt/lora/backend/triton_backend.py
+@@ -277,6 +277,54 @@ class TritonLoRABackend(BaseLoRABackend):
+             return self.global_sgemm_batch_info or batch_info
+         return self.sgemm_batch_info or batch_info
+ 
++    # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++    def grouped_sgemm_batch_infos(
++        self, num_groups: int, num_tokens: int
++    ) -> Tuple[LoRABatchInfo, LoRABatchInfo]:
++        """Segments for a grouped projection whose input rows are group-major, ``g * num_tokens + token``.
++
++        Every token segment repeats once per group. A keeps the segment's adapter; B routes it
++        to the composite weight ``adapter * num_groups + g`` of a ``[num_loras * num_groups, out, rank]`` view.
++        """
++        info = self._sgemm_info()
++        n = info.bs
++        groups = torch.arange(
++            num_groups, device=info.seg_indptr.device, dtype=info.seg_indptr.dtype
++        )
++        offsets = (groups * num_tokens).unsqueeze(1)
++        segments = dict(
++            bs=n * num_groups,
++            num_segments=n * num_groups,
++            seg_indptr=torch.cat(
++                (
++                    (info.seg_indptr[:n] + offsets).reshape(-1),
++                    info.seg_indptr[n : n + 1] + offsets[-1],
++                )
++            ),
++            seg_lens=info.seg_lens[:n].repeat(num_groups),
++            permutation=(
++                None
++                if info.permutation is None
++                else (info.permutation[:num_tokens] + offsets).reshape(-1)
++            ),
++            expected_tokens=num_groups * num_tokens,
++        )
++        weight_indices = info.weight_indices[:n]
++        a_info = dataclasses.replace(
++            info, weight_indices=weight_indices.repeat(num_groups), **segments
++        )
++        b_info = dataclasses.replace(
++            info,
++            weight_indices=(
++                weight_indices * num_groups
++                + groups.to(weight_indices.dtype).unsqueeze(1)
++            ).reshape(-1),
++            lora_ranks=info.lora_ranks.repeat_interleave(num_groups),
++            scalings=info.scalings.repeat_interleave(num_groups),
++            **segments,
++        )
++        return a_info, b_info
++
+     def run_lora_a_sgemm(
+         self,
+         x: torch.Tensor,
+diff --git a/python/sglang/srt/lora/layers.py b/python/sglang/srt/lora/layers.py
+index e913ae0..2878c18 100644
+--- a/python/sglang/srt/lora/layers.py
++++ b/python/sglang/srt/lora/layers.py
+@@ -502,6 +502,38 @@ class ColumnParallelLinearWithLoRA(BaseLayerWithLoRA):
+         if self.lora_backend.supports_lora_a_overlap:
+             self.lora_backend.start_lora_a_overlap(x, self.A_buffer)
+ 
++    # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++    def apply_grouped_lora(
++        self, base_output: torch.Tensor, x: torch.Tensor
++    ) -> torch.Tensor:
++        """LoRA of a grouped projection, ``[tokens, groups, in]`` -> ``[tokens, groups, out]``.
++
++        Group ``g`` meets only row block ``g`` of the weight (DeepSeek-V4's ``wo_a``),
++        so its delta is ``B_g @ A @ x_g``: one ``A`` for every group, ``B`` split by group.
++        """
++        if not self.lora_active:
++            return base_output
++        num_tokens, num_groups, _ = x.shape
++        a_info, b_info = self.lora_backend.grouped_sgemm_batch_infos(
++            num_groups, num_tokens
++        )
++        # group-major rows keep each group's tokens contiguous, as the segments expect;
++        # with one local group reshape would keep the sliced rows' stride
++        lora_a_output = self.lora_backend.run_lora_a_sgemm(
++            x.transpose(0, 1).contiguous().view(num_groups * num_tokens, -1),
++            self.A_buffer,
++            pruned_batch_info=a_info,
++        )
++        num_loras, _, rank = self.B_buffer.shape
++        lora_output = self.lora_backend.run_lora_b_sgemm(
++            lora_a_output,
++            self.B_buffer.view(num_loras * num_groups, -1, rank),
++            pruned_batch_info=b_info,
++        )
++        return base_output + lora_output.view(num_groups, num_tokens, -1).transpose(
++            0, 1
++        )
++
+     def forward(self, input_: torch.Tensor):
+         # duplicate the logic in ColumnParallelLinear
+         lora_active = self.lora_active
+diff --git a/python/sglang/srt/lora/mem_pool.py b/python/sglang/srt/lora/mem_pool.py
+index 0fe8391..cf21450 100644
+--- a/python/sglang/srt/lora/mem_pool.py
++++ b/python/sglang/srt/lora/mem_pool.py
+@@ -368,7 +368,14 @@ class LoRAMemoryPool:
+         # commit to allocating 4D per-expert LoRA buffers.
+         from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+ 
+-        return any(isinstance(m, FusedMoE) for m in base_model.modules())
++        # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++        # experts the model keeps out of LoRA are never wrapped, so they get no buffers
++        should_apply_lora = getattr(base_model, "should_apply_lora", None)
++        return any(
++            isinstance(module, FusedMoE)
++            and (should_apply_lora is None or should_apply_lora(name))
++            for name, module in base_model.named_modules()
++        )
+ 
+     @staticmethod
+     def _get_fused_shared_moe(base_model: torch.nn.Module, layer_idx: int):
+diff --git a/python/sglang/srt/lora/utils.py b/python/sglang/srt/lora/utils.py
+index 7524ffc..a7073ae 100644
+--- a/python/sglang/srt/lora/utils.py
++++ b/python/sglang/srt/lora/utils.py
+@@ -341,7 +341,17 @@ def get_normalized_target_modules(
+             base_model, "get_lora_target_module_name"
+         ):
+             name = base_model.get_lora_target_module_name(name)
+-        base_name = name.split(".")[-1]
++        # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++        parent, _, base_name = name.rpartition(".")
++        # a bare DSA leaf means the indexer's; under another parent it is that
++        # parent's own projection (DeepSeek-V4's attn.wq_b)
++        if (
++            f"indexer.{base_name}" in DSA_INDEXER_LORA_NAMES
++            and parent
++            and not parent.endswith("indexer")
++        ):
++            result.add(base_name)
++            continue
+         normalized_name = params_mapping.get(base_name, base_name)
+         result.add(normalized_name)
+     return result
+@@ -397,6 +407,7 @@ ROW_PARALLELISM_LINEAR_LORA_NAMES = [
+     "down_proj_moe",
+     "down_proj_shared_moe",
+     "wo_ud",
++    "wo_b",
+ ]
+ DSA_INDEXER_LORA_NAMES = frozenset(
+     {"indexer.wq_b", "indexer.wk", "indexer.weights_proj"}
+@@ -405,6 +416,8 @@ REPLICATED_LINEAR_LORA_NAMES = [
+     "fused_qkv_a_proj_with_mqa",
+     "fc1_latent_proj",
+     "fc2_latent_proj",
++    "wq_a",
++    "wkv",
+     *DSA_INDEXER_LORA_NAMES,
+ ]
+ # Attention-projection LoRA modules shard on the attention-TP group, which
+@@ -423,6 +436,9 @@ ATTN_TP_LORA_MODULE_NAMES = frozenset(
+         "wo_ud",
+         "in_proj",
+         "in_proj_qkvz",
++        "wq_b",
++        "wo_a",
++        "wo_b",
+     }
+ )
+ 
+@@ -448,6 +464,11 @@ _KNOWN_LORA_TARGET_MODULES = frozenset(
+         "fused_qkv_a_proj_with_mqa",
+         "q_b_proj",
+         "kv_b_proj",
++        "wq_a",
++        "wq_b",
++        "wkv",
++        "wo_a",
++        "wo_b",
+     }
+     | DSA_INDEXER_LORA_NAMES
+ )
+diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
+index f9f7589..a105cae 100644
+--- a/python/sglang/srt/models/deepseek_v4.py
++++ b/python/sglang/srt/models/deepseek_v4.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import concurrent.futures
+ import functools
+ import logging
++import re
+ import time
+ from array import array
+ from contextlib import contextmanager, nullcontext
+@@ -121,6 +122,7 @@ from sglang.srt.layers.quantization.mxfp8_input import Mxfp8SwizzledInput
+ from sglang.srt.layers.rotary_embedding import get_rope_wrapper
+ from sglang.srt.layers.utils import PPMissingLayer, get_layer_id
+ from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
++from sglang.srt.lora.layers import ColumnParallelLinearWithLoRA
+ from sglang.srt.managers.mm_utils import (
+     MultiModalityDataPaddingPatternMultimodalTokens,
+     embed_mm_inputs,
+@@ -185,6 +187,7 @@ from sglang.srt.runtime_context import (
+     get_device,
+     get_exec,
+     get_forward,
++    get_lora,
+     get_parallel,
+     get_platform,
+ )
+@@ -804,7 +807,8 @@ class MqaAttentionBase(nn.Module):
+         assert self.head_dim == config.head_dim
+         assert config.num_key_value_heads == 1
+ 
+-        fuse: bool = (
++        # LoRA adapts wq_a and wkv one by one
++        fuse: bool = not (get_lora().enable_lora or get_lora().lora_paths) and (
+             envs.SGLANG_OPT_FUSE_WQA_WKV.get() if fuse_wqa_wkv is None else fuse_wqa_wkv
+         )
+         fp8: bool = (
+@@ -1268,7 +1272,8 @@ class MQALayer(MqaAttentionBase):
+         self, q: torch.Tensor
+     ) -> Tuple[torch.Tensor, torch.Tensor | Mxfp8SwizzledInput]:
+         # The indexer needs the BF16 normalized row; wq_b needs the quantized one.
+-        method = self.wq_b.quant_method
++        # a LoRA-wrapped wq_b has no quant_method and takes the unquantized row
++        method = getattr(self.wq_b, "quant_method", None)
+         if (
+             _is_cuda
+             and self.is_dsv41
+@@ -2153,7 +2158,11 @@ class MQALayer(MqaAttentionBase):
+                 or (
+                     forward_batch.forward_mode.is_target_verify()
+                     # Other MXFP8 backends may share mutable GEMM workspace.
+-                    and getattr(self.wq_b.quant_method, "mxfp8_dense_backend", None)
++                    and getattr(
++                        getattr(self.wq_b, "quant_method", None),
++                        "mxfp8_dense_backend",
++                        None,
++                    )
+                     == Mxfp8DenseGemmBackend.FLASHINFER_CUTEDSL
+                 )
+             )
+@@ -2378,10 +2387,13 @@ class MQALayer(MqaAttentionBase):
+                     save_kv_cache=save_kv_cache,
+                 )
+             o = o[:, tp_slice, :]
++        # a fused inverse RoPE leaves no wo_a input for the adapter
++        wo_a_lora = isinstance(self.wo_a, ColumnParallelLinearWithLoRA)
+         if (
+             self.wo_a_fp8
+             and _wo_a_fp8_mxscale_fused_invrope is not None
+             and not _is_npu
++            and not wo_a_lora
+         ):
+             # ROCm gfx950 fused path: inverse-RoPE + per-token-group mxfp8 quant
+             # in one aiter kernel on the pre-view [T,H,Dh] output, then the a8w8
+@@ -2403,7 +2415,9 @@ class MQALayer(MqaAttentionBase):
+                 self.use_flashinfer_mxfp8_wo_b and not get_forward().sp_active
+             )
+             fuse_rope_wo_a = (
+-                self.use_fused_wo_a and 0 < o.shape[0] <= _FUSED_WO_A_MAX_TOKENS
++                self.use_fused_wo_a
++                and not wo_a_lora
++                and 0 < o.shape[0] <= _FUSED_WO_A_MAX_TOKENS
+             )
+ 
+             if _is_npu:
+@@ -2428,6 +2442,7 @@ class MQALayer(MqaAttentionBase):
+                 )
+ 
+             o = o.view(o.shape[0], self.n_local_groups, -1)
++            wo_a_input = o
+ 
+             if fuse_rope_wo_a:
+                 wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+@@ -2530,6 +2545,8 @@ class MQALayer(MqaAttentionBase):
+                         self.wo_a.qweight_type.weight_type,
+                         self.o_lora_rank,
+                     )
++            if wo_a_lora:
++                o = self.wo_a.apply_grouped_lora(o, wo_a_input)
+ 
+         from sglang.srt.layers.moe.mhc_post_fusion import current_mhc_post_fusion
+ 
+@@ -4987,6 +5004,42 @@ class DeepseekV4ForCausalLM(nn.Module):
+             )
+         return len(seen)
+ 
++    # [fork hook-010] V4 LoRA serving, sgl-project/sglang#45231
++    # the indexer, compressor and engram reuse the leaves wq_b/wkv and are not adapted
++    _lora_module_pattern = re.compile(
++        r"^model\.layers\.\d+\.(?:self_attn\.(?:wq_a|wq_b|wkv|wo_a|wo_b)"
++        r"|mlp\.shared_experts\.(?:gate_up_proj|down_proj))$"
++    )
++
++    def should_apply_lora(self, module_name: str) -> bool:
++        return bool(self._lora_module_pattern.match(module_name))
++
++    @staticmethod
++    def get_lora_target_module_name(name: str) -> str:
++        parent, _, leaf = name.rpartition(".")
++        if parent.endswith("shared_experts"):
++            return {"w1": "gate_proj", "w2": "down_proj", "w3": "up_proj"}.get(
++                leaf, name
++            )
++        return name
++
++    def get_hidden_dim(self, module_name: str, layer_idx: int) -> Tuple[int, int]:
++        """LoRA input/output dims; every layer is MoE, so gate_up/down are the shared expert's."""
++        config = self.config
++        shared_inter = config.moe_intermediate_size * config.n_shared_experts
++        return {
++            "wq_a": (config.hidden_size, config.q_lora_rank),
++            "wq_b": (config.q_lora_rank, config.num_attention_heads * config.head_dim),
++            "wkv": (config.hidden_size, config.head_dim),
++            "wo_a": (
++                config.num_attention_heads * config.head_dim // config.o_groups,
++                config.o_groups * config.o_lora_rank,
++            ),
++            "wo_b": (config.o_groups * config.o_lora_rank, config.hidden_size),
++            "gate_up_proj": (config.hidden_size, 2 * shared_inter),
++            "down_proj": (shared_inter, config.hidden_size),
++        }[module_name]
++
+     @property
+     def routed_experts_weights_of_layer(self):
+         return self._routed_experts_weights_of_layer.value
