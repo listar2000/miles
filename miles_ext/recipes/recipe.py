@@ -151,9 +151,10 @@ DEFAULTS: dict[str, Any] = {
     # (disk_dir on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
     # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
     "optimizer": {"offload": None, "disk_dir": "/tmp/miles-optimizer", "moment_dtype": None, "grad_dtype": "fp32"},
-    # Engines receive merged full weights; they need no native LoRA support.
-    # target_modules uses Miles' selector syntax; None selects attention and MLP groups.
-    "lora": {"rank": 0, "alpha": 32, "target_modules": None},
+    # serving "merged": engines receive merged full weights and need no native LoRA support; "adapter": they keep
+    # the base and apply the bf16 adapter per token (SGLang LoRA; V4.1 needs hook-010), so a quantized base does
+    # not round the update away. target_modules uses Miles' selector syntax; None selects attention and MLP groups.
+    "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "merged"},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
     # for max_concurrent_samples; retry_aborted_tries: fix-048, checkpoint_buffer: hook-008 (fork/patches/)
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
@@ -295,6 +296,7 @@ FIELD_RULES: dict[str, dict] = {
     "lora.rank": {"type": "int", "min": 0},
     "lora.alpha": {"type": "int", "min": 1},
     "lora.target_modules": {"type": "str", "nullable": True},
+    "lora.serving": {"type": "str", "enum": ("merged", "adapter")},
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
@@ -533,7 +535,9 @@ def _lora_args(recipe: dict) -> str:
     lora = recipe["lora"]
     if not lora["rank"]:
         return ""
-    args = f" --lora-rank {lora['rank']} --lora-alpha {lora['alpha']} --lora-merged-sync"
+    args = f" --lora-rank {lora['rank']} --lora-alpha {lora['alpha']}"
+    if lora["serving"] == "merged":
+        args += " --lora-merged-sync"
     if lora["target_modules"]:
         args += f" --target-modules {lora['target_modules']}"
     if spec := PRESETS[recipe["model"]["preset"]].lora_spec_path:
