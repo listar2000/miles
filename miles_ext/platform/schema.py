@@ -55,6 +55,7 @@ RESERVED_FLAGS = {
     "--entropy-coef": "algorithm.entropy_coef",
     "--seed": "algorithm.seed",
     "--max-weight-staleness": "algorithm.max_weight_staleness",
+    "--max-token-weighted-staleness": "algorithm.max_token_weighted_staleness",
     "--over-sampling-batch-size": "async.over_sampling_batch_size",
     "--async-max-concurrent-samples": "async.max_concurrent_samples",
     "--async-unused-samples-handler": "async.unused_samples",
