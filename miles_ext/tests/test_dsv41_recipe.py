@@ -236,3 +236,13 @@ def test_checkpoint_buffer_modes(mode, buffer):
     assert _value(argv, "--async-checkpoint-buffer") == mode
     path = "--custom-async-data-buffer-path"
     assert (_value(argv, path) if path in argv else None) == buffer
+
+
+def test_token_weighted_staleness_bound():
+    assert "--max-token-weighted-staleness" not in R.miles_args(_recipe(), "run1", resume=False)
+    r = _recipe(algorithm={"max_weight_staleness": 4, "max_token_weighted_staleness": 2})
+    R.validate(r, local_inputs=False)
+    argv = R.miles_args(r, "run1", resume=False)
+    assert (_value(argv, "--max-weight-staleness"), _value(argv, "--max-token-weighted-staleness")) == ("4", "2")
+    with pytest.raises(ValueError, match="must be finite"):
+        R.validate(_recipe(algorithm={"max_token_weighted_staleness": float("nan")}), local_inputs=False)

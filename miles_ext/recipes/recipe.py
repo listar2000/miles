@@ -121,7 +121,9 @@ DEFAULTS: dict[str, Any] = {
         # which finished groups train: "no_aborted", or "nonzero_std" (also drops groups whose
         # samples all scored the same; aborted groups are dropped before either filter)
         "group_filter": "no_aborted",
-        "max_weight_staleness": 2,
+        "max_weight_staleness": 2,  # versions behind, by a group's oldest token
+        # and by the mean over its generated tokens (fix-054); None: no mean bound
+        "max_token_weighted_staleness": None,
         "sglang_mem_fraction": None,  # None: 0.85 fully async, 0.7 colocated
         # tokens packed per training micro-batch (a longer sample gets one of its own). FSDP holds
         # the micro-batch's full-vocabulary logits (~1 GiB per 1k tokens in fp32 at Qwen3.5's
@@ -275,6 +277,7 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.tis_clip_low": {"type": "number", "min": 0},
     "algorithm.group_filter": {"type": "str", "enum": tuple(GROUP_FILTERS)},
     "algorithm.max_weight_staleness": {"type": "int", "min": 0},
+    "algorithm.max_token_weighted_staleness": {"type": "number", "nullable": True, "min": 0},
     "algorithm.sglang_mem_fraction": {"type": "number", "nullable": True, "min": 0.05, "max": 0.95},
     "algorithm.max_tokens_per_gpu": {"type": "int", "min": 1},
     "algorithm.advantage_estimator": {"type": "str", "enum": ADVANTAGE_ESTIMATORS},
@@ -382,6 +385,11 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if recipe["algorithm"]["mode"] == "fully_async" and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE:
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
     algo, aio = recipe["algorithm"], recipe["async"]
+    if (limit := algo["max_token_weighted_staleness"]) is not None:
+        if algo["mode"] != "fully_async":
+            raise ValueError("algorithm.max_token_weighted_staleness requires algorithm.mode fully_async")
+        if not math.isfinite(limit):  # NaN would pass the field rule and disable the bound
+            raise ValueError("algorithm.max_token_weighted_staleness must be finite")
     if aio["max_concurrent_samples"] is not None and aio["max_concurrent_samples"] < algo["n_samples"]:
         raise ValueError("async.max_concurrent_samples must be >= algorithm.n_samples (Miles asserts it)")
     if aio["over_sampling_batch_size"] is not None and aio["over_sampling_batch_size"] < algo["rollout_batch_size"]:
@@ -714,6 +722,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
+        {f"--max-token-weighted-staleness {tws}" if (tws := algo["max_token_weighted_staleness"]) is not None else ""}
         --async-checkpoint-buffer {aio["checkpoint_buffer"]}
         {f"--custom-async-data-buffer-path {GROUP_LOG_BUFFER}" if aio["checkpoint_buffer"] == "log" else ""}
         --async-retry-aborted-tries {aio["retry_aborted_tries"]}
