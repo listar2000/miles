@@ -82,7 +82,9 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
         return out
     if not run_secret_exists(run_id, target):
         raise RuntimeError(f"secret {target.secret_name} does not exist (create_run_secret first)")
-    if recipe["model"].get("revision") and not recipe_weights_ready(recipe, target):
+    # only a revision-keyed snapshot has a .ready of its own; a preset's BF16 copy does not
+    keyed = R.model_dir(recipe).name == recipe["model"].get("revision")
+    if keyed and not recipe_weights_ready(recipe, target):
         raise RuntimeError(f"weights {R.model_dir(recipe)} are not ready (prepare_weights first)")
     _claim(run_id, target)
     try:
