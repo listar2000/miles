@@ -113,11 +113,14 @@ Each break is **blocking** unless marked otherwise.
   `Upstream-Status:` and `Remove-When:` trailers.
 - **SGLang patches** (`fork/README.md` "SGLang patches"). A file
   `fork/deps/sglang/<id>-<slug>.patch` in a fix or hook commit that touches
-  nothing else. Blocking: it adds a feature, server flag, kernel or model
-  support; the PR or patch page does not name the existing SGLang code it
-  copies; it changes SGLang at runtime from `miles_ext` instead; or
+  nothing else. Blocking: our own code that adds a feature, server flag,
+  kernel or model support; the patch page does not state its source (an SGLang
+  commit or PR copied verbatim, or the existing SGLang code our own patch
+  mirrors); it changes SGLang at runtime from `miles_ext` instead; or
   Verification lacks `apply.py ... --check` passing at `stack.SGLANG_COMMIT`.
-  Should-fix: over about 30 changed lines without the user's OK on the PR;
+  Should-fix: our own code, or a large unreviewed change, without the user's
+  OK on the PR (no fixed size limit; a verbatim copy of merged SGLang main or
+  of a trusted contributor's PR is normally fine);
   `Upstream-Status:` without SGLang main checked at a named sha; evidence
   without the same run on an unpatched image beside it, or without proof the
   run used the patched image (the launcher's marker line or the

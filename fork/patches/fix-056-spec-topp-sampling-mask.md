@@ -14,7 +14,8 @@ does not have it.
   that rebuilds the target policy after acceptance), the DSpark and DFlash worker calls, the per-token
   alignment in `batch_result_processor.py`, and the per-row mask `top_k` in `sampling_batch_info.py`. Its test
   files are left out. Acceptance and sampling are untouched; batches without a mask request do no extra work.
-- Over the ~30-line SGLang patch limit (397 added lines): user OK required, asked 2026-10-21.
+- Source: SGLang main commit `201c4b9b2a` (#34201), copied verbatim (397 added lines). The user approved
+  carrying it on 2026-10-21.
 
 ## How it is applied
 `fork/deps/sglang/fix-056-spec-topp-sampling-mask.patch`, applied after fix-053 by `fork/deps/sglang/apply.py`
