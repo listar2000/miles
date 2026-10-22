@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import math  # [fork fix-054]
 import os
 import re
 import tempfile
@@ -84,6 +85,13 @@ def _resolve_rollout_functions(args) -> None:
         logger.info("--rollout-function-path selects FullyAsyncRolloutFn: enabling --fully-async")
         args.fully_async = True
         args.rollout_function_path = None
+    # [fork fix-054] begin
+    if (limit := args.max_token_weighted_staleness) is not None:
+        if not args.fully_async:
+            raise ValueError("--max-token-weighted-staleness requires --fully-async")
+        if not math.isfinite(limit) or limit < 0:
+            raise ValueError("--max-token-weighted-staleness must be finite and non-negative")
+    # [fork fix-054] end
     if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and not use_legacy_rollout_v1():
         raise ValueError(
             "--mask-offpolicy-in-partial-rollout does not re-extend the loss mask on the "
@@ -967,6 +975,19 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "async mode. None (default) disables staleness filtering."
                 ),
             )
+            # [fork fix-054] begin
+            parser.add_argument(
+                "--max-token-weighted-staleness",
+                type=float,
+                default=None,
+                help=(
+                    "Maximum allowed gap between the current engine weight version and the mean weight version "
+                    "of a group's generated tokens. A group must also pass --max-weight-staleness (its oldest "
+                    "token), so the two bound the average and the worst token. Groups exceeding it go to "
+                    "--async-unused-samples-handler like other stale groups. None (default) disables it."
+                ),
+            )
+            # [fork fix-054] end
             parser.add_argument(
                 "--async-max-concurrent-samples",
                 type=int,
