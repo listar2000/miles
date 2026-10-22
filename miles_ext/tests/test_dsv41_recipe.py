@@ -79,7 +79,7 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
     r = _recipe(rollout={"precision": "bf16", "expert_qat": False})
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == RELEASED
+    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash-1017-bf16"
     assert "--custom-weight-quantizer-path" not in argv
     assert R.trainer_env(r)["SGLANG_DSV4_FP4_EXPERTS"] == "0"
 

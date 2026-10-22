@@ -680,6 +680,9 @@ def reads_task_dirs(recipe: dict) -> bool:
 
 def model_dir(recipe: dict) -> Path:
     preset = PRESETS[recipe["model"]["preset"]]
+    if preset.train_dir_name and rollout_precision(recipe) != FP8_FP4:
+        # BF16 engines serve the trainer's BF16 copy: the released checkpoint would load as FP8 dense
+        return MODELS / preset.train_dir_name
     if revision := recipe["model"].get("revision"):
         return MODELS / f"{preset.hf_repo.replace('/', '--')}/{revision}"  # miles_ext.platform.weights key
     return MODELS / preset.dir_name
