@@ -340,12 +340,13 @@ Dockerfile applies with `patch --fuzz=0`, each with its upstream PR and a
 "drop when" line, failing the build when one does not apply. We cannot commit
 to `sglang-miles`, so we carry SGLang changes the second way.
 
-**What may be patched.** A Fix or a Hook, under the same rules as in Miles
-code: a bug fix, or the smallest extension point an extension needs. It
-copies a pattern SGLang already uses for the same job (name it on the patch
-page) and stays small: about 30 changed lines; a larger one needs the user's
-OK on its PR. No new server flags, kernels, model support or features: those
-go to SGLang. Never change SGLang at runtime from `miles_ext`
+**What may be patched.** A Fix or a Hook: a bug fix, the smallest extension
+point an extension needs, or a change copied verbatim from SGLang. There is no
+fixed size limit; what matters is where the change comes from. A copy of a
+commit already merged on SGLang main, or of a PR by a trusted SGLang or
+RadixArk contributor, is normally fine. Our own code, or a large or unreviewed
+change, needs the reviewer's judgment plus the user's OK on its PR, and copies
+a pattern SGLang already uses for the same job. Never change SGLang at runtime from `miles_ext`
 (monkeypatching, a script that edits the installed files): what is not a patch
 file is not in the image's record. A runtime applier is fine on a throwaway
 image during an investigation; it never lands.
@@ -362,7 +363,8 @@ image during an investigation; it never lands.
   `Upstream-Status:` is the SGLang PR, or `not filed; also on sgl-project/sglang
   main <sha9>` (or `not on main <sha9>`); `Remove-When:` names the SGLang
   release or `sglang-miles` commit that has the fix.
-- A patch page, always, in its own `patch-<id>` infra commit as usual. Its
+- A patch page, always, in its own `patch-<id>` infra commit as usual. It
+  states the patch's source (an SGLang commit or PR, or our own code); its
   *Decision* names the SGLang code it mirrors; *Remove when* repeats the
   upstream status checked against SGLang main.
 - Every SGLang patch is also an upstream candidate: list it wherever the
