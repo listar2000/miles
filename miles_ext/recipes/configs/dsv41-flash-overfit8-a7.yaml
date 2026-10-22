@@ -90,6 +90,6 @@ extra_args:
   - miles_ext.obs.mismatch_tis.mis_with_mask_health  # #82
   # MIS settings inline (read in the container, so no file has to be in the image); decoded =
   # dsv41-flash-overfit8-a7-mis.yaml: use_tis true, use_rs false, tis_level token, tis_mode mask, [0.5, 5.0],
-  # tis_batch_normalize true
+  # tis_batch_normalize true; rs_level token, rs bounds and veto null (mis.py reads them even with use_rs false)
   - --custom-config-path
-  - base64:dXNlX3RpczogdHJ1ZQp1c2VfcnM6IGZhbHNlCnRpc19sZXZlbDogdG9rZW4KdGlzX21vZGU6IG1hc2sKdGlzX2xvd2VyX2JvdW5kOiAwLjUKdGlzX3VwcGVyX2JvdW5kOiA1LjAKdGlzX2JhdGNoX25vcm1hbGl6ZTogdHJ1ZQo=
+  - base64:dXNlX3RpczogdHJ1ZQp1c2VfcnM6IGZhbHNlCnRpc19sZXZlbDogdG9rZW4KdGlzX21vZGU6IG1hc2sKdGlzX2xvd2VyX2JvdW5kOiAwLjUKdGlzX3VwcGVyX2JvdW5kOiA1LjAKdGlzX2JhdGNoX25vcm1hbGl6ZTogdHJ1ZQpyc19sZXZlbDogdG9rZW4KcnNfbG93ZXJfYm91bmQ6IG51bGwKcnNfdXBwZXJfYm91bmQ6IG51bGwKcnNfdmV0b190aHJlc2hvbGQ6IG51bGwK
