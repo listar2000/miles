@@ -139,8 +139,9 @@ class WeightUpdater:
 
         checksums = {name: {} for name, _ in adapters} if self.is_lora and self.args.check_lora_weight_equal else None
         if checksums is not None:
+            # [fork hook-012] without PP rank 0 already holds the full adapter
             assert (
-                self._hf_weight_iterator.placement.gather_pp
+                self._hf_weight_iterator.placement.gather_pp or self.args.pipeline_model_parallel_size == 1
             ), "the LoRA checksum manifest is recorded on one rank, which must hold the full adapter"
         with timer("update_weights_implementation"):
             pbar = tqdm(desc=f"[{protocol.group_name}] Update weights", total=0) if protocol.is_sender else None
