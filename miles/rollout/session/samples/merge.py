@@ -146,7 +146,6 @@ def _compute_sample_from_openai_record(
             choice["meta_info"],
             args.rollout_top_logprobs_num,
             sampling_logprobs_mode=record.request.get("sampling_logprobs_mode", "selected"),
-            flat=record.request.get("return_flat_raw_output_top_logprobs", False),  # [fork fix-016]
         )
     sample.rollout_routed_experts = (
         None if use_addition_r3 else get_routed_experts_from_response(args, choice, len(sample.tokens) - 1)

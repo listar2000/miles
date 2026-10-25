@@ -6,9 +6,8 @@ import math
 from types import SimpleNamespace
 
 import numpy as np
-import pybase64  # [fork fix-016]
 import pytest
-from tests.fast.fixtures.score_centering_fixtures import _args, _meta, _Tokenizer
+from tests.fast.fixtures.score_centering_fixtures import _args, _flat_meta, _meta, _Tokenizer
 from tests.fast.fixtures.session_fixtures import make_session_server_config
 
 from miles.rollout.generate_utils.rollout_topk_logprobs import validate_rollout_topk_logprobs_sample
@@ -44,12 +43,13 @@ def test_score_centering_training_and_evaluation_sessions(registry_type: type, c
                 {"temperature": 0}, tokenizer, config=config, turn_args=None, evaluation=session.evaluation
             ).body
             assert request["temperature"] == 0 and "top_logprobs" not in request
+            assert "return_flat_raw_output_top_logprobs" not in request
+            assert "return_flat_raw_top_logprobs_b64" not in request
         else:
             request = prepare_chat_request(
                 {}, tokenizer, config=config, turn_args=None, evaluation=session.evaluation
             ).body
             assert request["top_logprobs"] == 128 and request["temperature"] == 0.7
-            # [fork fix-016]
             assert request["return_flat_raw_output_top_logprobs"] and request["return_flat_raw_top_logprobs_b64"]
             with pytest.raises(MessageValidationError, match="temperature"):
                 prepare_chat_request(
@@ -57,26 +57,10 @@ def test_score_centering_training_and_evaluation_sessions(registry_type: type, c
                 )
 
 
-def _flat(meta: dict) -> dict:  # [fork fix-016]
-    """The meta_info SGLang returns for return_flat_raw_output_top_logprobs with base64 arrays."""
-    rows = meta.pop("output_top_logprobs")
-    vals = np.array([[entry[0] for entry in row] for row in rows], dtype=np.float32)
-    ids = np.array([[entry[1] for entry in row] for row in rows], dtype=np.int32)
-    return meta | {
-        "output_top_logprobs_val_flat_b64": pybase64.b64encode(vals.tobytes()).decode(),
-        "output_top_logprobs_idx_flat_b64": pybase64.b64encode(ids.tobytes()).decode(),
-        "output_top_logprobs_val_flat_b64_dtype": "float32",
-        "output_top_logprobs_idx_flat_b64_dtype": "int32",
-        "output_top_logprobs_shape": list(vals.shape),
-        "output_top_logprobs_null_prefix": 0,
-    }
-
-
-@pytest.mark.parametrize("flat", [False, True])  # [fork fix-016]
-def test_session_producer_trims_candidates_with_tito_tokens(flat: bool) -> None:
+@pytest.mark.parametrize("meta", [_meta, _flat_meta], ids=["nested", "flat"])
+def test_session_producer_trims_candidates_with_tito_tokens(meta) -> None:
     records = []
     for prompt, output, probabilities in (([0, 1], [2, 3], [0.5, 0.25]), ([0, 1, 2, 6], [4, 5], [0.55, 0.2])):
-        meta = _flat(_meta(output, probabilities)) if flat else _meta(output, probabilities)  # [fork fix-016]
         records.append(
             SessionRecord(
                 timestamp=2.0,
@@ -84,9 +68,8 @@ def test_session_producer_trims_candidates_with_tito_tokens(flat: bool) -> None:
                 method="POST",
                 path="v1/chat/completions",
                 status_code=200,
-                # [fork fix-016]
-                request={"input_ids": prompt, "top_logprobs": 3, "return_flat_raw_output_top_logprobs": flat},
-                response={"choices": [{"meta_info": meta, "finish_reason": "stop"}]},
+                request={"input_ids": prompt, "top_logprobs": 3},
+                response={"choices": [{"meta_info": meta(output, probabilities), "finish_reason": "stop"}]},
             )
         )
     samples = compute_samples_from_openai_records(

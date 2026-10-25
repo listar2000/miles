@@ -47,7 +47,10 @@ async def train(args, *, disposer: Disposer):
         disposer.add(critic_model, actor_model)
     # [fork fix-022] end
 
-    maybe_start_api_server(args, trainer_models={"actor": actor_model}, inference_controller=inference_controller)
+    disposer.add(
+        maybe_start_api_server(args, trainer_models={"actor": actor_model}, inference_controller=inference_controller)
+    )
+    disposer.add(rollout_executor)
     maybe_start_mini_ft_controller(args)
 
     # always update weight first so that sglang has the loaded weights from training.

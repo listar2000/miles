@@ -150,6 +150,8 @@ def test_lora_load_dir_resumes_the_latest_fully_saved_iteration(tmp_path):
         load=str(run),
         ref_load="/base",
         ref_ckpt_step=None,
+        ckpt_step=None,
+        exit_on_missing_checkpoint=False,
         lora_rank=8,
         lora_adapter_path="/seed-adapter",
         megatron_to_hf_mode="raw",
