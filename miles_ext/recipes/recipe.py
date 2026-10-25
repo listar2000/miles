@@ -63,8 +63,18 @@ DEFAULTS: dict[str, Any] = {
     # cpu/memory are requests (Modal bills max(request, usage)); timeout caps a hung run
     # disk_gib: node-local disk per container (None: Modal's default quota, 512 GiB); needed when
     # optimizer.offload disk streams Adam's state to optimizer.disk_dir on that disk
-    "cluster": {"gpu": "H200", "nodes": 1, "train_gpus": 4, "cpu": 32, "memory_gib": 192, "timeout_hours": 6,
-                "disk_gib": None},
+    # placement split (ext-036): engine fields set to None take the cluster's value
+    "cluster": {
+        "gpu": "H200",
+        "nodes": 1,
+        "train_gpus": 4,
+        "cpu": 32,
+        "memory_gib": 192,
+        "timeout_hours": 6,
+        "disk_gib": None,
+        "placement": "one_cluster",
+        "engine": {"cpu": None, "memory_gib": None, "disk_gib": None, "timeout_hours": None, "idle_minutes": 30},
+    },
     # tasks_volume "<volume>:/<path>": the task dirs on a Modal volume, instead of tasks_dir
     "taskset": {"tasks_dir": None, "tasks_volume": None, "prompts": None, "harness": HARNESS_SANDBOX},
     "agent": {
@@ -217,6 +227,11 @@ def load(path: str | Path, overrides: dict | None = None) -> dict:
 
 
 GPU_TYPES = ("H100", "H200", "B200", "B300")
+ONE_CLUSTER, SPLIT = "one_cluster", "split"
+PLACEMENTS = (ONE_CLUSTER, SPLIT)
+# split: the trainer reaches engine i at 127.0.0.1:SPLIT_ENGINE_PORT + i (a relay to the engine container)
+SPLIT_ENGINE_PORT = 31000
+SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # ext-037, through hook-013
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
 # does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
@@ -243,6 +258,12 @@ FIELD_RULES: dict[str, dict] = {
     "cluster.memory_gib": {"type": "int", "min": 1},
     "cluster.timeout_hours": {"type": "number", "min": 0.1, "max": 24},
     "cluster.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},  # Modal's ephemeral_disk cap
+    "cluster.placement": {"type": "str", "enum": PLACEMENTS},
+    "cluster.engine.cpu": {"type": "number", "nullable": True, "min": 1},
+    "cluster.engine.memory_gib": {"type": "int", "nullable": True, "min": 1},
+    "cluster.engine.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},
+    "cluster.engine.timeout_hours": {"type": "number", "nullable": True, "min": 0.1, "max": 24},
+    "cluster.engine.idle_minutes": {"type": "int", "min": 1, "max": 1440},
     "model.preset": {"type": "str", "enum": tuple(sorted(PRESETS))},
     "model.backend": {"type": "str", "nullable": True, "enum": BACKENDS},
     "model.revision": {"type": "str", "nullable": True},
@@ -384,7 +405,12 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
     cluster = recipe["cluster"]
-    if recipe["algorithm"]["mode"] == "fully_async" and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE:
+    if is_split(recipe):
+        _validate_split(recipe)
+    elif (
+        recipe["algorithm"]["mode"] == "fully_async"
+        and not 0 < cluster["train_gpus"] < cluster["nodes"] * GPUS_PER_NODE
+    ):
         raise ValueError("fully_async needs 0 < cluster.train_gpus < all GPUs (the rest serve rollouts)")
     algo, aio = recipe["algorithm"], recipe["async"]
     if (limit := algo["max_token_weighted_staleness"]) is not None:
@@ -421,12 +447,48 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
         raise ValueError(f"tracking.wandb_project {project!r} is reserved (archive or smoke runs)")
 
 
+def is_split(recipe: dict) -> bool:
+    return recipe["cluster"]["placement"] == SPLIT
+
+
+def _validate_split(recipe: dict) -> None:
+    """Reject split recipes the volume sync or the one-node trainer cannot run."""
+    cluster, lora = recipe["cluster"], recipe["lora"]
+    if recipe["algorithm"]["mode"] != "fully_async":
+        raise ValueError("cluster.placement split needs algorithm.mode fully_async")
+    if not (int(lora["rank"]) > 0 and lora["serving"] == "adapter"):
+        raise ValueError(
+            "cluster.placement split supports LoRA with lora.serving adapter only "
+            "(merged LoRA and full-parameter syncs are not carried over the volume)"
+        )
+    if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
+        raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1 (hook-011)")
+    if int(cluster["nodes"]) != 1:
+        raise ValueError("cluster.placement split runs one trainer node (cluster.nodes 1)")
+    if int(cluster["train_gpus"]) != GPUS_PER_NODE:
+        raise ValueError(
+            f"cluster.placement split: the trainer uses its whole node, cluster.train_gpus {GPUS_PER_NODE}"
+        )
+
+
+def rollout_gpus(recipe: dict) -> int:
+    """GPUs serving rollouts: one engine container in split, else the cluster's GPUs the trainer leaves."""
+    cluster = recipe["cluster"]
+    if is_split(recipe):
+        return GPUS_PER_NODE
+    return int(cluster["nodes"]) * GPUS_PER_NODE - int(cluster["train_gpus"])
+
+
+def num_engines(recipe: dict) -> int:
+    return rollout_gpus(recipe) // int(recipe["rollout"]["gpus_per_engine"])
+
+
 def rollout_precision(recipe: dict) -> str:
     return recipe["rollout"]["precision"] or next(iter(PRESETS[recipe["model"]["preset"]].precisions))
 
 
 def _validate_rollout(recipe: dict) -> None:
-    preset, roll, cluster = PRESETS[recipe["model"]["preset"]], recipe["rollout"], recipe["cluster"]
+    preset, roll = PRESETS[recipe["model"]["preset"]], recipe["rollout"]
     precision, gpus = rollout_precision(recipe), int(roll["gpus_per_engine"])
     if precision not in preset.precisions:
         raise ValueError(
@@ -434,8 +496,7 @@ def _validate_rollout(recipe: dict) -> None:
     if GPUS_PER_NODE % gpus:
         raise ValueError(
             f"rollout.gpus_per_engine {gpus} must divide {GPUS_PER_NODE} so an engine stays inside a node")
-    rollout_gpus = cluster["nodes"] * GPUS_PER_NODE - cluster["train_gpus"]
-    if recipe["algorithm"]["mode"] == "fully_async" and rollout_gpus % gpus:
+    if recipe["algorithm"]["mode"] == "fully_async" and rollout_gpus(recipe) % gpus:
         raise ValueError(f"the rollout GPUs (all GPUs minus cluster.train_gpus) must split into engines of {gpus}")
     if precision == FP8_FP4 and (backend(recipe) != "megatron" or not preset.train_dir_name):
         raise ValueError(f"rollout.precision {FP8_FP4} needs the Megatron trainer and a BF16 train copy in the preset")
@@ -576,8 +637,21 @@ SHAPE_KEYS = ("gpu", "nodes", "cpu", "memory_gib", "timeout_hours", "disk_gib")
 
 
 def shape(recipe: dict) -> dict[str, Any]:
-    """The cluster fields Modal needs when the function is defined (decorator arguments)."""
-    return {k: recipe["cluster"][k] for k in SHAPE_KEYS}
+    """The cluster fields Modal needs when the function is defined (decorator arguments). Split adds
+    the placement and the engine container's resolved shape; a one-cluster shape is unchanged."""
+    cluster = recipe["cluster"]
+    out = {k: cluster[k] for k in SHAPE_KEYS}
+    if is_split(recipe):
+        engine = cluster["engine"]
+        out["placement"] = SPLIT
+        out["engine"] = {
+            "gpu": cluster["gpu"],
+            "cpu": engine["cpu"] or cluster["cpu"],
+            "memory_gib": engine["memory_gib"] or cluster["memory_gib"],
+            "disk_gib": engine["disk_gib"] or cluster["disk_gib"],
+            "timeout_hours": engine["timeout_hours"] or cluster["timeout_hours"],
+        }
+    return out
 
 
 def needs_tunnel(recipe: dict) -> bool:
@@ -707,7 +781,6 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     algo, cluster = recipe["algorithm"], recipe["cluster"]
     batch, n = int(algo["rollout_batch_size"]), int(algo["n_samples"])
     fully_async = algo["mode"] == "fully_async"
-    total_gpus = int(cluster["nodes"]) * GPUS_PER_NODE
     ckpt_dir = RESULTS / run_id / "checkpoints"
     mem_fraction = algo["sglang_mem_fraction"] or (0.85 if fully_async else 0.7)
     actor_nodes, actor_gpus_per_node = trainer_layout(recipe)
@@ -725,7 +798,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         # upstream af4413b74.
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
-        --rollout-num-gpus {total_gpus - int(cluster["train_gpus"])} --num-gpus-per-node {GPUS_PER_NODE}
+        --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {GPUS_PER_NODE}
+        {_split_args(recipe)}
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
@@ -810,6 +884,15 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     alloc = f"expandable_segments:{fully_async}"
     args += ["--train-env-vars", json.dumps({"PYTORCH_CUDA_ALLOC_CONF": alloc})]
     return args + [str(a) for a in recipe["extra_args"]]
+
+
+def _split_args(recipe: dict) -> str:
+    """Return the split argv: the engines' local relay addresses and the volume sync protocol."""
+    if not is_split(recipe):
+        return ""
+    addrs = " ".join(f"127.0.0.1:{SPLIT_ENGINE_PORT + i}" for i in range(num_engines(recipe)))
+    return f"""--rollout-external-engine-addrs {addrs}
+        --custom-weight-transfer-protocol-path {SPLIT_SYNC_PROTOCOL}"""
 
 
 def _loss_args(algo: dict) -> str:
