@@ -44,6 +44,7 @@ import modal
 
 from miles_ext import stack
 from miles_ext.checkpoint import staged_save
+from miles_ext.launch import split
 from miles_ext.platform import compile_cache
 from miles_ext.platform.checkpoints import apply_retention_local
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
@@ -76,6 +77,7 @@ else:
     SHAPE = json.loads(os.environ[_SHAPE_ENV])
 
 HOURS = 3600
+SPLIT = SHAPE.get("placement") == R.SPLIT  # cluster.placement split: the engines run in their own function
 # Upstream's launchers put the Megatron-LM checkout on PYTHONPATH (command_utils'
 # ray backend); its editable install exposes megatron.core but not every package
 # Megatron training imports (megatron.post_training), and the image's
@@ -283,6 +285,71 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     return _head(recipe, run_id, run_dir, backend, deadline, head_ip, env, start)
 
 
+if SPLIT:
+    ENGINE = SHAPE["engine"]
+
+    @app.function(
+        image=image,
+        gpu=f"{ENGINE['gpu']}:{R.GPUS_PER_NODE}",
+        cpu=ENGINE["cpu"],
+        memory=ENGINE["memory_gib"] * 1024,
+        ephemeral_disk=ENGINE["disk_gib"] * 1024 if ENGINE.get("disk_gib") else None,
+        secrets=secrets,
+        volumes={R.MODELS: models_volume, R.RESULTS: results_volume, compile_cache.MOUNT: cache_volume},
+        timeout=int(ENGINE["timeout_hours"] * HOURS),
+        # Modal refuses nonpreemptible for GPU functions: a preempted engine ends the trainer's segment as a
+        # lost gang node does today (the relay keeps the old tunnel)
+        single_use_containers=True,
+    )
+    def engine(recipe: dict, run_id: str) -> dict:
+        """The rollout engines of a split run (miles_ext.launch.split.engine); outlives a failed trainer."""
+        from miles_ext.launch.split import engine as split_engine
+        from miles_ext.platform import progress as P
+
+        recipe = R.from_dict(recipe)
+        _check_shape(recipe)
+        models_volume.reload()
+        compile_cache.restore(_compile_cache_key())
+        saver = compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start()
+        env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": _pythonpath()}
+        try:
+            return split_engine.serve(
+                recipe,
+                run_id,
+                progress=P.progress_dict(TARGET),
+                env=env,
+                results_volume=results_volume,
+                call_id=modal.current_function_call_id(),
+            )
+        finally:
+            saver.stop()
+
+
+def _ensure_engine(recipe: dict, run_id: str) -> str | None:
+    """Split: the run's engine call, spawned unless one is already starting or serving (a relaunched
+    trainer reconnects to it). None for one_cluster."""
+    if not SPLIT:
+        return None
+    from miles_ext.platform import progress as P
+
+    progress = P.progress_dict(TARGET)
+    state = progress.get(split.engine_key(run_id)) or {}
+    if state.get("phase") in ("starting", "ready") and P.call_running(state.get("call_id")):
+        print(f"split: reusing the engine call {state['call_id']} ({state['phase']})", flush=True)
+        return state["call_id"]
+    # a stale "done" from an earlier segment would release the new engine at once
+    progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": False}
+    call_id = engine.spawn(recipe, run_id).object_id
+    # replace an earlier engine's "ended", which would fail the trainer's wait before this one starts
+    progress[split.engine_key(run_id)] = {
+        "run_id": run_id,
+        "call_id": call_id,
+        "phase": "starting",
+        "started_at": time.time(),
+    }
+    return call_id
+
+
 def _uploader(recipe: dict, run_id: str, run_dir, rank: int):
     """This node's background upload of staged saves (``checkpoint.stage_dir``), or None."""
     stage = recipe["checkpoint"]["stage_dir"]
@@ -429,6 +496,16 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             env["MILES_SESSION_PUBLIC_URL"] = f"{tunnel.url}/{token}"
             print(f"session tunnel: {tunnel.url}/<token>/<port>/...", flush=True)
 
+        if SPLIT:  # before `ray start`: Ray workers inherit the relays' addresses through env
+            from miles_ext.launch.split import relay, volume_sync
+
+            stack_ctx.callback(volume_sync.commit_watcher(results_volume.commit).set)
+            relay_proc, _, agent_url = relay.connect(
+                recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
+            )
+            stack_ctx.callback(relay_proc.terminate)
+            env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
+
         # a segment whose workers died before reading leaves items behind; workers read only after
         # the head's port opens, so clearing here, before the head starts, is safe
         completion_queue.clear(partition=run_id)
@@ -456,6 +533,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                                "see the exit record and the App logs")
         # a segment that saved and stopped cleanly also counts: workers exit without error
         succeeded = True
+        if SPLIT and record["reason"] == "success":  # the run is complete: the engine container exits
+            relay.release(run_id, P.progress_dict(TARGET))
         if FINAL_RETENTION and record["reason"] == "success":
             ckpt = recipe["checkpoint"]
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
@@ -492,8 +571,9 @@ def spawn_detached():
     print its ids on a ``LAUNCHED`` line. The configuration is ``MILES_EXT_LAUNCH``."""
     fn = train.with_options(timeout=int(LAUNCH["timeout"])) if LAUNCH.get("timeout") else train
     with modal.enable_output(), app.run(detach=True, environment_name=TARGET.modal_environment):
+        engine_call = _ensure_engine(RECIPE, LAUNCH["run_id"])
         call = fn.spawn(RECIPE, LAUNCH["run_id"], LAUNCH.get("opts") or {})
-        out = {"app_id": app.app_id, "call_id": call.object_id}
+        out = {"app_id": app.app_id, "call_id": call.object_id, **({"engine_call_id": engine_call} if SPLIT else {})}
     print("LAUNCHED " + json.dumps(out), flush=True)
 
 
@@ -513,4 +593,29 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
         print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")
         return
     opts = {"segment_seconds": segment_hours * HOURS} if segment_hours else {}
-    print(f"done: {train.spawn(recipe, run_id, opts).get()}")
+    if engine_call := _ensure_engine(recipe, run_id):
+        from miles_ext.launch.split import relay
+        from miles_ext.platform import progress as P
+
+        # the trainer node is billed from spawn; start it once the engines serve, not while they load
+        print(f"split: engine call {engine_call}; the trainer starts when the engines are ready", flush=True)
+        relay.wait_ready(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
+        print("split: engines ready; starting the trainer", flush=True)
+    call = train.spawn(recipe, run_id, opts)
+    print(f"trainer call {call.object_id}", flush=True)
+    try:
+        print(f"done: {call.get()}")
+    except Exception as e:
+        if not SPLIT:
+            raise
+        # the app, and with it the engine call a relaunched trainer reconnects to, lives as long as this
+        # entrypoint: wait for the engine to end (released by a later trainer, or idle_minutes without one)
+        print(
+            f"trainer call {call.object_id} ended: {type(e).__name__}: {e}; waiting on the engine call "
+            f"{engine_call} (up to cluster.engine.idle_minutes without a trainer)",
+            flush=True,
+        )
+        try:
+            print(f"engine: {modal.FunctionCall.from_id(engine_call).get()}", flush=True)
+        except Exception as e2:
+            print(f"engine call {engine_call} ended: {type(e2).__name__}: {e2}", flush=True)
