@@ -309,6 +309,34 @@ def test_delete_refuses_resume_point(monkeypatch):
     assert removed == ["run1/hf/iter_0000020", "run1/checkpoints/iter_0000010"]
 
 
+def test_tracker_finds_lora_resume_step(tmp_path):
+    """A LoRA run writes no tracker; its resume step is the newest iter_N/adapter with rollout/N."""
+    from miles_ext.platform.layout import read_tracker, read_tracker_volume
+
+    ckpt = tmp_path / "run1" / "checkpoints"
+    assert read_tracker(tmp_path / "run1") is None
+    for s in (1, 3):
+        (ckpt / C.iter_dir(s) / "adapter").mkdir(parents=True)
+    for i in (1, 3, 5):  # rollout/5 without its adapter: a save cut short
+        (ckpt / "rollout" / str(i)).mkdir(parents=True)
+    assert read_tracker(tmp_path / "run1") == 3
+
+    class Vol:
+        def read_file(self, path):
+            raise FileNotFoundError(path)
+
+        def listdir(self, path, recursive=False):
+            full = tmp_path / path
+            if not full.is_dir():
+                raise FileNotFoundError(path)
+            return [SimpleNamespace(path=f"{path}/{c.name}") for c in full.iterdir()]
+
+    assert read_tracker_volume(Vol(), "run1") == 3
+    assert read_tracker_volume(Vol(), "run2") is None
+    (ckpt / "latest_checkpointed_iteration.txt").write_text("1")  # a full run's tracker wins
+    assert read_tracker(tmp_path / "run1") == 1
+
+
 # weights
 
 def test_weights_key():
