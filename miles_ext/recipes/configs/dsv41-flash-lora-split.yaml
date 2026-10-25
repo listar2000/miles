@@ -1,0 +1,92 @@
+# DeepSeek-V4.1-Flash LoRA in split placement (ext-036): one B300 trainer node, the engines in their own container.
+name: dsv41-flash-lora-split
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 1  # the trainer; the engines are cluster.engine
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 1280
+  timeout_hours: 10
+  placement: split
+  engine:
+    memory_gib: 768
+    idle_minutes: 30
+parallel:
+  tp: 4
+  pp: 1  # adapter sync to separate engines needs PP 1 (hook-011)
+  cp: 2
+  ep: 8
+lora:
+  rank: 32
+  alpha: 32
+  serving: adapter
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 262144
+  max_running_requests: 128
+taskset:
+  tasks_volume: miles-datasets:/tb4t-20261016/tasks
+  prompts: $MILES_DATA/prompts/overfit8_a5.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 256
+  exec_timeout: 300
+  timeout: 7200
+  trial_timeout: 10800
+  verifier_timeout: 3600
+  setup_timeout: 1800
+  context_exhausted_scores_zero: true
+sandbox:
+  provider: sail
+  lifetime_secs: 14400
+  idle_secs: 3600
+  build_timeout_multiplier: 3
+algorithm:
+  mode: fully_async
+  num_rollout: 12
+  rollout_batch_size: 8
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 32768
+  max_seq_len: 262144
+  lr: 1.0e-4
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0  # unused by the MIS function; recipe still passes --use-tis
+  max_weight_staleness: 4
+  max_token_weighted_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  grpo_std_normalization: false
+  per_token_loss: true
+async:
+  max_concurrent_samples: 96
+checkpoint:
+  save_interval: 2
+  keep: 8
+  save_optimizer: true
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab
+  tags: ["exp:overfit-a7"]
+extra_args:
+  - --custom-megatron-init-path
+  - miles_ext.memory.ckpt_offload.install
+  - --distributed-timeout-minutes
+  - "60"
+  - --dsv4-reuse-indexer-topk  # fix-047
+  - --dsv4-indexer-tp-split  # fix-052
+  - --skip-actor-forward-only  # one optimizer step per batch: old log-probs = the train forward's
+  - --sglang-speculative-algorithm
+  - DSPARK  # static verify (image default); fix-053 keeps R3 rows
+  - --custom-tis-function-path
+  - miles_ext.obs.mismatch_tis.mis_with_mask_health  # #82
+  # MIS inline (no file in the image): token mask [0.5, 5.0], batch-normalized, use_rs false; mis.py
+  # also reads the rs_* keys, so they are set to null
+  - --custom-config-path
+  - base64:dXNlX3RpczogdHJ1ZQp1c2VfcnM6IGZhbHNlCnRpc19sZXZlbDogdG9rZW4KdGlzX21vZGU6IG1hc2sKdGlzX2xvd2VyX2JvdW5kOiAwLjUKdGlzX3VwcGVyX2JvdW5kOiA1LjAKdGlzX2JhdGNoX25vcm1hbGl6ZTogdHJ1ZQpyc19sZXZlbDogdG9rZW4KcnNfbG93ZXJfYm91bmQ6IG51bGwKcnNfdXBwZXJfYm91bmQ6IG51bGwKcnNfdmV0b190aHJlc2hvbGQ6IG51bGwK
