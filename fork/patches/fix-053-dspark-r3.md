@@ -22,7 +22,7 @@ was 78.5 vs 55.4 tok/s without speculative decoding (+42%; +36% vs the fastest b
   `None`, so the patch changes nothing there; with R3 off all three fields are `None`.
 
 ## How it is applied
-`fork/deps/sglang/fix-053-dspark-r3.patch`, applied by `fork/deps/sglang/apply.py` to SGLang `7b6993a`:
+`fork/deps/sglang/fix-053-dspark-r3.patch`, applied by `fork/deps/sglang/apply.py` to SGLang `3a938213c1`:
 `dspark_components/dspark_verify.py` (the struct and where it is built) and
 `dspark_components/dspark_worker_v2.py` (the `GenerationBatchResult`), each with a `[fork fix-053]` comment.
 

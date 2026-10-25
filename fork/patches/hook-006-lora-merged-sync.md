@@ -60,3 +60,6 @@ from outside the registry.
 - The LoRA resume branch in `resolve_args_checkpoint_load` keys on the save layout `iter_NNNNNNN/adapter`
   and `rollout/N`. If upstream adds a tracker or renames either, resume falls back to a fresh run
   (quietly): on a sync, check `save_checkpoint_with_lora` and `compute_rollout_checkpoint_dir`.
+- Since v0.1.3, upstream's resume selection runs first: an explicit `--ckpt-step` or
+  `--exit-on-missing-checkpoint`, or a Megatron tracker under `--load`, returns before the LoRA
+  branch. LoRA saves write no tracker, so a LoRA resume reaches it only without those flags.

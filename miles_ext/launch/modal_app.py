@@ -407,7 +407,7 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
         "MASTER_ADDR": head_ip,
         "MILES_HOST_IP": node_ip,
         "RAY_ADDRESS": f"{head_ip}:6379",
-        # no RAY_API_SERVER_ADDRESS: the fork's head-node lookup reads the GCS (fix-003)
+        # no RAY_API_SERVER_ADDRESS: Miles' head-node lookup reads the GCS (upstream #3640)
         "WANDB_RUN_GROUP": run_id,
         # wandb.init reads tags from here; Miles does not pass any
         "WANDB_TAGS": ",".join(R.wandb_tags(recipe) + [f"miles-mobius:{_trainer()}", f"upstream:{stack.UPSTREAM_LABEL}",

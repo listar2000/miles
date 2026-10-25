@@ -27,20 +27,27 @@ bf16 per token, so the update reaches the engine in full. SGLang at our pin has 
 
 ## How it is applied
 `fork/deps/sglang/hook-010-dsv4-lora-serving.patch`, applied with fix-053 by `fork/deps/sglang/apply.py` to
-SGLang `7b6993a`, one `[fork hook-010]` comment per file: `lora/backend/base_backend.py`,
+SGLang `3a938213c1` (v0.1.3's `sglang-miles`), one `[fork hook-010]` comment per file: `lora/backend/base_backend.py`,
 `lora/backend/triton_backend.py`, `lora/layers.py`, `lora/mem_pool.py`, `lora/utils.py`, `models/deepseek_v4.py`.
-The PR is written for a newer `sglang-miles`; at our pin four `deepseek_v4.py` hunks were placed by hand:
-three differ only in context (no `_is_hip` early return in `_normalize_q_lora`, no `_is_gfx95_supported or`
-in the multi-stream check, no `inv_rope` kwarg), and one is structural: our pin has no `_project_wo_b` and
-no `wo_b.use_decode_attn_tp` read, so the grouped `wo_a` adapter call goes right before the inline `wo_b`,
-and the CP-decode part of that hunk has nothing to patch. Instead `should_apply_lora` refuses CP decode attention TP,
-which flips flags on the linears a LoRA wrapper holds (5 lines beyond the PR).
+It is #45231 at head `34033fe9` placed on our pin by hand, plus two guards beyond the PR:
+- `should_apply_lora` refuses CP decode attention TP, which flips flags on the linears a LoRA wrapper holds
+  (5 lines);
+- `_project_wo_b` reads `wo_b.use_decode_attn_tp` with `getattr(..., False)`: a LoRA wrapper has no such
+  flag, and with the guard above it is always false.
+Redone in sync-v0.1.3 (from `7b6993a`; `sglang-miles` was rebuilt on SGLang main on 10-13, so the old patch's
+context was gone): the `utils.py` name lists sit next to the GLM-5.3 KDA `f_*`/`g_*` projections, and the
+grouped `wo_a` adapter call is the last step of the `wo_a` branch, before `_project_wo_b`.
+Not taken from #45231's later commits (head `1fb53a23`, 10-23): `wo_a`'s output kept unquantized under LoRA
+(only matters when `wo_b` is not a target; our V4.1 LoRA spec always adapts `wo_b`, so the fused MXFP8 epilogue is off),
+the TP-global LoRA layout for MLP rows gathered across attention-DP ranks (we run no DP attention), and CP decode
+support in place of our guard. Re-read them at the next `sglang-miles` bump.
 Used when a recipe sets `lora.serving: adapter`: Miles then starts the engines with `--enable-lora` and
 pushes the bf16 adapter at each sync (upstream's adapter path; hook-011 for disaggregated engines).
 LoRA with DSpark needs SGLang's static ragged verify (the default), no `--speculative-adaptive`, no
 `experimental_sgl_trtllm` MoE runner; the draft runs without the adapter.
 
 ## Remove when
-SGLANG_COMMIT moves past #45231's merge into `sglang-miles`. Upstream status 2026-10-21: #45231 open, CI red;
+SGLANG_COMMIT moves past #45231's merge into `sglang-miles`. Upstream status 2026-10-25: #45231 open (head
+`1fb53a23`, rebased on `sglang-miles` past `3a938213c1`). 2026-10-21:
 SGLang main `aa10927271` has no LoRA path for V4 (no `should_apply_lora` in `models/deepseek_v4.py`;
 #36579 and #36578 open).

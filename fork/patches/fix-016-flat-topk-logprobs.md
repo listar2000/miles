@@ -36,3 +36,6 @@ On a sync, check upstream has not started sending these flags itself.
 
 ## Remove when
 Upstream Miles requests the flat format for rollout top-k logprobs.
+
+**Removed in sync-v0.1.3:** upstream v0.1.3 requests the flat format itself (radixark/miles#3952); the sync took
+upstream's side in every file this fix touched and its commit carries `Retires: fix-016`.

@@ -1,5 +1,5 @@
 diff --git a/python/sglang/srt/lora/backend/base_backend.py b/python/sglang/srt/lora/backend/base_backend.py
-index 911ac19..9a2fe82 100644
+index 911ac19939..9a2fe822ab 100644
 --- a/python/sglang/srt/lora/backend/base_backend.py
 +++ b/python/sglang/srt/lora/backend/base_backend.py
 @@ -133,6 +133,15 @@ class BaseLoRABackend(LoRABackendLmHeadMixing):
@@ -19,7 +19,7 @@ index 911ac19..9a2fe82 100644
          self, x: torch.Tensor, weights: torch.Tensor, *args, **kwargs
      ) -> torch.Tensor:
 diff --git a/python/sglang/srt/lora/backend/triton_backend.py b/python/sglang/srt/lora/backend/triton_backend.py
-index 30560a0..2120003 100644
+index ddd291d2c2..5b9826490b 100644
 --- a/python/sglang/srt/lora/backend/triton_backend.py
 +++ b/python/sglang/srt/lora/backend/triton_backend.py
 @@ -277,6 +277,54 @@ class TritonLoRABackend(BaseLoRABackend):
@@ -78,10 +78,10 @@ index 30560a0..2120003 100644
          self,
          x: torch.Tensor,
 diff --git a/python/sglang/srt/lora/layers.py b/python/sglang/srt/lora/layers.py
-index e913ae0..2878c18 100644
+index 6cd906ac4a..9fe2d69509 100644
 --- a/python/sglang/srt/lora/layers.py
 +++ b/python/sglang/srt/lora/layers.py
-@@ -502,6 +502,38 @@ class ColumnParallelLinearWithLoRA(BaseLayerWithLoRA):
+@@ -501,6 +501,38 @@ class ColumnParallelLinearWithLoRA(BaseLayerWithLoRA):
          if self.lora_backend.supports_lora_a_overlap:
              self.lora_backend.start_lora_a_overlap(x, self.A_buffer)
  
@@ -121,10 +121,10 @@ index e913ae0..2878c18 100644
          # duplicate the logic in ColumnParallelLinear
          lora_active = self.lora_active
 diff --git a/python/sglang/srt/lora/mem_pool.py b/python/sglang/srt/lora/mem_pool.py
-index 0fe8391..cf21450 100644
+index fe895c80d5..9ff96ecdde 100644
 --- a/python/sglang/srt/lora/mem_pool.py
 +++ b/python/sglang/srt/lora/mem_pool.py
-@@ -368,7 +368,14 @@ class LoRAMemoryPool:
+@@ -366,7 +366,14 @@ class LoRAMemoryPool:
          # commit to allocating 4D per-expert LoRA buffers.
          from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
  
@@ -141,7 +141,7 @@ index 0fe8391..cf21450 100644
      @staticmethod
      def _get_fused_shared_moe(base_model: torch.nn.Module, layer_idx: int):
 diff --git a/python/sglang/srt/lora/utils.py b/python/sglang/srt/lora/utils.py
-index 7524ffc..a7073ae 100644
+index b899e1aca2..e9638d56cc 100644
 --- a/python/sglang/srt/lora/utils.py
 +++ b/python/sglang/srt/lora/utils.py
 @@ -341,7 +341,17 @@ def get_normalized_target_modules(
@@ -171,26 +171,26 @@ index 7524ffc..a7073ae 100644
  ]
  DSA_INDEXER_LORA_NAMES = frozenset(
      {"indexer.wq_b", "indexer.wk", "indexer.weights_proj"}
-@@ -405,6 +416,8 @@ REPLICATED_LINEAR_LORA_NAMES = [
-     "fused_qkv_a_proj_with_mqa",
-     "fc1_latent_proj",
+@@ -407,6 +418,8 @@ REPLICATED_LINEAR_LORA_NAMES = [
      "fc2_latent_proj",
+     "f_a_proj",
+     "g_a_proj",
 +    "wq_a",
 +    "wkv",
      *DSA_INDEXER_LORA_NAMES,
  ]
  # Attention-projection LoRA modules shard on the attention-TP group, which
-@@ -423,6 +436,9 @@ ATTN_TP_LORA_MODULE_NAMES = frozenset(
-         "wo_ud",
-         "in_proj",
-         "in_proj_qkvz",
+@@ -428,6 +441,9 @@ ATTN_TP_LORA_MODULE_NAMES = frozenset(
+         "b_proj",
+         "f_b_proj",
+         "g_b_proj",
 +        "wq_b",
 +        "wo_a",
 +        "wo_b",
      }
  )
  
-@@ -448,6 +464,11 @@ _KNOWN_LORA_TARGET_MODULES = frozenset(
+@@ -458,6 +474,11 @@ _KNOWN_LORA_TARGET_MODULES = frozenset(
          "fused_qkv_a_proj_with_mqa",
          "q_b_proj",
          "kv_b_proj",
@@ -203,7 +203,7 @@ index 7524ffc..a7073ae 100644
      | DSA_INDEXER_LORA_NAMES
  )
 diff --git a/python/sglang/srt/models/deepseek_v4.py b/python/sglang/srt/models/deepseek_v4.py
-index f9f7589..85ff80e 100644
+index 8f5d72d5b8..4369462f64 100644
 --- a/python/sglang/srt/models/deepseek_v4.py
 +++ b/python/sglang/srt/models/deepseek_v4.py
 @@ -3,6 +3,7 @@ from __future__ import annotations
@@ -222,7 +222,7 @@ index f9f7589..85ff80e 100644
  from sglang.srt.managers.mm_utils import (
      MultiModalityDataPaddingPatternMultimodalTokens,
      embed_mm_inputs,
-@@ -185,6 +187,7 @@ from sglang.srt.runtime_context import (
+@@ -192,6 +194,7 @@ from sglang.srt.runtime_context import (
      get_device,
      get_exec,
      get_forward,
@@ -230,7 +230,7 @@ index f9f7589..85ff80e 100644
      get_parallel,
      get_platform,
  )
-@@ -804,7 +807,8 @@ class MqaAttentionBase(nn.Module):
+@@ -880,7 +883,8 @@ class MqaAttentionBase(nn.Module):
          assert self.head_dim == config.head_dim
          assert config.num_key_value_heads == 1
  
@@ -240,31 +240,31 @@ index f9f7589..85ff80e 100644
              envs.SGLANG_OPT_FUSE_WQA_WKV.get() if fuse_wqa_wkv is None else fuse_wqa_wkv
          )
          fp8: bool = (
-@@ -1268,7 +1272,8 @@ class MQALayer(MqaAttentionBase):
-         self, q: torch.Tensor
-     ) -> Tuple[torch.Tensor, torch.Tensor | Mxfp8SwizzledInput]:
+@@ -1347,7 +1351,8 @@ class MQALayer(MqaAttentionBase):
          # The indexer needs the BF16 normalized row; wq_b needs the quantized one.
+         if _is_hip:
+             return _hip.q_norm_for_wq_b(self, q)
 -        method = self.wq_b.quant_method
 +        # a LoRA-wrapped wq_b has no quant_method and takes the unquantized row
 +        method = getattr(self.wq_b, "quant_method", None)
          if (
              _is_cuda
              and self.is_dsv41
-@@ -2153,7 +2158,11 @@ class MQALayer(MqaAttentionBase):
-                 or (
-                     forward_batch.forward_mode.is_target_verify()
+@@ -2252,7 +2257,11 @@ class MQALayer(MqaAttentionBase):
                      # Other MXFP8 backends may share mutable GEMM workspace.
--                    and getattr(self.wq_b.quant_method, "mxfp8_dense_backend", None)
-+                    and getattr(
-+                        getattr(self.wq_b, "quant_method", None),
-+                        "mxfp8_dense_backend",
-+                        None,
-+                    )
-                     == Mxfp8DenseGemmBackend.FLASHINFER_CUTEDSL
+                     and (
+                         _is_gfx95_supported
+-                        or getattr(self.wq_b.quant_method, "mxfp8_dense_backend", None)
++                        or getattr(
++                            getattr(self.wq_b, "quant_method", None),
++                            "mxfp8_dense_backend",
++                            None,
++                        )
+                         == Mxfp8DenseGemmBackend.FLASHINFER_CUTEDSL
+                     )
                  )
-             )
-@@ -2378,10 +2387,13 @@ class MQALayer(MqaAttentionBase):
-                     save_kv_cache=save_kv_cache,
+@@ -2502,10 +2511,13 @@ class MQALayer(MqaAttentionBase):
+                     **({} if inv_rope is None else {"inv_rope": inv_rope}),
                  )
              o = o[:, tp_slice, :]
 +        # a fused inverse RoPE leaves no wo_a input for the adapter
@@ -277,7 +277,7 @@ index f9f7589..85ff80e 100644
          ):
              # ROCm gfx950 fused path: inverse-RoPE + per-token-group mxfp8 quant
              # in one aiter kernel on the pre-view [T,H,Dh] output, then the a8w8
-@@ -2403,7 +2415,9 @@ class MQALayer(MqaAttentionBase):
+@@ -2527,7 +2539,9 @@ class MQALayer(MqaAttentionBase):
                  self.use_flashinfer_mxfp8_wo_b and not get_forward().sp_active
              )
              fuse_rope_wo_a = (
@@ -288,7 +288,7 @@ index f9f7589..85ff80e 100644
              )
  
              if _is_npu:
-@@ -2428,6 +2442,7 @@ class MQALayer(MqaAttentionBase):
+@@ -2552,6 +2566,7 @@ class MQALayer(MqaAttentionBase):
                  )
  
              o = o.view(o.shape[0], self.n_local_groups, -1)
@@ -296,16 +296,26 @@ index f9f7589..85ff80e 100644
  
              if fuse_rope_wo_a:
                  wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-@@ -2530,6 +2545,8 @@ class MQALayer(MqaAttentionBase):
+@@ -2657,6 +2672,8 @@ class MQALayer(MqaAttentionBase):
                          self.wo_a.qweight_type.weight_type,
                          self.o_lora_rank,
                      )
 +            if wo_a_lora:
 +                o = self.wo_a.apply_grouped_lora(o, wo_a_input)
  
-         from sglang.srt.layers.moe.mhc_post_fusion import current_mhc_post_fusion
+         return self._project_wo_b(o, defer_all_reduce)
  
-@@ -4987,6 +5004,46 @@ class DeepseekV4ForCausalLM(nn.Module):
+@@ -2667,7 +2684,8 @@ class MQALayer(MqaAttentionBase):
+             self.attn_tp_size > 1
+             and self.attn_tp_size == get_parallel().tp_size
+             and self.wo_b.reduce_results
+-            and not self.wo_b.use_decode_attn_tp
++            # a LoRA-wrapped wo_b has no use_decode_attn_tp (LoRA rules out decode attention TP)
++            and not getattr(self.wo_b, "use_decode_attn_tp", False)
+             and not should_skip_mlp_all_reduce()
+         )
+         o, _ = self.wo_b(
+@@ -4735,6 +4753,46 @@ class DeepseekV4ForCausalLM(nn.Module):
              )
          return len(seen)
  

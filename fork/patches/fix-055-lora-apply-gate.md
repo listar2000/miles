@@ -22,3 +22,6 @@ release's FP4 experts the wrap fails at engine start: `'Mxfp4FlashinferTrtllmMoE
 
 ## Remove when
 SGLANG_COMMIT includes sgl-project/sglang#39798 (SGLang main `2a8e9db3b0`).
+
+**Removed in sync-v0.1.3:** `sglang-miles` `3a938213c1` (v0.1.3's pin) has the gate in `init_lora_modules`;
+the patch file is deleted and the sync's stack commit carries `Retires: fix-055`.

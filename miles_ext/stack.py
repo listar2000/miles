@@ -11,23 +11,22 @@ from pathlib import Path
 # image is this image's layers untouched plus two of ours (Harbor deps, our
 # source over /root/miles), so CUDA, torch, SGLang and Megatron stay exactly
 # what upstream tested.
-UPSTREAM_TAG = "v0.1.2"
+UPSTREAM_TAG = "v0.1.3"
 # The upstream commit main last merged: UPSTREAM_TAG itself, or between releases
 # the commit BASE_IMAGE was built from (RFC 0001). The ledger and the src
 # layer's whiteouts diff against it.
-UPSTREAM_BASE = "69a147dfc2544f290923fa83b13467b9b17fc2f5"  # upstream main 2026-10-16
+UPSTREAM_BASE = "v0.1.3"
 # What image labels and W&B tags call the upstream: the tag, plus the commit when main is past it
 UPSTREAM_LABEL = UPSTREAM_TAG if UPSTREAM_BASE == UPSTREAM_TAG else f"{UPSTREAM_TAG}+{UPSTREAM_BASE[:10]}"
-# radixark/miles:dev-202610160544 built 2026-10-16 from Miles 69a147dfc, sglang-miles 7b6993a,
-# Megatron-LM miles-main 9df207f (read from the image's .git refs): the v0.1.2
-# Dockerfile and pins, plus 9 SGLang and 1 Megatron commits
-BASE_IMAGE = "radixark/miles:dev@sha256:c64fa344e3a86715f03c0a1b6a422c474e0035355591a2f6da87bf52a74c52da"
+# radixark/miles:v0.1.3, the release image (2026-10-23): Miles v0.1.3 (74f47d37c8), sglang-miles
+# 3a938213c1 on SGLang v0.5.22, Megatron-LM miles-main 2fbe25a (the tag's release-lock.json)
+BASE_IMAGE = "radixark/miles:v0.1.3@sha256:bb235de60c2dd481c5255e1eb9f104b37ce47d125eb288267b4b00f44b51a845"
 # The SGLang checkout BASE_IMAGE ships (sglang-miles, installed editable). The fork's SGLang
 # patches (fork/deps/sglang/) are pinned to this commit: a sync that moves it re-checks them.
 SGLANG_SRC = "/sgl-workspace/sglang"
-SGLANG_COMMIT = "7b6993a"
+SGLANG_COMMIT = "3a938213c1"
 
-# Harbor: the branch Miles documents for v0.1.2 (harbor-miles-v0.20.0), pinned
+# Harbor: the branch Miles documents for v0.1.2 and v0.1.3 (harbor-miles-v0.20.0), pinned
 # by commit. Runtime changes we need go through Harbor's import_path (agents,
 # environments) in miles_ext; see fork/README.md "Harbor" for when that stops
 # being enough.
