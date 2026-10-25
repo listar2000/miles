@@ -71,6 +71,10 @@ class WeightTransferProtocol(ABC):
 
 
 def get_weight_transfer_protocol(args: Namespace) -> WeightTransferProtocol:
+    if path := getattr(args, "custom_weight_transfer_protocol_path", None):  # [fork hook-013]
+        from miles.utils.function_registry import load_function  # [fork hook-013]
+
+        return load_function(path)(args)  # [fork hook-013]
     mode = getattr(args, "update_weight_transfer_mode", "broadcast")
     if mode not in ("broadcast", "broadcast_packed", "p2p", "disk-delta"):
         raise ValueError(f"Unknown --update-weight-transfer-mode {mode!r}")
