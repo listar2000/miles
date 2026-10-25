@@ -19,6 +19,11 @@ engines as their own Modal function and reach them over the network.
   and token. Miles' parser takes only `http://host:port`, so the relay is what keeps Miles unchanged.
   Rejected: an `@app.server` (the address parser drops its https and path; the probe saw ~136 ms per
   ping through the gateway against ~57 ms through a tunnel, both across regions).
+- Sync (ext-037, hook-013): the sender writes `<run>/adapters/v<N>/` (one safetensors file and the bucket
+  order), the trainer's function process commits the volume, the engine container's agent reloads it
+  and hands each bucket to each engine as the colocated protocol does (`update_weights_from_tensor`,
+  CUDA IPC per TP rank). Rejected: NCCL inside the engine container (the agent's rank would share a GPU
+  with an engine rank, which NCCL refuses); posting the bytes through the tunnel (~10 MB/s).
 - The engine function outlives a failed trainer: a relaunch with the same run id reconnects to it.
   Modal refuses `nonpreemptible` for GPU functions, so a preempted engine ends the trainer's segment, as a
   lost gang node does today. It exits when the trainer reports success, or after `cluster.engine.idle_minutes`.
@@ -28,9 +33,10 @@ engines as their own Modal function and reach them over the network.
 ## How it is applied
 `miles_ext/recipes/recipe.py` (key, checks, `shape`, `_split_args`), `miles_ext/launch/modal_app.py`
 (`engine` function, `_ensure_engine`, the relay before `ray start`), `miles_ext/launch/split/`
-(`engine`, `relay`), recipe `dsv41-flash-lora-split.yaml`. Verify: the split
-smoke (DeepSeek-V4.1-Flash LoRA, 1 trainer + 1 engine node of 8x B300, 2026-10-25): a relaunched
-trainer reused the live engines without a reload. Teardown: stop the run's apps by exact name and id (the engine
+(`engine`, `relay`, `agent`, `volume_sync`), recipe `dsv41-flash-lora-split.yaml`. Verify: the split
+smoke (DeepSeek-V4.1-Flash LoRA, 1 trainer + 1 engine node of 8x B300, 2026-10-25): `[split sync vN]`
+lines at 18.6 s, 7.1 s and 10.2 s for a 199 MB adapter (gate 30 s); a relaunched trainer reused the live
+engines and passed `--check-lora-weight-equal` on both. Teardown: stop the run's apps by exact name and id (the engine
 call can live in the app of the first launch).
 
 ## Remove when
