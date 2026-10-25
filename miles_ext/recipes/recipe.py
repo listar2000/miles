@@ -911,6 +911,8 @@ def trainer_env(recipe: dict) -> dict[str, str]:
     every process that parses args."""
     preset = PRESETS[recipe["model"]["preset"]]
     env = {**preset.env, **preset.precisions[rollout_precision(recipe)], "WANDB__DISABLE_STATS": "true"}
+    if not (recipe["lora"]["rank"] and recipe["lora"]["serving"] == "adapter"):
+        env.update(preset.weight_sync_env)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     if recipe["checkpoint"]["stage_dir"]:

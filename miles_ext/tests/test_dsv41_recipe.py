@@ -84,6 +84,16 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
     assert R.trainer_env(r)["SGLANG_DSV4_FP4_EXPERTS"] == "0"
 
 
+def test_dsv41_fused_kernels_off_only_when_base_weights_sync():
+    fused = ("SGLANG_OPT_FP8_WO_A_GEMM", "SGLANG_OPT_DEEPGEMM_HC_PRENORM")
+    full = R.trainer_env(_recipe())
+    merged = R.trainer_env(_recipe(lora={"rank": 32, "serving": "merged"}))
+    adapter = R.trainer_env(_recipe(lora={"rank": 32, "serving": "adapter"}))
+    assert all(full[k] == merged[k] == "0" for k in fused)
+    assert not any(k in adapter for k in fused)
+    assert full["SGLANG_OPT_FUSE_WQA_WKV"] == adapter["SGLANG_OPT_FUSE_WQA_WKV"] == "0"
+
+
 def test_qwen_recipes_keep_their_defaults():
     argv = R.miles_args(_recipe("qwen35-9b-swegym8-megatron-2node.yaml"), "run1", resume=False)
     assert _value(argv, "--rollout-num-gpus-per-engine") == "1" and _value(argv, "--tis-clip-low") == "0.0"

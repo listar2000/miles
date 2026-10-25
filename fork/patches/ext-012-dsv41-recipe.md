@@ -69,6 +69,21 @@ stack end to end before a run on the full task set. The reason for each value: L
 - **`dsv41-flash-overfit8-a3`**: overfit8 with four harder tasks, no group filter (an
   all-equal group has zero advantage either way; a1/a2 dropped ~37% of their tries waiting for
   replacements), score centering + TIS, context-exhausted trials scored 0, staleness 1, 10 steps.
+- **Fused kernels follow the weight sync** (`Preset.weight_sync_env`): SGLang's
+  `SGLANG_OPT_FP8_WO_A_GEMM` (`wo_a` as one FP8 GEMM on the checkpoint's weights) and
+  `SGLANG_OPT_DEEPGEMM_HC_PRENORM` (the mHC prenorm and mixing weights in one kernel, on
+  derived weight copies) stay at SGLang's default (on) when the engines serve a LoRA adapter,
+  and are forced off when weight syncs replace the base (full-parameter or merged LoRA), since
+  an online update cannot refresh the copies they derive. `SGLANG_OPT_FUSE_WQA_WKV` stays off
+  in both: hook-010 adapts `wq_a` and `wkv` separately. Evidence, both exploratory: one
+  1-node replay pair in one app with a zero-B adapter: sampled engine generation-rate sums
+  averaged 5,105 vs 6,765 tokens/s/node, including warm-up and brief post-deadline sampling (the fused
+  arm ran second and was profiled for 40 steps; the replay measures speed, not adapter
+  correctness), and the v0.1.3 LoRA training check (#86), kernels on and a trained adapter,
+  with a train/rollout log-prob gap of 0.037 and 0.044 against 0.035 and 0.040 before the sync.
+  That adapter's targets leave out `wo_a`, so the grouped `wo_a` adapter path under the FP8
+  GEMM is not yet exercised by a run. Rejected: keeping both off for adapter serving (the
+  conservative choice; one replay pair does not establish its throughput cost).
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,

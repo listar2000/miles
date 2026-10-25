@@ -35,6 +35,9 @@ class Preset:
     precisions: dict = field(default_factory=lambda: {"bf16": {}})
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
+    # env added only when weight syncs replace the engines' base weights (full-parameter or merged LoRA);
+    # an adapter-served LoRA run (lora.serving adapter) leaves the base frozen and runs without it
+    weight_sync_env: dict = field(default_factory=dict)
     # SGLang flags; {gpus} is the recipe's rollout.gpus_per_engine
     sglang_args: str = ""
     # Megatron flags the model's launcher adds; cp_args only when parallel.cp > 1
@@ -90,9 +93,7 @@ PRESETS: dict[str, Preset] = {
             "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
             "NCCL_CUMEM_ENABLE": "1",
             "SGLANG_HEALTH_CHECK_TIMEOUT": "900",
-            # online weight updates cannot refresh weights these fusions derive (upstream launcher)
-            "SGLANG_OPT_FP8_WO_A_GEMM": "0",
-            "SGLANG_OPT_DEEPGEMM_HC_PRENORM": "0",
+            # hook-010 adapts wq_a and wkv one by one, and full weight updates cannot refresh the fused copy
             "SGLANG_OPT_FUSE_WQA_WKV": "0",
             "SGLANG_DISABLE_MULTIMEM_AG": "1",
             # engines here never sleep (not colocated), so the engram tables stay on the GPU
@@ -104,6 +105,8 @@ PRESETS: dict[str, Preset] = {
             "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
         },
+        # online weight updates cannot refresh weights these fusions derive (upstream launcher)
+        weight_sync_env={"SGLANG_OPT_FP8_WO_A_GEMM": "0", "SGLANG_OPT_DEEPGEMM_HC_PRENORM": "0"},
         # Text-only engines (vision_n_layers 0): with the vision tower loaded, every MoE layer routes through
         # SGLang's vision_topk, which never captures routed experts, so R3 gets all-zero routing; the loader
         # then skips the vision tensors. RL here is text-only and the trainer's BF16 cast has no vision tensors.
