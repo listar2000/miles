@@ -28,13 +28,17 @@ so the history is the record and nothing has to be kept in sync by hand.
      and a kebab-case name for infra (``infra-NNN``, ``release-<tag>-rN``, or a
      short name such as ``repo-refs``). One id names one change; a change may span
      several commits (an extension grows release by release), and a fix or hook
-     id is used by exactly one commit.
+     id is used by exactly one commit;
+  7. a sync that drops a fix or hook because upstream fixed it says so with a
+     ``Retires: <id>`` trailer on one of its ``sync-`` commits. A retired change's
+     files and markers are no longer required (its commit stays in the history,
+     listed as retired), and only a ``sync-`` commit may retire a fix or hook.
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
-built from; RFC 0001). Commits reachable from ``stack.UPSTREAM_TAG`` are
-upstream's too (a release tag's own commits sit on upstream's release branch),
-and merge commits carry no change of ours, so neither is listed.
+built from; RFC 0001). Commits reachable from ``stack.UPSTREAM_TAG`` or an earlier
+merged release tag are upstream's too (a release tag's own commits sit on upstream's
+release branch), and merge commits carry no change of ours, so neither is listed.
 """
 
 import argparse
@@ -141,8 +145,11 @@ class Commit:
 def commits(base: str) -> list[Commit]:
     out = []
     sep = "\x1e"
+    # every upstream release tag merged so far: a release's own commits sit on its release branch,
+    # which the next release does not contain
+    tags = {base_tag(), *git("tag", "--merged", "HEAD", "--list", "v[0-9]*").split()}
     log = git("log", "--reverse", "--no-merges", f"--format={sep}%H%x00%s%x00%(trailers:only,unfold)", f"{base}..HEAD",
-              f"^{base_tag()}")
+              *(f"^{t}" for t in sorted(tags)))
     for chunk in log.split(sep)[1:]:
         sha, subject, trailer_text = chunk.split("\x00")
         trailers: dict[str, list[str]] = {}
@@ -154,17 +161,34 @@ def commits(base: str) -> list[Commit]:
     return out
 
 
+def retired(series: list[Commit]) -> dict[str, str]:
+    """{fix or hook id: the sync id that retired it}, from ``Retires:`` trailers."""
+    out = {}
+    for c in series:
+        for v in c.trailers.get("Retires", []):
+            for fid in (t.strip() for t in v.split(",")):
+                if fid:
+                    out[fid] = c.fork_id
+    return out
+
+
 def cmd_list(base: str):
-    for c in commits(base):
-        print(f"{c.sha}  {c.kind or '???':5} {c.fork_id:10} {c.subject}")
+    series = commits(base)
+    gone = retired(series)
+    for c in series:
+        note = f"  (retired by {gone[c.fork_id]})" if c.fork_id in gone else ""
+        print(f"{c.sha}  {c.kind or '???':5} {c.fork_id:10} {c.subject}{note}")
 
 
 def cmd_markdown(base: str):
     print("| Id | Kind | Change | Upstream files | Upstream status | Remove when |")
     print("| --- | --- | --- | --- | --- | --- |")
-    for c in commits(base):
+    series = commits(base)
+    gone = retired(series)
+    for c in series:
         if c.kind in UPSTREAM_KINDS:
-            print(f"| {c.fork_id} | {c.kind.lower()} | {c.subject} | {c.get('Touches')} | {c.get('Upstream-Status')} "
+            status = f"retired by {gone[c.fork_id]}" if c.fork_id in gone else c.get("Upstream-Status")
+            print(f"| {c.fork_id} | {c.kind.lower()} | {c.subject} | {c.get('Touches')} | {status} "
                   f"| {c.get('Remove-When')} |")
         elif c.kind:
             print(f"| {c.fork_id} | {c.kind.lower()} | {c.subject} | none | | |")
@@ -200,10 +224,14 @@ def cmd_check(base: str) -> int:
     series = commits(base)
     declared: dict[str, set[str]] = {}
     sglang: dict[str, set[str]] = {}  # fork id -> the SGLang files its commit declares
+    gone = retired(series)
+    upstream_ids = {c.fork_id for c in series if c.kind in UPSTREAM_KINDS}
     for c in series:
         if c.kind is None:
             problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
             continue
+        if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")):
+            problems.append(f"{c.sha} {c.fork_id}: only a sync- commit may carry a Retires: trailer")
         if not re.fullmatch(ID_FORMATS[c.kind], c.fork_id):
             problems.append(f"{c.sha} {c.fork_id!r}: a Fork-{c.kind} id must match {ID_FORMATS[c.kind]}")
         if c.kind in UPSTREAM_KINDS and sum(o.fork_id == c.fork_id for o in series) > 1:
@@ -228,6 +256,8 @@ def cmd_check(base: str) -> int:
                         f"{c.sha} {c.fork_id}: an SGLang fix or hook commit touches exactly one file, "
                         f"{SGLANG_PATCHES}{c.fork_id}-<slug>.patch"
                     )
+            if c.fork_id in gone:
+                continue
             for f in touches - {SGLANG + t for t in sglang_touches}:
                 declared.setdefault(f, set()).add(c.fork_id)
         else:
@@ -240,6 +270,8 @@ def cmd_check(base: str) -> int:
                         f"{c.sha} {c.fork_id}: only its own fix or hook commit or a sync- commit "
                         f"changes an SGLang patch ({f})"
                     )
+    for fid in sorted(set(gone) - upstream_ids):
+        problems.append(f"Retires: {fid} (in {gone[fid]}) names no fix or hook since {base}")
     changed = [f for f in git("diff", "--name-only", base, "HEAD").split() if not own(f)]
     for f in changed:
         if f not in declared:
@@ -256,6 +288,9 @@ def cmd_check(base: str) -> int:
         if fid in patches:
             problems.append(f"{rel}: a second patch for {fid} ({patches[fid].name})")
             continue
+        if fid in gone:
+            problems.append(f"{rel}: {fid} is retired by {gone[fid]}; delete the patch in that sync")
+            continue
         if fid not in sglang:
             problems.append(
                 f"{rel}: not named <fix|hook>-NNN-<slug>.patch, or no commit of that id declares "
@@ -271,7 +306,7 @@ def cmd_check(base: str) -> int:
             problems.append(f"{rel}: no added [fork {fid}] line in {unmarked}")
     counts = ", ".join(f"{sum(c.kind == k for c in series)} {k.lower()}" for k in KINDS)
     print(
-        f"base {base}: {len(series)} fork commits ({counts}), "
+        f"base {base}: {len(series)} fork commits ({counts}{f', {len(set(gone) & upstream_ids)} retired' if gone else ''}), "
         f"{len(declared)} upstream files touched: {', '.join(sorted(declared)) or 'none'}; "
         f"SGLang patches: {', '.join(sorted(patches)) or 'none'}"
     )

@@ -302,8 +302,10 @@ Only `--dry-run` of `sync.py` fits this flow; without it the tool still runs
 the old rebase onto a new `fork/<tag>` branch (see "Not yet in the tools").
 
 On a conflict, read the fix's commit message and patch page. If the new
-release fixed the bug, take upstream's side and drop the markers, and mark the
-patch page removed; otherwise re-apply the same intent to the new code and
+release fixed the bug, take upstream's side and drop the markers, mark the
+patch page removed, and add a `Retires: <id>` trailer to the sync's stack
+commit (one per retired fix or hook; `ledger.py` then stops asking for its
+files and markers and lists it as retired); otherwise re-apply the same intent to the new code and
 keep the markers. After the merge: set `HARBOR_COMMIT` from the new tag's
 `examples/experimental/harbor/README.md`, recheck vendored files (drop any
 that upstream now ships), recheck SGLang patches when the base image's SGLang
@@ -316,9 +318,6 @@ moved (SGLang patches, "On a sync"), read the `REVIEW_PATHS` diff for API drift 
 
 RFC 0001 changes some tools as well as these rules. Until those changes land:
 
-- When a sync drops a fix because upstream fixed the bug, the old fix commit
-  still declares its file in `Touches:` and `check` will ask for its marker;
-  `ledger.py` has to learn to skip fixes a sync retired.
 - `sync.py` without `--dry-run` rebases and rewrites `FORK_RELEASE` and
   `FORK_IMAGE`; do the merge by hand as above. Its `--dry-run` still compares
   against `UPSTREAM_TAG`, so after a between-releases sync it also lists

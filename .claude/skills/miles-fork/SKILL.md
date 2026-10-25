@@ -210,8 +210,8 @@ there, and only one a published upstream image was built from
 Don't run `sync.py` without `--dry-run`: it still does the old rebase onto a
 `fork/<tag>` branch. On a conflict (only in files fixes and hooks touch), read
 the commit message and its patch page. If upstream fixed it, take upstream's
-side, mark the page's status as removed and move its `fork/UPSTREAM.md` row to
-"Fixed upstream". Otherwise re-apply the same intent
+side, mark the page's status as removed, move its `fork/UPSTREAM.md` row to
+"Fixed upstream" and add `--trailer "Retires: <id>"` to the stack commit. Otherwise re-apply the same intent
 and keep the markers. Then refresh `HARBOR_COMMIT`, recheck vendored files
 against the new upstream (drop any that upstream now ships), land, build and
 validate as in `fork/README.md` "Sync".
