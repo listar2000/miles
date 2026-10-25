@@ -50,13 +50,13 @@ algorithm:
   temperature: 1.0
   max_response_len: 8192  # per turn
   max_seq_len: 131072
-  lr: 1.0e-5  # 10x the example's 1e-6, which needs ~30 batches of 256 to move the reward
+  lr: 5.0e-5  # 50x the example's 1e-6, which needs ~30 batches of 256 to move the reward; 1e-5 was flat over 9 steps
   eps_clip: 0.2
   eps_clip_high: 0.28
   group_filter: nonzero_std  # DAPO: drop groups whose samples all scored the same
-  max_weight_staleness: 2
+  max_weight_staleness: 4
 async:
-  max_concurrent_samples: 256
+  max_concurrent_samples: 512  # trajectories wait on sandboxes, not engines (150 tok/GPU/s at 256)
 checkpoint:
   save_interval: 5
   keep: 2
@@ -65,3 +65,5 @@ checkpoint:
 tracking:
   wandb_project: miles-swegym-split
   wandb_entity: mobiuslab
+extra_args:
+  - --skip-actor-forward-only  # one optimizer step per batch: old log-probs = the train forward's

@@ -65,7 +65,7 @@
   "--optimizer",
   "adam",
   "--lr",
-  "1e-05",
+  "5e-05",
   "--lr-decay-style",
   "constant",
   "--weight-decay",
@@ -202,9 +202,9 @@
   "--pause-generation-mode",
   "in_place",
   "--async-max-concurrent-samples",
-  "256",
+  "512",
   "--max-weight-staleness",
-  "2",
+  "4",
   "--async-unused-samples-handler",
   "drop",
   "--async-checkpoint-buffer",
@@ -227,7 +227,8 @@
   "--save-debug-rollout-data",
   "/results/run1/rollout_data/{rollout_id}.pt",
   "--train-env-vars",
-  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}"
+  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}",
+  "--skip-actor-forward-only"
  ],
  "argv_resume": [
   "--train-backend",
@@ -280,7 +281,7 @@
   "--optimizer",
   "adam",
   "--lr",
-  "1e-05",
+  "5e-05",
   "--lr-decay-style",
   "constant",
   "--weight-decay",
@@ -417,9 +418,9 @@
   "--pause-generation-mode",
   "in_place",
   "--async-max-concurrent-samples",
-  "256",
+  "512",
   "--max-weight-staleness",
-  "2",
+  "4",
   "--async-unused-samples-handler",
   "drop",
   "--async-checkpoint-buffer",
@@ -442,6 +443,7 @@
   "--save-debug-rollout-data",
   "/results/run1/rollout_data/{rollout_id}.pt",
   "--train-env-vars",
-  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}"
+  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}",
+  "--skip-actor-forward-only"
  ]
 }
