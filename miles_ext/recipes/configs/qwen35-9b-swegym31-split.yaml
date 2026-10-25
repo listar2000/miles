@@ -1,4 +1,4 @@
-# Qwen3.5-9B LoRA on the 31 SWE-Gym tasks of Modal's SWE-Gym example, in split placement (ext-036):
+# Qwen3.5-9B LoRA on the SWE-Gym tasks of Modal's SWE-Gym example, in split placement (ext-036):
 # one H200 trainer node, eight one-GPU engines in their own H200 container.
 name: qwen35-9b-swegym31-split
 model:
@@ -30,7 +30,7 @@ rollout:
   context_length: 131072
 taskset:
   tasks_volume: miles-datasets:/swegym31/tasks
-  prompts: $MILES_DATA/prompts/swegym31.jsonl
+  prompts: $MILES_DATA/prompts/swegym31-gold28.jsonl  # the 28 whose tests pass with the gold patch
   harness: mini-swe-agent-sandbox
 agent:
   max_steps: 20
