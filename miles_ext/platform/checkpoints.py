@@ -20,7 +20,7 @@ import re
 
 import modal
 
-from miles_ext.platform.layout import read_tracker, read_tracker_volume
+from miles_ext.platform.layout import iter_dir, read_tracker, read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target
 from miles_ext.recipes import recipe as R
@@ -34,10 +34,6 @@ NOT_A_SAVE = {"debug_events"}
 # Later Miles saves rollout-side state (data source, async buffer, event log) at <save>/rollout/<rollout_id>/
 # and a resume loads rollout start_rollout_id - 1, which needs the directory of the save it resumes from
 ROLLOUT_STATE = "rollout"
-
-
-def iter_dir(step: int) -> str:
-    return f"iter_{int(step):07d}"
 
 
 def checkpoint_path(run_id: str, step: int, kind: str) -> str:
