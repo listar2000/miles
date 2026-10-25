@@ -1294,6 +1294,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``; the hook gates itself."
                 ),
             )
+            # [fork hook-013]
+            parser.add_argument(
+                "--custom-weight-transfer-protocol-path",
+                type=str,
+                default=None,
+                help=(
+                    "Import path of a WeightTransferProtocol subclass (or a callable(args) returning one) that "
+                    "moves weights to the rollout engines instead of the one --update-weight-transfer-mode picks."
+                ),
+            )
             # [fork hook-002]
             parser.add_argument(
                 "--custom-placement-hook-path",
