@@ -36,6 +36,12 @@ def validate_score_centering_args(args: Namespace) -> None:
         "use_opd": "distillation composition is not supported",
         "custom_convert_samples_to_train_data_path": "custom converters skip rollout top-k logprobs validation",
     }
+    # [fork fix-058] DSpark samples exactly from the target and reports logprobs and top-k from its verify
+    # logits; other speculative modes stay refused (fork/patches/fix-058-score-centering-dspark.md).
+    if str(getattr(args, "sglang_speculative_algorithm", None) or "").upper() == "DSPARK":
+        if float(os.environ.get("SGLANG_SIMULATE_ACC_LEN") or -1) > 0:
+            raise ValueError("Score centering requires SGLANG_SIMULATE_ACC_LEN unset: forced acceptance is not exact")
+        del incompatible["sglang_speculative_algorithm"]
     for option, reason in incompatible.items():
         if getattr(args, option, None):
             raise ValueError(f"Score centering is incompatible with --{option.replace('_', '-')}: {reason}")
