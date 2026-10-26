@@ -92,7 +92,12 @@ PRESETS: dict[str, Preset] = {
         megatron_model_type="deepseek-v4.1",
         lora_spec_path="miles_ext.lora.dsv41",
         chat_template_kwargs={"thinking": True, "reasoning_effort": "high"},
-        precisions={"fp8_fp4": {"SGLANG_DSV4_FP4_EXPERTS": "1"}, "bf16": {"SGLANG_DSV4_FP4_EXPERTS": "0"}},
+        # BF16 engines keep the FP8 wo_a GEMM and DeepGEMM HC prenorm fusions off even when adapter serving would
+        # allow them: on BF16 weights they crash decode CUDA graph capture (overfit-stak-bf16-1026-a1, probe
+        # bf16lora-1026-p2)
+        precisions={"fp8_fp4": {"SGLANG_DSV4_FP4_EXPERTS": "1"},
+                    "bf16": {"SGLANG_DSV4_FP4_EXPERTS": "0", "SGLANG_OPT_FP8_WO_A_GEMM": "0",
+                             "SGLANG_OPT_DEEPGEMM_HC_PRENORM": "0"}},
         # the BF16 copy is 1.31 TB: 327 GB/GPU at TP4, 155 GB/GPU at TP8 (B300 has 268 GB)
         precision_min_gpus={"bf16": 8},
         # the BF16 copy has no MTP/DSpark tensors, and the release's FP8 draft does not boot on BF16 engines

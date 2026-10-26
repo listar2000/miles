@@ -84,6 +84,11 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
     assert R.trainer_env(r)["SGLANG_DSV4_FP4_EXPERTS"] == "0"
 
 
+def test_dsv41_bf16_adapter_keeps_fp8_fusions_off():
+    env = R.trainer_env(_recipe(rollout={"precision": "bf16", "expert_qat": False}, lora={"rank": 32, "serving": "adapter"}))
+    assert env["SGLANG_OPT_FP8_WO_A_GEMM"] == env["SGLANG_OPT_DEEPGEMM_HC_PRENORM"] == "0"
+
+
 def test_dsv41_fused_kernels_off_only_when_base_weights_sync():
     fused = ("SGLANG_OPT_FP8_WO_A_GEMM", "SGLANG_OPT_DEEPGEMM_HC_PRENORM")
     full = R.trainer_env(_recipe())
