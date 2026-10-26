@@ -29,7 +29,13 @@ from miles_ext.recipes.presets import PRESETS
 
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
 HARNESS_HOST = "mini-swe-agent-host"  # mini-swe-agent loop in the rollout worker, commands via exec
-HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST)
+HARNESS_SINGLE_TURN = "single-turn"  # ext-038: one reply per prompt row, graded in process
+HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST, HARNESS_SINGLE_TURN)
+AGENT_FUNCTIONS = {
+    HARNESS_SANDBOX: "miles_ext.harbor.agent_function.run",
+    HARNESS_HOST: "miles_ext.harbor.agent_function.run",
+    HARNESS_SINGLE_TURN: "miles_ext.tasks.single_turn.run",
+}
 # Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
 # miles_ext (the pinned Harbor predates it), loaded by import path
 SANDBOX_PROVIDERS = ("modal", "sail")
@@ -430,7 +436,12 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if taskset["tasks_dir"] and taskset["tasks_volume"]:
         raise ValueError("taskset: set tasks_dir or tasks_volume, not both")
     tasks_volume(recipe)  # its format
-    if local_inputs and (not (taskset["tasks_dir"] or taskset["tasks_volume"]) or not taskset["prompts"]):
+    if is_single_turn(recipe):
+        if taskset["tasks_dir"] or taskset["tasks_volume"]:
+            raise ValueError("taskset.harness single-turn takes no task dirs (the prompt rows carry the labels)")
+        if local_inputs and not taskset["prompts"]:
+            raise ValueError("taskset.prompts is required")
+    elif local_inputs and (not (taskset["tasks_dir"] or taskset["tasks_volume"]) or not taskset["prompts"]):
         raise ValueError("taskset.prompts and one of taskset.tasks_dir, taskset.tasks_volume are required")
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
@@ -658,6 +669,15 @@ def needs_tunnel(recipe: dict) -> bool:
     return recipe["taskset"]["harness"] == HARNESS_SANDBOX
 
 
+def is_single_turn(recipe: dict) -> bool:
+    return recipe["taskset"]["harness"] == HARNESS_SINGLE_TURN
+
+
+def reads_task_dirs(recipe: dict) -> bool:
+    """Whether the run's inputs hold task dirs (tasks_dir copied in), not just the prompt file."""
+    return not is_single_turn(recipe) and tasks_volume(recipe) is None
+
+
 def model_dir(recipe: dict) -> Path:
     preset = PRESETS[recipe["model"]["preset"]]
     if revision := recipe["model"].get("revision"):
@@ -720,7 +740,9 @@ def tasks_path(recipe: dict) -> Path:
 
 
 def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
-    """What every Harbor trial reads (header of upstream's harbor_agent_function)."""
+    """What every Harbor trial reads (header of upstream's harbor_agent_function); a single-turn run has no trials."""
+    if is_single_turn(recipe):
+        return {"MILES_EXT_HARNESS": HARNESS_SINGLE_TURN}
     agent = recipe["agent"]
     env = {
         **_sandbox_env(recipe, run_id),
@@ -848,7 +870,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --weight-decay {algo["weight_decay"]} --adam-beta1 {beta1} --adam-beta2 {beta2}
 
         --custom-generate-function-path miles_ext.obs.loop_watchdog.generate
-        --custom-agent-function-path miles_ext.harbor.agent_function.run
+        --custom-agent-function-path {AGENT_FUNCTIONS[recipe["taskset"]["harness"]]}
         --custom-agent-function-mode {recipe["agent"]["function_mode"]}
         --custom-rm-path miles_ext.harbor.reward.reward_func
         --dynamic-sampling-filter-path {GROUP_FILTERS[algo["group_filter"]]}

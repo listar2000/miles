@@ -271,7 +271,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     models_volume.reload()
     results_volume.reload()  # see checkpoints committed by an earlier container
     if INPUTS_ON_VOLUME:
-        _inputs(run_id, tasks=R.tasks_volume(recipe) is None)
+        _inputs(run_id, tasks=R.reads_task_dirs(recipe))
     # a relaunch of a finished run (the caller's timer fired after the final save): every
     # rank returns before Ray starts, so it costs a container start, not a cluster start
     if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):

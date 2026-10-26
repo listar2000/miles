@@ -194,7 +194,7 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
 
     os.environ.update({**R.harbor_env(recipe, run_id), **R.trainer_env(recipe)})
     os.environ.setdefault("MILES_SESSION_PUBLIC_URL", "https://tunnel.invalid/token")
-    step("inputs", lambda: _inputs(run_id, tasks=R.tasks_volume(recipe) is None), "taskset")
+    step("inputs", lambda: _inputs(run_id, tasks=R.reads_task_dirs(recipe)), "taskset")
     step("fork_markers", lambda: subprocess.run(
         [sys.executable, str(stack.MILES_SRC / "fork/tools/ledger.py"), "markers"], cwd=stack.MILES_SRC, check=True,
         capture_output=True, text=True))
@@ -206,6 +206,17 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
              "miles_plugins.mbridge"], cwd=stack.MILES_SRC, check=True, capture_output=True, text=True,
             env={**os.environ, "PYTHONPATH": f"{os.environ.get('PYTHONPATH', '')}:/root/Megatron-LM"}),
             "model.backend")
+
+    def single_turn():
+        from miles_ext.tasks.single_turn import check_row
+
+        rows = [json.loads(line) for line in R.PROMPTS.read_text().splitlines() if line.strip()]
+        for n, row in enumerate(rows, 1):
+            try:
+                check_row(row)
+            except ValueError as e:
+                raise ValueError(f"taskset: prompt row {n}: {e}") from None
+        return {"agent": R.AGENT_FUNCTIONS[R.HARNESS_SINGLE_TURN], "prompt_rows": len(rows)}
 
     def trial():
         from harbor.environments.factory import EnvironmentFactory
@@ -222,6 +233,6 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
                 "environment_import_path": env_cfg.import_path, "environment_kwargs": env_cfg.kwargs,
                 "tasks": len(tasks), "prompt_rows": len(ids)}
 
-    result["trial_config"] = step("trial_config", trial, "sandbox")
+    result["trial_config"] = step("trial_config", single_turn if R.is_single_turn(recipe) else trial, "sandbox")
     result["parsed"] = step("parse_args", lambda: _parse_args(recipe, run_id, libcuda_stub), "argv")
     return result
