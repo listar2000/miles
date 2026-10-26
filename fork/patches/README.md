@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-058 | Fix | Score centering accepts DSpark speculative decoding (exact rejection sampling, top-k from the verify logits); other speculative modes and forced acceptance (`SGLANG_SIMULATE_ACC_LEN > 0`) stay refused | active; remove when upstream allows speculative decoding with score centering | [fix-058-score-centering-dspark.md](fix-058-score-centering-dspark.md) |
 | ext-036 | Ext | `cluster.placement: split`: the engines run in their own Modal function behind a tunnel, the trainer reaches them through local relays and Miles' external-engine addresses; ext-037 carries the LoRA adapter sync through the results volume | active | [ext-036-split-placement.md](ext-036-split-placement.md) |
 | hook-013 | Hook | `--custom-weight-transfer-protocol-path`: a weight-transfer protocol by import path (ext-037's volume sync) | active; remove when upstream takes a custom protocol path | [hook-013-custom-weight-transfer-protocol.md](hook-013-custom-weight-transfer-protocol.md) |
 | hook-011 | Hook | Native LoRA syncs the adapter to non-colocated engines when PP is 1 (upstream allows only colocated) | active; remove when upstream lifts the guard | [hook-011-native-lora-disaggregated.md](hook-011-native-lora-disaggregated.md) |
