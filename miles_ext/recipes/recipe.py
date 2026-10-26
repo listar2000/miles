@@ -504,6 +504,13 @@ def _validate_rollout(recipe: dict) -> None:
     if precision not in preset.precisions:
         raise ValueError(
             f"rollout.precision must be one of {list(preset.precisions)} for this model, got {precision!r}")
+    if gpus < preset.precision_min_gpus.get(precision, 1):
+        raise ValueError(f"rollout.precision {precision} needs rollout.gpus_per_engine >= "
+                         f"{preset.precision_min_gpus[precision]} for this model, got {gpus}")
+    spec = "--sglang-speculative-algorithm" in map(str, recipe["extra_args"])
+    if spec and preset.draft_precisions and precision not in preset.draft_precisions:
+        raise ValueError(f"speculative decoding needs rollout.precision in {list(preset.draft_precisions)} "
+                         f"for this model (its {precision} weights have no draft), got {precision!r}")
     if GPUS_PER_NODE % gpus:
         raise ValueError(
             f"rollout.gpus_per_engine {gpus} must divide {GPUS_PER_NODE} so an engine stays inside a node")

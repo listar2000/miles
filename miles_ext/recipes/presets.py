@@ -33,6 +33,10 @@ class Preset:
     train_dir_name: str | None = None
     # rollout precision -> env the engines need for it; the first key is the default
     precisions: dict = field(default_factory=lambda: {"bf16": {}})
+    # rollout precision -> smallest rollout.gpus_per_engine its weights fit in
+    precision_min_gpus: dict = field(default_factory=dict)
+    # rollout precisions whose checkpoint carries the speculative draft (DSpark/MTP) weights; empty: any
+    draft_precisions: tuple[str, ...] = ()
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
     # env added only when weight syncs replace the engines' base weights (full-parameter or merged LoRA);
@@ -89,6 +93,10 @@ PRESETS: dict[str, Preset] = {
         lora_spec_path="miles_ext.lora.dsv41",
         chat_template_kwargs={"thinking": True, "reasoning_effort": "high"},
         precisions={"fp8_fp4": {"SGLANG_DSV4_FP4_EXPERTS": "1"}, "bf16": {"SGLANG_DSV4_FP4_EXPERTS": "0"}},
+        # the BF16 copy is 1.31 TB: 327 GB/GPU at TP4, 155 GB/GPU at TP8 (B300 has 268 GB)
+        precision_min_gpus={"bf16": 8},
+        # the BF16 copy has no MTP/DSpark tensors, and the release's FP8 draft does not boot on BF16 engines
+        draft_precisions=("fp8_fp4",),
         env={
             "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
             "NCCL_CUMEM_ENABLE": "1",

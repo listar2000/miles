@@ -123,6 +123,12 @@ def test_qwen_recipes_keep_their_defaults():
         ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
         ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
         ({"cluster": {"disk_gib": None}}, "cluster.disk_gib"),
+        ({"rollout": {"precision": "bf16", "expert_qat": False, "gpus_per_engine": 4}}, "gpus_per_engine >= 8"),
+        (
+            {"rollout": {"precision": "bf16", "expert_qat": False},
+             "extra_args": ["--sglang-speculative-algorithm", "DSPARK"]},
+            "have no draft",
+        ),
     ],
 )
 def test_dsv41_refuses(over, message):
