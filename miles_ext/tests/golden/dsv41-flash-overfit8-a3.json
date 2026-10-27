@@ -120,6 +120,8 @@
   "--custom-weight-quantizer-path",
   "miles_ext.lowprec.checkpoint_quantizer.quantize_like_checkpoint",
   "--mxfp4-qat-routed-experts",
+  "--sglang-speculative-algorithm",
+  "DSPARK",
   "--sglang-tool-call-parser",
   "deepseekv41",
   "--sglang-reasoning-parser",
@@ -273,6 +275,10 @@
   "--train-memory-margin-bytes",
   "3221225472",
   "--deterministic-mode",
+  "--custom-megatron-init-path",
+  "miles_ext.memory.ckpt_offload.install",
+  "--distributed-timeout-minutes",
+  "60",
   "--stream-optimizer-state-to-disk",
   "--offload-train-disk-dir",
   "/tmp/miles-optimizer",
@@ -320,9 +326,7 @@
   "--save-debug-rollout-data",
   "/results/run1/rollout_data/{rollout_id}.pt",
   "--train-env-vars",
-  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}",
-  "--custom-megatron-init-path",
-  "miles_ext.memory.ckpt_offload.install"
+  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}"
  ],
  "argv_resume": [
   "--train-backend",
@@ -438,6 +442,8 @@
   "--custom-weight-quantizer-path",
   "miles_ext.lowprec.checkpoint_quantizer.quantize_like_checkpoint",
   "--mxfp4-qat-routed-experts",
+  "--sglang-speculative-algorithm",
+  "DSPARK",
   "--sglang-tool-call-parser",
   "deepseekv41",
   "--sglang-reasoning-parser",
@@ -591,6 +597,10 @@
   "--train-memory-margin-bytes",
   "3221225472",
   "--deterministic-mode",
+  "--custom-megatron-init-path",
+  "miles_ext.memory.ckpt_offload.install",
+  "--distributed-timeout-minutes",
+  "60",
   "--stream-optimizer-state-to-disk",
   "--offload-train-disk-dir",
   "/tmp/miles-optimizer",
@@ -639,8 +649,6 @@
   "--save-debug-rollout-data",
   "/results/run1/rollout_data/{rollout_id}.pt",
   "--train-env-vars",
-  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}",
-  "--custom-megatron-init-path",
-  "miles_ext.memory.ckpt_offload.install"
+  "{\"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}"
  ]
 }

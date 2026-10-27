@@ -37,6 +37,8 @@ class Preset:
     precision_min_gpus: dict = field(default_factory=dict)
     # rollout precisions whose checkpoint carries the speculative draft (DSpark/MTP) weights; empty: any
     draft_precisions: tuple[str, ...] = ()
+    # --sglang-speculative-algorithm for the model's draft (recipe rollout.speculative); None: no draft
+    speculative_algorithm: str | None = None
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
     # env added only when weight syncs replace the engines' base weights (full-parameter or merged LoRA);
@@ -105,6 +107,7 @@ PRESETS: dict[str, Preset] = {
         precision_min_gpus={"bf16": 8},
         # the BF16 copy has no MTP/DSpark tensors, and the release's FP8 draft does not boot on BF16 engines
         draft_precisions=("fp8_fp4",),
+        speculative_algorithm="DSPARK",  # static verify; fix-053 keeps the R3 routing of verified tokens
         env={
             "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
             "NCCL_CUMEM_ENABLE": "1",
@@ -134,10 +137,13 @@ PRESETS: dict[str, Preset] = {
             --router-health-failure-threshold 40
             --sglang-json-model-override-args '{{"vision_n_layers": 0}}'
         """,
+        # every V4.1 run so far: full-recompute layer inputs in host memory (ext-020) and a 60 min collective
+        # timeout (the default 10 min trips on long checkpoint saves)
         megatron_args="""
             --dsv4-impl miles --model-name deepseekv41 --qkv-format bshd --transformer-impl transformer_engine --bf16
             --moe-router-freeze-gate --freeze-e-score-correction-bias
             --train-memory-margin-bytes 3221225472 --deterministic-mode
+            --custom-megatron-init-path miles_ext.memory.ckpt_offload.install --distributed-timeout-minutes 60
         """,
         megatron_cp_args="--allgather-cp",
         packed_batches=False,

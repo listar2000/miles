@@ -38,7 +38,6 @@ rollout:
   precision: fp8_fp4
   context_length: 262144
   max_running_requests: 128
-  expert_qat: true
 taskset:
   tasks_volume: miles-datasets:/tb4t-20261016/tasks
   prompts: $MILES_DATA/prompts/overfit8.jsonl
@@ -84,11 +83,3 @@ checkpoint:
 tracking:
   wandb_project: miles-dsv41
   wandb_entity: mobiuslab
-extra_args:
-  # old log-probs from the training forward (one optimizer step per rollout), saving the ~15 min
-  # forward-only pass; TIS still compares trainer and rollout log-probs
-  - --skip-actor-forward-only
-  # each layer's checkpointed input waits in pinned host memory between forward and backward
-  # (ext-020); with fix-011 this is what fits 256k on two trainer nodes
-  - --custom-megatron-init-path
-  - miles_ext.memory.ckpt_offload.install

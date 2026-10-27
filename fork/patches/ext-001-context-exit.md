@@ -18,7 +18,7 @@ class `mini` uses by default), selected with mini-swe-agent's own `--agent-class
 The exit is `LimitsExceeded`, so Harbor still runs the verifier and the sample is scored normally (not aborted; algo
 decided to keep the one cut-off turn the Miles session records, as on-policy data). `agent_function.run` reports
 `ContextExhausted` instead of Harbor's generic `Submitted`, so the sample filters can tell it apart. A recipe can score
-such a sample 0 whatever its verifier says (`agent.context_exhausted_scores_zero`, env
+such a sample 0 whatever its verifier says (`agent.context_exhausted_scores_zero`, on by default since 2026-10-27, env
 `MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO=1`): running out of a 256k window counts as failure, while 17 of 82 such
 trials in the 1017 eval passed their verifier. The sample stays in the batch with reward 0, not masked.
 

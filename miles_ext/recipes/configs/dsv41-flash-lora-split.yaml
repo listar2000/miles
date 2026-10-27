@@ -57,6 +57,7 @@ algorithm:
   eps_clip: 0.2
   eps_clip_high: 0.28
   tis_clip: 2.0  # unused by the MIS function; recipe still passes --use-tis
+  is_correction: mis  # token mask over mis_bounds [0.5, 5.0], with mask-health metrics (ext-014)
   max_weight_staleness: 4
   max_token_weighted_staleness: 2
   sglang_mem_fraction: 0.75
@@ -74,17 +75,3 @@ tracking:
   wandb_project: miles-dsv41
   wandb_entity: mobiuslab
   tags: ["exp:overfit-a7"]
-extra_args:
-  - --custom-megatron-init-path
-  - miles_ext.memory.ckpt_offload.install
-  - --distributed-timeout-minutes
-  - "60"
-  - --skip-actor-forward-only  # one optimizer step per batch: old log-probs = the train forward's
-  - --sglang-speculative-algorithm
-  - DSPARK  # static verify (image default); fix-053 keeps R3 rows
-  - --custom-tis-function-path
-  - miles_ext.obs.mismatch_tis.mis_with_mask_health  # #82
-  # MIS inline (no file in the image): token mask [0.5, 5.0], batch-normalized, use_rs false; mis.py
-  # also reads the rs_* keys, so they are set to null
-  - --custom-config-path
-  - base64:dXNlX3RpczogdHJ1ZQp1c2VfcnM6IGZhbHNlCnRpc19sZXZlbDogdG9rZW4KdGlzX21vZGU6IG1hc2sKdGlzX2xvd2VyX2JvdW5kOiAwLjUKdGlzX3VwcGVyX2JvdW5kOiA1LjAKdGlzX2JhdGNoX25vcm1hbGl6ZTogdHJ1ZQpyc19sZXZlbDogdG9rZW4KcnNfbG93ZXJfYm91bmQ6IG51bGwKcnNfdXBwZXJfYm91bmQ6IG51bGwKcnNfdmV0b190aHJlc2hvbGQ6IG51bGwK

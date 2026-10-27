@@ -39,7 +39,6 @@ rollout:
   precision: fp8_fp4
   context_length: 262144
   max_running_requests: 128
-  expert_qat: true
 taskset:
   tasks_volume: miles-datasets:/tb4t-20261016/tasks
   prompts: $MILES_DATA/prompts/overfit8_a3.jsonl
@@ -76,7 +75,6 @@ algorithm:
   grpo_std_normalization: false
   per_token_loss: true
   loss: score_centering
-  score_centering_is: tis
   # 32 candidates matched the full vocabulary in the score-centering paper at 4x less data than 128
   top_logprobs: 32
 async:
@@ -89,8 +87,3 @@ checkpoint:
 tracking:
   wandb_project: miles-dsv41
   wandb_entity: mobiuslab
-extra_args:
-  # each layer's checkpointed input waits in pinned host memory between forward and backward
-  # (ext-020); with fix-011 this is what fits 256k on two trainer nodes
-  - --custom-megatron-init-path
-  - miles_ext.memory.ckpt_offload.install

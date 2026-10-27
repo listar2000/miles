@@ -61,7 +61,7 @@ stack end to end before a run on the full task set. The reason for each value: L
 - **Training-rule fields** (defaults keep the old argv): `algorithm.grpo_std_normalization`
   (`false`: rewards centered on the group mean only, Dr. GRPO), `algorithm.per_token_loss`
   (`--calculate-per-token-loss`), and `algorithm.loss: score_centering` (upstream's
-  `--loss-type score_centering`, arXiv 2609.20807) with `score_centering_is` and `top_logprobs`.
+  `--loss-type score_centering`, arXiv 2609.20807) with `is_correction` and `top_logprobs`.
   Score centering takes old log-probs from the rollout (`--use-rollout-logprobs`), so it needs no
   forward-only pass; Miles rejects it with `--use-tis` or `--skip-actor-forward-only`, which
   `_loss_args` and the a3 config leave out. Rejected: a second config block for score centering;
@@ -110,3 +110,19 @@ launch. On a sync, diff the preset against `scripts/run_deepseek_v4_1.py` (`_tra
 Not an upstream change: kept for as long as recipes are the fork's run format. Drop the
 text-only override when SGLang's `vision_topk` captures routed experts (check
 `multimodal/dsv41/vl_routing.py` on each base-image bump) or a V4.1 run needs image inputs.
+
+## Prune (2026-10-27)
+
+Knobs every V4.1 recipe set by hand are now the recipe's own, so a V4.1 recipe needs no `extra_args`:
+
+- The preset's Megatron flags carry `--custom-megatron-init-path miles_ext.memory.ckpt_offload.install`
+  (ext-020) and `--distributed-timeout-minutes 60`.
+- Every Megatron `policy_loss` run passes `--skip-actor-forward-only`: the recipe always takes one optimizer
+  step per batch, so the old log-probs are the training forward's own.
+- `algorithm.is_correction` (`tis`, `mis`, `none`) with `algorithm.mis_bounds` replaces `score_centering_is`
+  and the hand-written MIS `--custom-tis-function-path` / base64 `--custom-config-path` pair.
+- `rollout.speculative` (default on) passes the preset's `speculative_algorithm` (DSPARK) when the served
+  precision has a draft, so BF16 engines run without it.
+- `rollout.expert_qat` is gone: every full-weight `fp8_fp4` run keeps its experts on the engine's FP4 grid
+  (fix-006), and needs `optimizer.offload: disk` and expert data parallel size 1 for it.
+- Defaults follow what runs use: `lora.serving: adapter`, `agent.context_exhausted_scores_zero: true`.

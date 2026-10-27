@@ -47,7 +47,13 @@ RESERVED_FLAGS = {
     "--loss-type": "algorithm.loss",
     "--use-tis": "algorithm.loss",
     "--use-rollout-logprobs": "algorithm.loss",
-    "--score-centering-is": "algorithm.score_centering_is",
+    "--score-centering-is": "algorithm.is_correction",
+    "--score-centering-mis-low": "algorithm.mis_bounds",
+    "--score-centering-mis-high": "algorithm.mis_bounds",
+    "--custom-tis-function-path": "algorithm.is_correction",
+    "--sglang-speculative-algorithm": "rollout.speculative",
+    "--mxfp4-qat-routed-experts": "rollout.precision (on for every full-weight fp8_fp4 run, fix-006)",
+    "--skip-actor-forward-only": "algorithm.loss (on for every Megatron policy_loss run)",
     "--score-centering-tis-clip": "algorithm.tis_clip",
     "--rollout-top-logprobs-num": "algorithm.top_logprobs",
     "--use-kl-loss": "algorithm.kl_loss_coef",
@@ -90,7 +96,11 @@ def reserved_flag_errors(recipe: dict, run_id: str = "reserved-check") -> list[d
         flag = arg.split("=", 1)[0]
         if flag in RESERVED_FLAGS:
             owner = RESERVED_FLAGS[flag]
-            message = f"{flag} is {owner}" if owner.startswith(("unsupported", "fixed")) else f"{flag} is set by {owner}; use that"
+            message = (
+                f"{flag} is {owner}"
+                if owner.startswith(("unsupported", "fixed"))
+                else f"{flag} is set by {owner}; use that"
+            )
             errors.append({"path": "extra_args", "message": message})
         elif flag in emitted:
             errors.append({"path": "extra_args", "message": f"{flag} is already set by the recipe"})

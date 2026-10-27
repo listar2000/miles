@@ -2,6 +2,7 @@
 layouts it refuses. The Qwen recipes' argv is unchanged by the new fields (defaults) except the fully
 async trainer's allocator."""
 
+import base64
 import json
 from pathlib import Path
 
@@ -76,7 +77,7 @@ def test_dsv41_argv():
 
 
 def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
-    r = _recipe(rollout={"precision": "bf16", "expert_qat": False})
+    r = _recipe(rollout={"precision": "bf16"})
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
     assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash-1017-bf16"
@@ -86,7 +87,7 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
 
 def test_dsv41_bf16_adapter_keeps_fp8_fusions_off():
     env = R.trainer_env(
-        _recipe(rollout={"precision": "bf16", "expert_qat": False}, lora={"rank": 32, "serving": "adapter"})
+        _recipe(rollout={"precision": "bf16"}, lora={"rank": 32, "serving": "adapter"})
     )
     assert env["SGLANG_OPT_FP8_WO_A_GEMM"] == env["SGLANG_OPT_DEEPGEMM_HC_PRENORM"] == "0"
 
@@ -130,21 +131,8 @@ def test_qwen_recipes_keep_their_defaults():
         ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
         ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
         ({"cluster": {"disk_gib": None}}, "cluster.disk_gib"),
-        ({"rollout": {"precision": "bf16", "expert_qat": False, "gpus_per_engine": 4}}, "gpus_per_engine >= 8"),
-        (
-            {
-                "rollout": {"precision": "bf16", "expert_qat": False},
-                "extra_args": ["--sglang-speculative-algorithm", "DSPARK"],
-            },
-            "have no draft",
-        ),
-        (
-            {
-                "rollout": {"precision": "bf16", "expert_qat": False},
-                "extra_args": ["--sglang-speculative-algorithm=DSPARK"],
-            },
-            "have no draft",
-        ),
+        ({"rollout": {"precision": "bf16", "gpus_per_engine": 4}}, "gpus_per_engine >= 8"),
+        ({"algorithm": {"mis_bounds": [1.5, 5.0]}}, "algorithm.mis_bounds"),
     ],
 )
 def test_dsv41_refuses(over, message):
@@ -222,7 +210,34 @@ def test_policy_loss_keeps_tis():
     argv = R.miles_args(r, "run1", resume=False)
     assert "--use-tis" in argv and "--loss-type" not in argv and "--rollout-top-logprobs-num" not in argv
     assert "--disable-grpo-std-normalization" not in argv and "--calculate-per-token-loss" not in argv
-    assert "MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO" not in R.harbor_env(r, "run1")
+    assert R.harbor_env(r, "run1")["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] == "1"  # the default
+
+
+def test_dsv41_speculative_follows_the_served_precision():
+    assert _value(R.miles_args(_recipe(), "run1", resume=False), "--sglang-speculative-algorithm") == "DSPARK"
+    for over in ({"rollout": {"precision": "bf16"}}, {"rollout": {"speculative": False}}):
+        assert "--sglang-speculative-algorithm" not in R.miles_args(_recipe(**over), "run1", resume=False), over
+
+
+def test_expert_qat_follows_full_weight_fp8_fp4():
+    assert "--mxfp4-qat-routed-experts" in R.miles_args(_recipe(), "run1", resume=False)
+    lora = _recipe(lora={"rank": 32}, optimizer={"offload": None, "moment_dtype": None})
+    assert "--mxfp4-qat-routed-experts" not in R.miles_args(lora, "run1", resume=False)
+    bf16 = _recipe(rollout={"precision": "bf16"})
+    assert "--mxfp4-qat-routed-experts" not in R.miles_args(bf16, "run1", resume=False)
+
+
+def test_mis_is_one_recipe_value():
+    r = _recipe("dsv41-flash-lora-split.yaml")
+    argv = R.miles_args(r, "run1", resume=False)
+    assert _value(argv, "--custom-tis-function-path") == "miles_ext.obs.mismatch_tis.mis_with_mask_health"
+    config = yaml.safe_load(base64.b64decode(_value(argv, "--custom-config-path").removeprefix("base64:")))
+    assert (config["tis_mode"], config["tis_lower_bound"], config["tis_upper_bound"]) == ("mask", 0.5, 5.0)
+    sc = _recipe(algorithm={"loss": "score_centering", "is_correction": "mis", "mis_bounds": [0.25, 4.0]})
+    argv = R.miles_args(sc, "run1", resume=False)
+    assert _value(argv, "--score-centering-is") == "mis"
+    assert (_value(argv, "--score-centering-mis-low"), _value(argv, "--score-centering-mis-high")) == ("0.25", "4.0")
+    assert "--custom-tis-function-path" not in argv
 
 
 @pytest.mark.parametrize("serving", ["merged", "adapter"])
@@ -232,20 +247,21 @@ def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec, s
     lora = {"rank": 32, "alpha": 32, "serving": serving}
     # adapter serving to separate rollout nodes needs PP 1 (hook-011), as the LoRA overfit recipes run
     layout = {} if serving == "merged" else {"parallel": {"pp": 1}, "cluster": {"nodes": 3, "train_gpus": 8}}
-    r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, rollout={"expert_qat": False}, **layout)
+    r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, **layout)
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
     assert _value(argv, "--lora-rank") == "32" and ("--lora-merged-sync" in argv) == (serving == "merged")
     assert _value(argv, "--custom-lora-spec-path") == "miles_ext.lora.dsv41"
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "deepseek_v41"}))
     validate_native_lora_args(_native_lora_args(argv, hf_checkpoint=str(tmp_path)))
-    with pytest.raises(ValueError, match="drop rollout.expert_qat"):
-        R.validate(_recipe(lora=lora, optimizer={"offload": None}), local_inputs=False)
     if serving == "adapter":
         lone_w3 = lora | {"target_modules": "attn.wq_a,ffn.shared_experts.w3"}
         with pytest.raises(ValueError, match="lone w3"):
-            R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, rollout={"expert_qat": False}, **layout),
+            R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, **layout),
                        local_inputs=False)
+        # hook-011 refuses adapter sync with PP > 1 only on the trainer, after the engines start
+        with pytest.raises(ValueError, match="parallel.pp 1"):
+            R.validate(_recipe(lora=lora, optimizer={"offload": None}, parallel={"pp": 2}), local_inputs=False)
 
 
 def _native_lora_args(argv: list[str], **overrides):

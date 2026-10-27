@@ -35,7 +35,6 @@ rollout:
   precision: fp8_fp4
   context_length: 262144
   max_running_requests: 128
-  expert_qat: true
 taskset:
   # Run 4's 52 TB4 tasks, uploaded once to the miles-datasets volume; the prompt file keeps the
   # 16 tasks in dsv41-flash-tb4-overfit16.tasks

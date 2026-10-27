@@ -12,6 +12,7 @@ tasks at /inputs/tasks, the prompt file at /inputs/prompts.jsonl, weights at
 mounted read-only at /datasets, so the launching machine holds only the prompt file.
 """
 
+import base64
 import copy
 import json
 import math
@@ -94,7 +95,7 @@ DEFAULTS: dict[str, Any] = {
         "setup_timeout": 1800,
         "cwd": None,  # None: where Harbor starts the agent (task.toml workdir, else the image WORKDIR)
         # True: a trial that fills the context window scores 0 whatever its verifier says
-        "context_exhausted_scores_zero": False,
+        "context_exhausted_scores_zero": True,
         # "subproc": each trial in its own process, so one trial's blocking work cannot stall the others;
         # "inline": trials share the rollout event loop
         "function_mode": "subproc",
@@ -150,10 +151,13 @@ DEFAULTS: dict[str, Any] = {
         "grpo_std_normalization": True,
         # True: the loss averages over all response tokens of the batch instead of per sample
         "per_token_loss": False,
-        # "score_centering" (arXiv 2609.20807) replaces PPO clipping and --use-tis; score_centering_is weights it
-        # ("tis" clips at tis_clip), top_logprobs is the sampler's candidates per generated token
+        # "score_centering" (arXiv 2609.20807) replaces PPO clipping; top_logprobs is the sampler's candidates
+        # per generated token. is_correction weights either loss by trainer over engine probability: "tis" clips
+        # at tis_clip, "mis" masks tokens outside mis_bounds (policy_loss: Miles' MIS with mask-health metrics,
+        # ext-014), "none" leaves it out
         "loss": "policy_loss",
-        "score_centering_is": "tis",
+        "is_correction": "tis",
+        "mis_bounds": [0.5, 5.0],
         "top_logprobs": 32,
         "kl_loss_coef": 0.0,  # > 0: KL loss against the base weights (FSDP then loads a reference copy)
         "entropy_coef": 0.0,
@@ -161,10 +165,11 @@ DEFAULTS: dict[str, Any] = {
     },
     # rollout engines: GPUs per engine (one SGLang server), the format they serve (a key of
     # the preset's precisions), context_length (None: the model's; set, a reply that would
-    # overflow it is shortened), max_running_requests (None: SGLang's). expert_qat: the trainer
-    # keeps its FP4 experts on the engine's grid (fp8_fp4 only, needs optimizer.offload disk)
+    # overflow it is shortened), max_running_requests (None: SGLang's). speculative: decode with the preset's
+    # draft model when the served precision has one. A full-weight fp8_fp4 run always keeps the trainer's FP4
+    # experts on the engine's grid (fix-006, see expert_qat)
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
-                "expert_qat": False},
+                "speculative": True},
     # Megatron only. offload "disk": stream Adam's state to node-local disk between steps
     # (disk_dir on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
     # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
@@ -172,7 +177,7 @@ DEFAULTS: dict[str, Any] = {
     # serving "merged": engines get the adapter folded into full weights; "adapter": they keep the base and
     # apply the bf16 adapter (SGLang LoRA, hook-010 for V4.1). target_modules: Miles' selector syntax; None selects
     # attention and MLP groups.
-    "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "merged"},
+    "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "adapter"},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
     # for max_concurrent_samples; checkpoint_buffer: hook-008 (fork/patches/)
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
@@ -310,7 +315,7 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.max_tokens_per_gpu": {"type": "int", "min": 1},
     "algorithm.advantage_estimator": {"type": "str", "enum": ADVANTAGE_ESTIMATORS},
     "algorithm.loss": {"type": "str", "enum": ("policy_loss", "score_centering")},
-    "algorithm.score_centering_is": {"type": "str", "enum": ("none", "tis", "mis")},
+    "algorithm.is_correction": {"type": "str", "enum": ("none", "tis", "mis")},
     "algorithm.top_logprobs": {"type": "int", "min": 1},
     "algorithm.kl_loss_coef": {"type": "number", "min": 0},
     "algorithm.entropy_coef": {"type": "number", "min": 0},
@@ -508,12 +513,6 @@ def _validate_rollout(recipe: dict) -> None:
             f"rollout.precision {precision} needs rollout.gpus_per_engine >= "
             f"{preset.precision_min_gpus[precision]} for this model, got {gpus}"
         )
-    spec = any(str(a).split("=")[0] == "--sglang-speculative-algorithm" for a in recipe["extra_args"])
-    if spec and preset.draft_precisions and precision not in preset.draft_precisions:
-        raise ValueError(
-            f"speculative decoding needs rollout.precision in {list(preset.draft_precisions)} "
-            f"for this model (its {precision} weights have no draft), got {precision!r}"
-        )
     if GPUS_PER_NODE % gpus:
         raise ValueError(
             f"rollout.gpus_per_engine {gpus} must divide {GPUS_PER_NODE} so an engine stays inside a node")
@@ -524,13 +523,33 @@ def _validate_rollout(recipe: dict) -> None:
     if precision == FP8_FP4 and recipe["checkpoint"]["save_hf"]:
         # Megatron's HF export writes under --hf-checkpoint's config, which here is the quantized one
         raise ValueError(f"checkpoint.save_hf is not supported with rollout.precision {FP8_FP4}")
-    if roll["expert_qat"]:
-        if precision != FP8_FP4 or recipe["optimizer"]["offload"] != "disk":
-            raise ValueError(f"rollout.expert_qat needs rollout.precision {FP8_FP4} and optimizer.offload disk "
-                             "(Miles projects the experts in the disk-streamed Adam)")
+    if expert_qat(recipe):
+        if recipe["optimizer"]["offload"] != "disk":
+            raise ValueError(f"a full-weight rollout.precision {FP8_FP4} run needs optimizer.offload disk: Miles "
+                             "keeps the experts on the engine's FP4 grid in the disk-streamed Adam (fix-006)")
         par = megatron_parallel(recipe)
         if par["ep"] != par["tp"] * par["cp"] * par["dp"]:
-            raise ValueError("rollout.expert_qat needs expert data parallel size 1: parallel.ep = tp * cp * dp")
+            raise ValueError(f"a full-weight rollout.precision {FP8_FP4} run needs expert data parallel size 1 "
+                             "(fix-006): parallel.ep = tp * cp * dp")
+    bounds = recipe["algorithm"]["mis_bounds"]
+    if not (len(bounds) == 2 and all(isinstance(b, (int, float)) for b in bounds) and 0 <= bounds[0] < 1 < bounds[1]):
+        raise ValueError(f"algorithm.mis_bounds must be [low, high] with 0 <= low < 1 < high, got {bounds}")
+
+
+def expert_qat(recipe: dict) -> bool:
+    """A full-weight run on fp8_fp4 engines keeps its FP4 experts on the engine's grid (fix-006); LoRA leaves
+    the experts frozen."""
+    return rollout_precision(recipe) == FP8_FP4 and not recipe["lora"]["rank"]
+
+
+def speculative_algorithm(recipe: dict) -> str | None:
+    """The preset's draft algorithm when rollout.speculative is on and the served precision carries a draft."""
+    preset = PRESETS[recipe["model"]["preset"]]
+    if not (recipe["rollout"]["speculative"] and preset.speculative_algorithm):
+        return None
+    if preset.draft_precisions and rollout_precision(recipe) not in preset.draft_precisions:
+        return None
+    return preset.speculative_algorithm
 
 
 def backend(recipe: dict) -> str:
@@ -617,11 +636,14 @@ def _validate_lora(recipe: dict) -> None:
         raise ValueError(
             "lora trains only the adapters; drop optimizer.offload (Miles refuses the disk Adam with LoRA)"
         )
-    if recipe["rollout"]["expert_qat"]:
-        raise ValueError("lora leaves the routed experts frozen; drop rollout.expert_qat")
     leaves = {t.strip().rpartition(".")[2] for t in (recipe["lora"]["target_modules"] or "").split(",")}
     if recipe["lora"]["serving"] == "adapter" and "w3" in leaves and "w1" not in leaves:
         raise ValueError("lora.serving adapter: SGLang drops a shared expert's lone w3 adapter; select w1 with it")
+    if recipe["lora"]["serving"] == "adapter" and recipe["parallel"]["pp"] > 1:
+        raise ValueError(
+            "lora.serving adapter syncs the adapter to separate engines only with parallel.pp 1 (hook-011); "
+            "use pp 1 or lora.serving merged"
+        )
 
 
 def _lora_args(recipe: dict) -> str:
@@ -929,11 +951,30 @@ def _split_args(recipe: dict) -> str:
         --custom-weight-transfer-protocol-path {SPLIT_SYNC_PROTOCOL}"""
 
 
+MIS_FUNCTION = "miles_ext.obs.mismatch_tis.mis_with_mask_health"  # ext-014
+
+
+def _mis_config(low: float, high: float) -> str:
+    """Miles' MIS (examples/.../mis.py) as an inline --custom-config-path: a token mask over [low, high],
+    batch-normalized, no rejection sampling (mis.py also reads the rs_* keys, so they are null)."""
+    doc = {"use_tis": True, "use_rs": False, "tis_level": "token", "tis_mode": "mask", "tis_lower_bound": low,
+           "tis_upper_bound": high, "tis_batch_normalize": True, "rs_level": "token", "rs_lower_bound": None,
+           "rs_upper_bound": None, "rs_veto_threshold": None}
+    return "base64:" + base64.b64encode(yaml.safe_dump(doc, sort_keys=False).encode()).decode()
+
+
 def _loss_args(algo: dict) -> str:
+    low, high = algo["mis_bounds"]
     if algo["loss"] == "policy_loss":
-        return f"--use-tis --tis-clip {algo['tis_clip']} --tis-clip-low {algo['tis_clip_low']}"
+        if algo["is_correction"] == "none":
+            return ""
+        args = f"--use-tis --tis-clip {algo['tis_clip']} --tis-clip-low {algo['tis_clip_low']}"
+        if algo["is_correction"] == "mis":
+            args += f" --custom-tis-function-path {MIS_FUNCTION} --custom-config-path {_mis_config(low, high)}"
+        return args
     return f"""--loss-type score_centering --use-rollout-logprobs
-        --score-centering-is {algo["score_centering_is"]} --score-centering-tis-clip {algo["tis_clip"]}
+        --score-centering-is {algo["is_correction"]} --score-centering-tis-clip {algo["tis_clip"]}
+        {f"--score-centering-mis-low {low} --score-centering-mis-high {high}" if algo["is_correction"] == "mis" else ""}
         --rollout-top-logprobs-num {algo["top_logprobs"]}"""
 
 
@@ -974,8 +1015,10 @@ def _rollout_args(recipe: dict) -> str:
     if rollout_precision(recipe) == FP8_FP4:
         # ext-007: weight sync re-encodes each tensor in the format --hf-checkpoint stores it
         args += " --custom-weight-quantizer-path miles_ext.lowprec.checkpoint_quantizer.quantize_like_checkpoint"
-    if roll["expert_qat"]:
+    if expert_qat(recipe):
         args += " --mxfp4-qat-routed-experts"  # fix-006
+    if spec := speculative_algorithm(recipe):
+        args += f" --sglang-speculative-algorithm {spec}"
     return args
 
 
@@ -1001,6 +1044,8 @@ def _backend_args(recipe: dict, resume: bool) -> str:
     # matches the checkpoint's, so a run extended past its first num_rollout could
     # not resume. --override-opt_param-scheduler: this launch's schedule wins over
     # the checkpoint's (the recipes use a constant LR, so nothing else changes).
+    # --skip-actor-forward-only: the recipe takes one optimizer step per batch, so the old log-probs are the
+    # training forward's own and the separate forward-only pass is redundant (Miles validates the rest).
     par, preset = megatron_parallel(recipe), PRESETS[recipe["model"]["preset"]]
     return f"""
         {load_model_args(preset.megatron_model_type)}
@@ -1016,6 +1061,7 @@ def _backend_args(recipe: dict, resume: bool) -> str:
         --attention-dropout 0.0 --hidden-dropout 0.0
         --log-probs-chunk-size 4096
         --override-opt_param-scheduler
+        {"--skip-actor-forward-only" if recipe["algorithm"]["loss"] == "policy_loss" else ""}
         {preset.megatron_args}
         {_optimizer_args(recipe, resume)}
         {_lora_args(recipe)}
