@@ -4,8 +4,11 @@ A read-only web page over your runs: what is live now, what happened, every run 
 the results volumes, Modal apps and their cost, Sail apps and W&B runs. It never starts, stops or deletes
 anything, so it is safe to share. A stdlib Python server (`server.py`) and a plain JS page, no build step.
 
+First run, in order: install, pick a data dir, start the page, then launch with the same data dir set.
+
 ```bash
 pip install modal wandb pyyaml                   # Python 3.11+; plus the Sail SDK if you use Sail sandboxes
+                                                 # --tunnel also needs cloudflared on PATH
 export MILES_MONITOR_DIR=~/miles-monitor          # data dir (default ~/.miles-monitor)
 export MILES_DOTENV_DIR=<dir with .env>           # optional: Modal, W&B and Sail keys, as for the launcher
 miles_ext/monitor/start.sh                        # http://127.0.0.1:8787, detached; stop.sh stops it
@@ -13,7 +16,9 @@ miles_ext/monitor/start.sh --tunnel               # adds a cloudflared quick tun
 ```
 
 With `MILES_MONITOR_DIR` set when you launch, `modal run -m miles_ext.launch.modal_app` registers each launch
-itself, and the run shows up within seconds.
+itself, and the run shows up within seconds. Redirect the launch output to a file
+(`modal run --detach ... > <run_id>.log 2>&1`) so the page can also tail the log: startup stages, per-step
+training numbers and error signals all come from it.
 
 - **Access.** The server binds to 127.0.0.1 only. `--tunnel` starts a [cloudflared](https://github.com/cloudflare/cloudflared)
   quick tunnel (a random `trycloudflare.com` URL, kept across server restarts, saved in `url.txt`) and turns on
@@ -107,8 +112,8 @@ Every GPU the shown Modal apps (`app_prefixes`, first of `modal_environments`) h
   type and count. So every app shows, with or without a launch manifest; a manifest only adds run id and title.
   A container's GPU count is its function's count; when one app has two functions of one GPU type with
   different counts (or it is a sandbox), the count shows as "?" and stays out of the total.
-- What an app is for: `workstreams.json` (app-name regex, first match wins: workstream, role, owner thread, one
-  line of purpose; optional). Add a line when a new app prefix appears; it is re-read on every pass.
+- What an app is for: `workstreams.json` (optional; first match wins), e.g.
+  `{"workstreams": [{"match": "^miles-me-", "name": "My runs", "role": "train", "owner": "me", "purpose": "..."}]}`. Add a line when a new app prefix appears; it is re-read on every pass.
 - Cost: Modal's billing report only. "Billed, last full hour" is the newest whole billed hour of each live app
   (an app's first hour and the newest bucket can be partial); apps younger than that say so.
 - Timeline: `history/gpus.jsonl` (a sample per change and every 5 min) for GPUs in use and per-app lanes, plus
@@ -140,7 +145,8 @@ URL passwords, `api_key=`/`token:` values) are scrubbed from every response.
 - **Groups and types.** `groups.json` in the data dir (optional) is the one place that says which group a run belongs to and its type: `train`
   (RL training), `eval` (quality eval), `bench` (inference speed/correctness), `smoke` (smokes, probes, profiles) or
   `other` (result dirs with no launch record, hidden by default). The first regex matching the run id wins; an
-  unmatched run is grouped by its id prefix. `groups.py` applies it and the server adds `group` and `type` to every
+  unmatched run is grouped by its id prefix. Format: `{"rules": [["^smoke-", "Smokes", "smoke"], ["^grpo-math-", "GRPO math", "train"]]}`
+  (regex, group label, type). `groups.py` applies it and the server adds `group` and `type` to every
   run. New campaign: add one rule. The registry's `kind` is not used for this (most benches were registered `train`).
 - **Runs tab.** Groups, newest first; a group with a run in the last 3 days opens by default. Tabs filter by type.
   Each row shows what the run produced: the reward over steps (sparkline, last value), the trial mean reward, or the
