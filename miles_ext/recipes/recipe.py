@@ -192,7 +192,6 @@ DEFAULTS: dict[str, Any] = {
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
     "parallel": {"tp": 1, "pp": 1, "cp": 1, "ep": None},
-    # W&B: one project per campaign, named by the recipe (fork/README.md, "W&B projects")
     # wandb_entity None: the W&B API key's default entity
     # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
     "tracking": {"wandb_project": None, "wandb_entity": None, "wandb_name": None, "tags": []},
