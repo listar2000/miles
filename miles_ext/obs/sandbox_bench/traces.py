@@ -15,6 +15,12 @@ from miles_ext.obs.sandbox_bench.workloads import classify
 TRAJECTORY = Path("agent") / "mini-swe-agent.trajectory.json"
 
 
+def task_dir_name(task_name: str) -> str:
+    """The task's dir under the tasks root, the agent function's ``instance_id``: Harbor's ``task_name`` may carry
+    an org prefix (``mobius-labs/software-009``), the dir does not (``software-009``)."""
+    return task_name.rsplit("/", 1)[-1]
+
+
 def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
     """One trial's replay record, or None when it has no result or trajectory."""
     try:
@@ -42,7 +48,7 @@ def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
         return None
     return {
         "trial": trial_dir.name,
-        "instance_id": result.get("task_name"),
+        "instance_id": task_dir_name(result.get("task_name") or ""),
         "commands": commands,
         "think_s": think_s,
         "cmd_s": cmd_s,
