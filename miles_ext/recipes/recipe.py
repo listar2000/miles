@@ -174,9 +174,9 @@ DEFAULTS: dict[str, Any] = {
     # attention and MLP groups.
     "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "merged"},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
-    # for max_concurrent_samples; retry_aborted_tries: fix-048, checkpoint_buffer: hook-008 (fork/patches/)
+    # for max_concurrent_samples; checkpoint_buffer: hook-008 (fork/patches/)
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
-              "pause_generation": "in_place", "single_pass": False, "retry_aborted_tries": 1,
+              "pause_generation": "in_place", "single_pass": False,
               "checkpoint_buffer": "log"},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
@@ -330,7 +330,6 @@ FIELD_RULES: dict[str, dict] = {
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
-    "async.retry_aborted_tries": {"type": "int", "min": 0},
     "async.checkpoint_buffer": {"type": "str", "enum": CHECKPOINT_BUFFERS},
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
@@ -842,7 +841,6 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         {f"--max-token-weighted-staleness {tws}" if (tws := algo["max_token_weighted_staleness"]) is not None else ""}
         --async-checkpoint-buffer {aio["checkpoint_buffer"]}
         {f"--custom-async-data-buffer-path {GROUP_LOG_BUFFER}" if aio["checkpoint_buffer"] == "log" else ""}
-        --async-retry-aborted-tries {aio["retry_aborted_tries"]}
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         {"--async-single-pass" if aio["single_pass"] else ""}
         """

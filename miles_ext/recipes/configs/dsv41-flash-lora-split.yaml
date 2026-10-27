@@ -79,8 +79,6 @@ extra_args:
   - miles_ext.memory.ckpt_offload.install
   - --distributed-timeout-minutes
   - "60"
-  - --dsv4-reuse-indexer-topk  # fix-047
-  - --dsv4-indexer-tp-split  # fix-052
   - --skip-actor-forward-only  # one optimizer step per batch: old log-probs = the train forward's
   - --sglang-speculative-algorithm
   - DSPARK  # static verify (image default); fix-053 keeps R3 rows
