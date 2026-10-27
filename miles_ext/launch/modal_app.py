@@ -47,6 +47,7 @@ import modal
 
 from miles_ext import stack
 from miles_ext.launch import split
+from miles_ext.obs import sandbox_profile
 from miles_ext.platform import compile_cache
 from miles_ext.platform.checkpoints import apply_retention_local
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
@@ -468,6 +469,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                 "python", "-m", "miles_ext.harbor.session_proxy", "--listen-port", str(R.PROXY_PORT),
                 "--upstream-host", head_ip, "--ports", f"{R.SESSION_PORT}-{R.SESSION_PORT + R.SESSION_WORKERS - 1}",
                 f"--token={token}",  # token_urlsafe can start with "-", which argparse reads as a flag
+                *(["--profile-log", str(run_dir / sandbox_profile.PROXY_FILE)] if recipe["obs"]["sandbox_profile"] else []),
             ])
             stack_ctx.callback(proxy.terminate)
             _wait_for_port("127.0.0.1", R.PROXY_PORT, timeout=60)
