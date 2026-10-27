@@ -1,5 +1,4 @@
 import logging
-import os  # [fork fix-015]
 from argparse import Namespace
 from collections.abc import Sequence
 
@@ -21,8 +20,6 @@ from miles.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
 logger = logging.getLogger(__name__)
-
-_BSHD_PAD_PER_MICRO_BATCH = os.environ.get("MILES_BSHD_PAD_PER_MICRO_BATCH", "1") != "0"  # [fork fix-015]
 
 
 # [fork fix-015] begin
@@ -129,10 +126,9 @@ def get_rollout_data(
         max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
 
         rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-        # [fork fix-015] begin
-        if _BSHD_PAD_PER_MICRO_BATCH:
-            groups = _micro_batch_groups(rollout_data, args.micro_batch_size)
-            rollout_data["max_seq_lens"] = _micro_batch_max_seq_lens(rollout_data["total_lengths"], groups, pad_size)
+        # [fork fix-015] begin, always on [fork fix-059]
+        groups = _micro_batch_groups(rollout_data, args.micro_batch_size)
+        rollout_data["max_seq_lens"] = _micro_batch_max_seq_lens(rollout_data["total_lengths"], groups, pad_size)
         # [fork fix-015] end
 
     # Full-response SGLang OPD fields share rollout CP slicing but retain float32 precision.
@@ -527,7 +523,7 @@ def get_data_iterator(
         assert args.use_dynamic_global_batch_size == ("dynamic_global_batch_size" in rollout_data)
         micro_batch_indices = rollout_data["micro_batch_indices"]
         # [fork fix-015] begin
-        if args.qkv_format == "bshd" and _BSHD_PAD_PER_MICRO_BATCH:
+        if args.qkv_format == "bshd":  # [fork fix-059] always on
             micro_batch_indices = _longest_micro_batch_first(
                 _micro_batch_groups(rollout_data, args.micro_batch_size),
                 rollout_data["num_microbatches"],
@@ -577,7 +573,7 @@ def get_data_iterator(
         num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
         # [fork fix-015] begin
         # Longest first, so GPU and pinned host buffers reach full size on micro-batch 1.
-        if args.qkv_format == "bshd" and _BSHD_PAD_PER_MICRO_BATCH:
+        if args.qkv_format == "bshd":  # [fork fix-059] always on
             micro_batch_indices = _longest_micro_batch_first(
                 _micro_batch_groups(rollout_data, args.micro_batch_size),
                 num_microbatches,

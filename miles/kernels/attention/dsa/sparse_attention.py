@@ -11,7 +11,6 @@ FlashMLA's is converted to. Which forward runs and how both kernels are tiled is
 measured rows live in _TUNED, keyed by (arch major, RoPE tail, TP-local heads); callers may pass their own.
 """
 
-import os  # [fork fix-008]
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -29,7 +28,7 @@ _FLASH_MLA_TOPK_MULTIPLE = 128
 _FLASH_MLA_HEADS = (64, 128)
 _FLASH_MLA_HEAD_DIMS = (512, 576)
 _FLASH_MLA_ARCH_MAJORS = (9, 10)
-_FLASH_MLA_ROW_CHUNK = int(os.environ.get("MILES_FLASH_MLA_ROW_CHUNK", "16384"))  # [fork fix-008] 0 = one call
+_FLASH_MLA_ROW_CHUNK = 16384  # [fork fix-008] [fork fix-059] a constant, not an env var
 
 
 @dataclass(frozen=True)
@@ -107,7 +106,7 @@ def _flash_mla_forward(q, kv, indices, attn_sink, sm_scale):
     # [fork fix-008] pad heads per query-row chunk so the padded q/out stay bounded; rows are independent
     kv_flat = kv.reshape(batch * seq_len_kv, 1, -1)
     rows = q.shape[0]
-    chunk = _FLASH_MLA_ROW_CHUNK if _FLASH_MLA_ROW_CHUNK > 0 else rows
+    chunk = _FLASH_MLA_ROW_CHUNK  # [fork fix-059]
     out = q.new_empty(rows, heads, 512)
     lse = torch.empty(rows, heads, dtype=torch.float32, device=q.device)
     for s in range(0, rows, chunk):

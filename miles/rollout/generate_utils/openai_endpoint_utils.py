@@ -22,6 +22,9 @@ from miles.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 _SESSION_REQUEST_TIMEOUT = 120
+# [fork fix-017] [fork fix-059] collecting samples and deleting a session wait this long (a constant, not a flag);
+# a timeout drops the sample's whole group, so it only bounds a stuck server
+_SESSION_COLLECT_TIMEOUT = 1800.0
 
 
 class OpenAIEndpointTracer:
@@ -32,8 +35,8 @@ class OpenAIEndpointTracer:
         session_server_instance_id: str | None = None,
         samples_wire_fields: tuple[str, ...] = COMPUTED_FIELDS,
         agent_router_url: str | None = None,
-        # [fork fix-017] collecting samples and deleting the session wait this long; create() takes
-        # --session-collect-timeout (a timeout drops the sample's whole group)
+        # [fork fix-017] collecting samples and deleting the session wait this long; create() passes
+        # _SESSION_COLLECT_TIMEOUT [fork fix-059]
         collect_timeout: float = _SESSION_REQUEST_TIMEOUT,
     ):
         self.router_url = router_url
@@ -89,7 +92,7 @@ class OpenAIEndpointTracer:
             session_server_instance_id=instance.instance_id,
             samples_wire_fields=samples_wire_fields,
             agent_router_url=instance.external_url,
-            collect_timeout=getattr(args, "session_collect_timeout", _SESSION_REQUEST_TIMEOUT),  # [fork fix-017]
+            collect_timeout=_SESSION_COLLECT_TIMEOUT,  # [fork fix-017] [fork fix-059]
         )
 
     async def collect_samples(

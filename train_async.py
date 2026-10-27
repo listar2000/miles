@@ -28,13 +28,30 @@ async def train(args, *, disposer: Disposer):
     _worker_manager = init_orchestration_script(args, disposer=disposer)
 
     # [fork fix-022] begin
-    if args.trainer_init_with_rollout:
-        # --num-rollout is given, so the trainer needs nothing from the rollout side until it connects.
-        (inference_controller, rollout_executor, num_rollout_per_epoch), (actor_model, critic_model) = (
-            await asyncio.gather(create_rollout_components(args), init_training_models(args))
+    # [fork fix-059] always for fully async runs on separate GPUs with --num-rollout: the trainer needs nothing
+    # from the rollout side until it connects. Colocated engines size their memory from what is free at start,
+    # and with only --num-epoch the trainer waits for the rollout side to count the dataset.
+    if args.fully_async and not args.colocate and args.num_rollout is not None:
+
+        # each side registers its handles as it finishes, so a failure on the other side still disposes them
+        async def start_rollout_side():
+            components = await create_rollout_components(args)
+            disposer.add(components[0], components[1])
+            return components
+
+        async def start_trainer_side():
+            models = await init_training_models(args)
+            disposer.add(models[1], models[0])
+            return models
+
+        rollout_side, trainer_side = await asyncio.gather(
+            start_rollout_side(), start_trainer_side(), return_exceptions=True
         )
-        disposer.add(inference_controller, rollout_executor)
-        disposer.add(critic_model, actor_model)
+        for result in (rollout_side, trainer_side):
+            if isinstance(result, BaseException):
+                raise result
+        inference_controller, rollout_executor, num_rollout_per_epoch = rollout_side
+        actor_model, critic_model = trainer_side
         await connect_training_models(args, actor_model, rollout_executor)
     else:
         # create the rollout manager, with sglang engines inside.

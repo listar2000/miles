@@ -87,6 +87,16 @@ def _install_driver_fakes(
     monkeypatch.setattr(train_async_driver, "init_orchestration_script", lambda _args, *, disposer: None)
     monkeypatch.setattr(train_async_driver, "create_rollout_components", create_rollout_components)
     monkeypatch.setattr(train_async_driver, "create_training_models", create_training_models)
+
+    # [fork fix-059] fully async runs with --num-rollout initialize the trainer alongside the rollout side
+    async def init_training_models(_args: SimpleNamespace) -> tuple[Any, Any]:
+        return components.actor_model, components.critic_model
+
+    async def connect_training_models(_args: SimpleNamespace, _model: Any, _executor: Any) -> None:
+        return None
+
+    monkeypatch.setattr(train_async_driver, "init_training_models", init_training_models)
+    monkeypatch.setattr(train_async_driver, "connect_training_models", connect_training_models)
     monkeypatch.setattr(train_async_driver, "maybe_start_mini_ft_controller", lambda _args: None)
     monkeypatch.setattr(train_async_driver, "update_weights", update_weights)
     monkeypatch.setattr(train_async_driver, "remove_rollout_data_refs", lambda *_args, **_kwargs: None)
@@ -325,9 +335,9 @@ class TestTerminalLifecycle:
 # [fork fix-022]
 class TestTrainerInitWithRollout:
     async def test_the_trainer_initializes_while_the_rollout_side_starts(self, monkeypatch: pytest.MonkeyPatch):
-        """With the flag the trainer init starts before the engines are up, and connects only once both are done."""
+        """Fully async with --num-rollout: the trainer init starts before the engines are up, connects after both."""
         events: list[str] = []
-        args = _make_args(trainer_init_with_rollout=True)
+        args = _make_args(fully_async=True)
         components = _install_driver_fakes(monkeypatch, args, events)
         trainer_started = asyncio.Event()
 
@@ -354,3 +364,18 @@ class TestTrainerInitWithRollout:
 
         assert events[:3] == ["trainer_ready", "rollout_ready", "connected"]
         assert events.index("connected") < events.index("update_weights:None")
+
+    async def test_a_trainer_init_failure_still_disposes_the_rollout_side(self, monkeypatch: pytest.MonkeyPatch):
+        """[fork fix-059] The rollout side's handles are released when the concurrent trainer init fails."""
+        events: list[str] = []
+        args = _make_args(fully_async=True)
+        _install_driver_fakes(monkeypatch, args, events)
+
+        async def fail_init(_args: SimpleNamespace) -> None:
+            raise RuntimeError("trainer init failed")
+
+        monkeypatch.setattr(train_async_driver, "init_training_models", fail_init)
+        with pytest.raises(RuntimeError, match="trainer init failed"):
+            await with_disposer(train_async_driver.train, args)
+
+        assert events == ["executor_dispose", "inference_dispose"]
