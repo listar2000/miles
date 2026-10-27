@@ -54,6 +54,7 @@ from urllib.parse import urlsplit
 from miles.rollout.agentic.session import openai_session_url
 
 from miles_ext.harbor import context_exit, task_hash, upstream
+from miles_ext.obs import sandbox_profile
 from miles_ext.recipes import recipe as R
 
 hf = upstream.harbor_agent_function()
@@ -134,7 +135,13 @@ _TYPE_ONLY_VARS = ("HARBOR_OVERRIDE_CPUS", "HARBOR_OVERRIDE_MEMORY_MB", "HARBOR_
 
 
 def _environment_config():
-    """Upstream's environment config, or one for ``HARBOR_ENV_IMPORT_PATH`` (an environment Harbor loads by path)."""
+    """Upstream's environment config, or one for ``HARBOR_ENV_IMPORT_PATH`` (an environment Harbor loads by path);
+    with ``obs.sandbox_profile`` on, the same provider behind ext-040's timing wrapper."""
+    config = _provider_config()
+    return sandbox_profile.profiled_config(config) if sandbox_profile.enabled() else config
+
+
+def _provider_config():
     import_path = os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()
     if not import_path:
         return _upstream_environment_config()
@@ -208,6 +215,8 @@ async def run(
         if config.task.path:  # Harbor hashes the task dir on this loop, twice per trial (task_hash.py)
             await asyncio.to_thread(task_hash.warm, config.task.path)
         trial = await Trial.create(config)
+        if sandbox_profile.enabled():
+            sandbox_profile.note_session(trial.paths.trial_dir, base_url)
         result = await asyncio.wait_for(trial.run(), timeout=trial_timeout_s)
     except asyncio.TimeoutError:
         logger.error(f"Harbor trial for {instance_id} exceeded {trial_timeout_s}s; scoring 0")

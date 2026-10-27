@@ -25,6 +25,7 @@ from typing import Any
 import yaml
 
 from miles.utils.external_utils.model_args_utils import load_model_args
+from miles_ext.obs import sandbox_profile
 from miles_ext.recipes.presets import PRESETS
 
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
@@ -189,6 +190,9 @@ DEFAULTS: dict[str, Any] = {
     "parallel": {"tp": 1, "pp": 1, "cp": 1, "ep": None},
     # wandb_entity None: the W&B API key's default entity
     # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
+    # sandbox_profile: time each trial's sandbox calls and the session proxy's requests (ext-040,
+    # miles_ext.obs.sandbox_profile); off, trials and the proxy run exactly as without it
+    "obs": {"sandbox_profile": False},
     "tracking": {"wandb_project": None, "wandb_entity": None, "wandb_name": None, "tags": []},
     "extra_args": [],
 }
@@ -784,6 +788,8 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         env["MSWEA_CWD"] = agent["cwd"]
     if agent["context_exhausted_scores_zero"]:
         env["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] = "1"
+    if recipe["obs"]["sandbox_profile"]:
+        env[sandbox_profile.ENV] = "1"
     return env
 
 
