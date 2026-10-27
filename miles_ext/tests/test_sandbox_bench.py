@@ -183,3 +183,44 @@ def test_plan_runs_each_provider_in_its_own_sequence():
     assert [a["name"] for a in arms[:4]] == ["sail-c1-r0", "sail-c32-r0", "sail-c32-r1", "sail-c1-r1"]
     assert {a["trials"] for a in arms if a["concurrency"] == 1} == {8}
     assert all(a["trace_trials"] is None for a in arms if a["concurrency"] == 32)
+
+
+def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypatch):
+    """Extracted traces name tasks as Harbor's task_name (with an org prefix); the volume holds tasks/<name>/."""
+    from harbor.models.task.task import Task
+
+    from miles_ext.harbor.agent_function import hf
+    from miles_ext.obs.sandbox_bench import app
+
+    src = tmp_path / "datasets" / "tb4t" / "tasks"
+    for name in ("software-009", "wal-1"):
+        (src / name / "environment").mkdir(parents=True)
+        (src / name / "tests").mkdir()
+        (src / name / "task.toml").write_text('version = "1.0"\n')
+        (src / name / "instruction.md").write_text("do it\n")
+        (src / name / "environment" / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+        (src / name / "tests" / "test.sh").write_text("exit 0\n")
+    traces_dir = tmp_path / "traces"
+    traces_dir.mkdir()
+    lines = [
+        {"trial": f"t{i}", "instance_id": iid, "commands": ["ls"], "think_s": [1.0], "cmd_s": [0.1], "rc": [0]}
+        for i, iid in enumerate(["mobius-labs/software-009", "wal-1", "mobius-labs/software-009"])
+    ]
+    (traces_dir / "src.jsonl").write_text("".join(json.dumps(t) + "\n" for t in lines))
+    monkeypatch.setattr(app, "TRACES_DIR", traces_dir)
+    (arm,) = app.plan_arms("b", ["modal"], [32], 1, ["noop", "trace"], 2, 1, "src", "zero", 2, 4096)
+    arm["tasks_src"] = str(src)
+    root = tmp_path / "root"
+    root.mkdir()
+    specs = app._trial_specs(arm, root)
+    trace_specs = [s for s in specs if s["workload"] == "trace"]
+    assert [s["instance_id"] for s in trace_specs] == ["software-009", "wal-1", "software-009"]
+    assert len({s["key"] for s in specs}) == len(specs) == 5
+    for s in specs:  # what the agent function resolves for each trial
+        env = Task(hf._task_path(root, s["instance_id"])).config.environment
+        assert (env.cpus, env.memory_mb) == (2, 4096)  # sizeless tasks take the arm's size
+
+
+def test_extract_names_the_task_dir(tmp_path):
+    d = _trial(tmp_path / "x", task="mobius-labs/software-009")
+    assert traces.trial_trace(d)["instance_id"] == "software-009"

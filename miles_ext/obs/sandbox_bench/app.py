@@ -94,6 +94,22 @@ def _wait_for_port(port: int, timeout: float = 60) -> None:
             time.sleep(0.5)
 
 
+def _fill_resources(task_dir: Path, cpus: int, memory_mb: int) -> bool:
+    """Give a copied task the arm's size where its task.toml names none (Harbor's Modal "limit" policy needs one);
+    the same on both providers, so they stay comparable. True when the task.toml was changed."""
+    from harbor.models.task.config import TaskConfig
+
+    path = task_dir / "task.toml"
+    config = TaskConfig.model_validate_toml(path.read_text())
+    env = config.environment
+    if env.cpus is not None and env.memory_mb is not None:
+        return False
+    env.cpus = env.cpus if env.cpus is not None else cpus
+    env.memory_mb = env.memory_mb if env.memory_mb is not None else memory_mb
+    path.write_text(config.model_dump_toml())
+    return True
+
+
 def _trial_specs(arm: dict, tasks_root: Path) -> list[dict]:
     """Every trial of the arm, workload by workload: session key, task, script."""
     specs = []
@@ -102,12 +118,17 @@ def _trial_specs(arm: dict, tasks_root: Path) -> list[dict]:
         if workload == W.TRACE:
             lines = (TRACES_DIR / f"{arm['traces']}.jsonl").read_text().splitlines()
             for t in [json.loads(line) for line in lines][: arm["trace_trials"]]:
-                src = Path(arm["tasks_src"]) / t["instance_id"]
-                shutil.copytree(src, tasks_root / t["instance_id"], dirs_exist_ok=True)
+                instance_id = traces_lib.task_dir_name(t["instance_id"])  # extracts before 10-27 kept the org prefix
+                if not (tasks_root / instance_id).exists():
+                    shutil.copytree(Path(arm["tasks_src"]) / instance_id, tasks_root / instance_id)
+                    if _fill_resources(tasks_root / instance_id, cpus, memory_mb):
+                        print(
+                            f"[{arm['name']}] {instance_id}: no size in task.toml, using {cpus} CPU / {memory_mb} MB"
+                        )
                 specs.append(
                     {
                         "workload": workload,
-                        "instance_id": t["instance_id"],
+                        "instance_id": instance_id,
                         "trace": t["trial"],
                         "commands": t["commands"],
                         "think_s": t["think_s"] if arm["think"] == "recorded" else None,
