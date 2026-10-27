@@ -28,6 +28,7 @@ line and the env vars the rollout workers read.
 | `algorithm` | mode (`fully_async` or `sync`), batch shape, learning rate, clipping, advantage estimator, loss, staleness bounds, group filter |
 | `rollout` | GPUs per engine, served precision, context length |
 | `optimizer`, `parallel`, `lora`, `async`, `checkpoint` | memory and layout knobs, LoRA, fully async buffer, saves |
+| `obs` | `sandbox_profile`: time where each trial's sandbox time goes (ext-040, [page](../patches/ext-040-sandbox-profile.md)); off by default |
 | `tracking` | W&B project (required), entity, display name, tags |
 | `extra_args` | raw Miles flags, appended last (prefer a recipe field when one exists) |
 
