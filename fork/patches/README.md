@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-041 | Ext | Harbor's Modal sandboxes run no-network tasks: a sandbox whose policy changes during the trial is created with a filter Modal can change, then narrowed to no network before use | active; remove when upstream Harbor creates it so | [ext-041-modal-no-network.md](ext-041-modal-no-network.md) |
 | ext-040 | Ext | `obs.sandbox_profile`: timing spans for each trial's sandbox calls and the session proxy (off by default, no change when off), and a CPU-only benchmark of Sail and Modal sandboxes with a scripted model on the production agent path | active | [ext-040-sandbox-profile.md](ext-040-sandbox-profile.md) |
 | ext-038 | Ext | `taskset.harness: single-turn`: one chat completion per prompt row through the agentic generate and session server, graded in process by `metadata.task` against `metadata.label` (first verifier: STAK) | active | [ext-038-single-turn.md](ext-038-single-turn.md) |
 | fix-058 | Fix | Score centering accepts DSpark speculative decoding (exact rejection sampling, top-k from the verify logits); other speculative modes and forced acceptance (`SGLANG_SIMULATE_ACC_LEN > 0`) stay refused | active; remove when upstream allows speculative decoding with score centering | [fix-058-score-centering-dspark.md](fix-058-score-centering-dspark.md) |

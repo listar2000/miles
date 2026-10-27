@@ -9,7 +9,7 @@ that with real inference costs GPUs and mixes in model speed.
 ## Decision
 - Timing hooks in `miles_ext/obs/sandbox_profile.py`, switched by recipe `obs.sandbox_profile` (default off).
   Off, the trial path is unchanged: Harbor gets the same provider config and the proxy app has no middleware.
-  On, `ProfiledEnvironment` subclasses the run's provider (Sail's class or Harbor's Modal class, resolved from
+  On, `ProfiledEnvironment` subclasses the run's provider (Sail's class or the fork's Modal class of ext-041, resolved from
   `HARBOR_ENV_IMPORT_PATH` / `HARBOR_ENV_TYPE`) and writes `<trial_dir>/sandbox_profile.jsonl`; the proxy's
   `--profile-log` writes `<run_dir>/sandbox_profile/proxy.jsonl`. The in-sandbox side reuses the step timings
   Harbor's mini-swe-agent patch already records. A wrapper by import path, not a patch to the providers.
