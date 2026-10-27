@@ -66,6 +66,10 @@ Rules for **fixes and hooks** (enforced by `ledger.py check`):
   the fix is not an upstream candidate.
 - No ordering rule: with merges there is no replay order, so a fix lands
   on `main` like any other commit.
+- Removing one of our fixes or hooks is itself a fix or hook commit (a new id). It
+  names what it removes: `Retires: <id>` when that change is gone entirely,
+  `Releases: <id> <file>` when its code left only some files. Where the commit only
+  deleted lines it needs no marker of its own.
 
 Rules for **extensions**: new files under `miles_ext/` only, plugged in
 through Miles' own extension points (`--custom-generate-function-path`,

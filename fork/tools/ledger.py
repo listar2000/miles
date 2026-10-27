@@ -30,9 +30,13 @@ so the history is the record and nothing has to be kept in sync by hand.
      several commits (an extension grows release by release), and a fix or hook
      id is used by exactly one commit;
   7. a sync that drops a fix or hook because upstream fixed it says so with a
-     ``Retires: <id>`` trailer on one of its ``sync-`` commits. A retired change's
-     files and markers are no longer required (its commit stays in the history,
-     listed as retired), and only a ``sync-`` commit may retire a fix or hook.
+     ``Retires: <id>`` trailer on one of its ``sync-`` commits. A fix or hook commit
+     that removes an earlier fix or hook of ours retires it the same way. A fix or hook
+     commit that removes an earlier change's code from some files only says so with
+     ``Releases: <id> <file>, ...``. A retired change's files and markers are no longer
+     required (its commit stays in the history, listed as retired), nor a released
+     id's marker in that file, nor a retiring or releasing commit's own marker in a
+     file where it only deleted lines.
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
@@ -131,6 +135,7 @@ class Commit:
     subject: str
     trailers: dict[str, list[str]]
     files: list[str] = field(default_factory=list)
+    deleted_only: set[str] = field(default_factory=set)  # files this commit only deleted lines from
 
     @property
     def kind(self) -> str | None:
@@ -160,12 +165,29 @@ def commits(base: str) -> list[Commit]:
             key, _, value = line.partition(":")
             trailers.setdefault(key.strip(), []).append(value.strip())
         files = git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
-        out.append(Commit(sha[:10], subject, trailers, files))
+        deleted_only = set()
+        for row in git("diff-tree", "--no-commit-id", "--numstat", "-r", sha).splitlines():
+            added, _, path = row.split("\t", 2)
+            if added == "0":
+                deleted_only.add(path)
+        out.append(Commit(sha[:10], subject, trailers, files, deleted_only))
+    return out
+
+
+def released(series: list[Commit]) -> set[tuple[str, str]]:
+    """{(fix or hook id, file)}: files whose code of that id a later commit removed, from ``Releases:`` trailers."""
+    out = set()
+    for c in series:
+        for v in c.trailers.get("Releases", []):
+            for item in (t.strip() for t in v.split(",")):
+                if item:
+                    fid, _, path = item.partition(" ")
+                    out.add((fid, path.strip()))
     return out
 
 
 def retired(series: list[Commit]) -> dict[str, str]:
-    """{fix or hook id: the sync id that retired it}, from ``Retires:`` trailers."""
+    """{fix or hook id: the commit id that retired it}, from ``Retires:`` trailers."""
     out = {}
     for c in series:
         for v in c.trailers.get("Retires", []):
@@ -233,8 +255,12 @@ def cmd_check(base: str) -> int:
         if c.kind is None:
             problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
             continue
-        if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")):
-            problems.append(f"{c.sha} {c.fork_id}: only a sync- commit may carry a Retires: trailer")
+        if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")) and (
+            c.kind not in UPSTREAM_KINDS
+        ):
+            problems.append(f"{c.sha} {c.fork_id}: only a sync-, fix or hook commit may carry a Retires: trailer")
+        if "Releases" in c.trailers and c.kind not in UPSTREAM_KINDS:
+            problems.append(f"{c.sha} {c.fork_id}: only a fix or hook commit may carry a Releases: trailer")
         if not re.fullmatch(ID_FORMATS[c.kind], c.fork_id):
             problems.append(f"{c.sha} {c.fork_id!r}: a Fork-{c.kind} id must match {ID_FORMATS[c.kind]}")
         if c.kind in UPSTREAM_KINDS and sum(o.fork_id == c.fork_id for o in series) > 1:
@@ -261,7 +287,10 @@ def cmd_check(base: str) -> int:
                     )
             if c.fork_id in gone:
                 continue
+            removes = "Retires" in c.trailers or "Releases" in c.trailers
             for f in touches - {SGLANG + t for t in sglang_touches}:
+                if removes and f in c.deleted_only:
+                    continue  # a pure deletion leaves nothing to mark
                 declared.setdefault(f, set()).add(c.fork_id)
         else:
             for f in c.files:
@@ -273,6 +302,13 @@ def cmd_check(base: str) -> int:
                         f"{c.sha} {c.fork_id}: only its own fix or hook commit or a sync- commit "
                         f"changes an SGLang patch ({f})"
                     )
+    for fid, f in sorted(released(series)):
+        if fid not in upstream_ids:
+            problems.append(f"Releases: {fid} {f} names no fix or hook since {base}")
+        elif fid not in declared.get(f, set()) and fid not in gone:
+            problems.append(f"Releases: {fid} {f}, but {fid} does not touch {f}")
+        declared.get(f, set()).discard(fid)
+    declared = {f: ids for f, ids in declared.items() if ids}
     for fid in sorted(set(gone) - upstream_ids):
         problems.append(f"Retires: {fid} (in {gone[fid]}) names no fix or hook since {base}")
     changed = [f for f in git("diff", "--name-only", base, "HEAD").split() if not own(f)]
