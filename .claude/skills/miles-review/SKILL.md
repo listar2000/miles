@@ -298,7 +298,7 @@ shape and the same checks, whichever agent does it:
 
 ```bash
 python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python \
-    [--agent codex] [--board coord/BOARD.md] [--prior <earlier review.md>] [--out <dir>] \
+    [--agent codex] [--board <file of id reservations>] [--prior <earlier review.md>] [--out <dir>] \
     [--deep --context <repo path>... --evidence <file or dir>...]
 ```
 
@@ -331,8 +331,8 @@ body, head), `commits.txt` (log with trailers), `diff.patch`, `diffstat.txt`,
 `files.txt`, `ledger_list.txt` (every fork id at the head),
 `ids_on_branches.txt` (ids used on any branch, merged or not; they count as
 taken),
-`reserved_ids.txt` (id reservations from the coordination board, given with
-`--board`; a reserved id counts as taken), `ledger.txt`,
+`reserved_ids.txt` (id reservations, the lines mentioning "reserved" in the
+file given with `--board`; a reserved id counts as taken), `ledger.txt`,
 `precommit.txt` (failing hooks and exit code) and `pytest.txt` (head and base),
 `test_proofs.txt` (each new test on the head and on the base's production
 files, with times; `error` when it cannot run on this host),

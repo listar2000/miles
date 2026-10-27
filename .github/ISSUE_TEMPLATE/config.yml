@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: User guide
+    url: https://github.com/listar2000/miles/blob/main/FORK.md
+    about: Quickstart, recipes, extending, running and known limits.

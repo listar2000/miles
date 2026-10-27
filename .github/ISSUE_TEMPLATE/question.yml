@@ -1,0 +1,10 @@
+name: Question
+description: Anything else about using the fork.
+labels: ["needs-triage", "question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true

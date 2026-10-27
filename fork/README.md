@@ -51,7 +51,7 @@ Every fork commit has exactly one trailer saying what it is.
 | --- | --- | --- | --- |
 | **Fix** (`Fork-Fix: fix-NNN`) | a bug fix to upstream code | in place, in the upstream file; in SGLang, a patch file (SGLang patches, below) | yes: it is the only thing that can (with hooks) |
 | **Hook** (`Fork-Hook: hook-NNN`) | an extension point upstream lacks, so an extension can plug in | in place, in the upstream file; in SGLang, a patch file | yes |
-| **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | no (new files only) |
+| **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | no (new files only) |
 | **Ext** (`Fork-Ext: ext-NNN`) | new capability: harnesses, recipes, algorithms, sandbox providers | `miles_ext/` | no (new files only) |
 
 Rules for **fixes and hooks** (enforced by `ledger.py check`):
@@ -114,9 +114,10 @@ dependency, see Harbor below for when that becomes a dependency fork.
 ## Layout
 
 ```
-FORK.md                 pointer to this file
+FORK.md                 the front door: using the fork (fork/guide/) and changing it (this file)
 fork/
   README.md             this rulebook
+  guide/                the user guide: quickstart, recipes, extending, running, limits, help
   docker/build.py       build main into an image (--main) and mark an image stable (--mark-stable)
   tools/ledger.py       list / audit our commits (touch points, markers, trailers)
   tools/sync.py         upstream sync helper (still the old rebase flow: use --dry-run only; see Sync)
@@ -128,6 +129,9 @@ fork/
   deps/sglang/          SGLang patches (<fix|hook>-NNN-<slug>.patch) and apply.py, applied at image build
 .claude/skills/miles-fork/  the workflow for agents changing this fork
 .claude/skills/miles-review/  the review checklist every fork PR goes through
+.claude/skills/miles-use/  the workflow for agents training with this fork
+.claude/rules/fork.md   tells every agent this is a fork and where to start
+.github/ISSUE_TEMPLATE/ the issue forms of fork/guide/help.md
 miles_ext/              extensions (top-level package next to miles/, on PYTHONPATH in the image)
   stack.py              pins: upstream tag, base image digest, Harbor commit, mini-swe-agent, Sail SDK; image repo
   stable.json           the stable versions: name, commit, image digest, date, note
@@ -243,7 +247,9 @@ Then publish a GitHub Release for the tag with the same note.
 
 ## W&B projects
 
-Runs go to the `mobiuslab` entity, **one project per campaign**: a set of runs
+This repo's maintainers log to the `mobiuslab` entity (users set their own
+`tracking.wandb_entity`; unset, W&B uses the API key's default entity), **one
+project per campaign**: a set of runs
 with one purpose, compared with each other (e.g. `miles-fork-validation` for
 release checks, `miles-sail` for the Sail sandbox rounds, `miles-dsv41` for
 DeepSeek-V4.1). A different purpose, model family or sandbox provider means a

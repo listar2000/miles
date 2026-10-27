@@ -1,0 +1,22 @@
+name: Extension point or feature
+description: You need to plug something in that the current extension points don't fit, or a capability the fork lacks.
+labels: ["needs-triage", "feature"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you are trying to do
+      description: The training goal, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried and why it doesn't fit
+      description: Which recipe field or extension point (fork/guide/extending.md) you looked at.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal (optional)
