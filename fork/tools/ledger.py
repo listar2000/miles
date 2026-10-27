@@ -36,7 +36,7 @@ so the history is the record and nothing has to be kept in sync by hand.
      ``Releases: <id> <file>, ...``. A retired change's files and markers are no longer
      required (its commit stays in the history, listed as retired), nor a released
      id's marker in that file, nor a retiring or releasing commit's own marker in a
-     file where it only deleted lines.
+     file where it only removed code (every line it added is a line of the upstream base).
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
@@ -135,7 +135,6 @@ class Commit:
     subject: str
     trailers: dict[str, list[str]]
     files: list[str] = field(default_factory=list)
-    deleted_only: set[str] = field(default_factory=set)  # files this commit only deleted lines from
 
     @property
     def kind(self) -> str | None:
@@ -165,12 +164,31 @@ def commits(base: str) -> list[Commit]:
             key, _, value = line.partition(":")
             trailers.setdefault(key.strip(), []).append(value.strip())
         files = git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
-        deleted_only = set()
-        for row in git("diff-tree", "--no-commit-id", "--numstat", "-r", sha).splitlines():
-            added, _, path = row.split("\t", 2)
-            if added == "0":
-                deleted_only.add(path)
-        out.append(Commit(sha[:10], subject, trailers, files, deleted_only))
+        out.append(Commit(sha[:10], subject, trailers, files))
+    return out
+
+
+def only_removes(sha: str, path: str, base: str) -> bool:
+    """Whether every line commit ``sha`` adds to ``path`` restores ``path`` at ``base`` in place (it removed our code).
+
+    An added line counts only where the file after the commit lines up with the base file there, so a moved or
+    duplicated upstream line still needs a marker."""
+    added = _added_lines(git("show", "--format=", "--unified=0", sha, "--", path))
+    if not added:
+        return True
+    try:
+        git("cat-file", "-e", f"{base}:{path}")
+    except subprocess.CalledProcessError:
+        return False
+    return not added & _added_lines(git("diff", "--unified=0", base, sha, "--", path))
+
+
+def _added_lines(diff: str) -> set[int]:
+    """1-based numbers, in the new file, of the lines a ``--unified=0`` diff adds."""
+    out = set()
+    for m in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff, re.M):
+        start, count = int(m.group(1)), int(m.group(2) or 1)
+        out.update(range(start, start + count))
     return out
 
 
@@ -289,8 +307,8 @@ def cmd_check(base: str) -> int:
                 continue
             removes = "Retires" in c.trailers or "Releases" in c.trailers
             for f in touches - {SGLANG + t for t in sglang_touches}:
-                if removes and f in c.deleted_only:
-                    continue  # a pure deletion leaves nothing to mark
+                if removes and only_removes(c.sha, f, base):
+                    continue  # removing our code leaves nothing to mark
                 declared.setdefault(f, set()).add(c.fork_id)
         else:
             for f in c.files:
