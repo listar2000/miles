@@ -56,7 +56,8 @@ titles for runs with no manifest), `groups.json` (run groups, below) and `workst
 
 A launch writes `manifests/<app_id>.json` before any GPU work: one file per attempt (run id, attempt = Modal app
 id, start time, expected steps and trials, limits, sandbox app, W&B project, from the recipe) plus `log_path`,
-filled in when the launcher's stdout is redirected to a file (`modal run --detach ... > launch.log`). The
+filled in when the launcher's stdout is redirected to a file (`modal run --detach ... > launch.log`). It
+is found through `/proc/self/fd/1`, so on Linux only; elsewhere attach the log with `register.py` (below). The
 monitor picks a new manifest up within 2 s.
 
 - `miles_ext.launch.modal_app` writes it itself when `MILES_MONITOR_DIR` is set (`manifest.register_launch`).

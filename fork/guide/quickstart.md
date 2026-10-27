@@ -86,7 +86,8 @@ Copy the closest shipped recipe into your own project first. In the copy, set
 key's default) and `tracking.wandb_project` to your own project. The shipped
 recipes log to the maintainers' entity, which your key cannot write to.
 
-Turn on the run monitor first (step 7), so the launch registers itself:
+To watch the run in the monitor, also start it as step 7 describes. `MILES_MONITOR_DIR` below
+makes the launch register itself there:
 
 ```bash
 export MILES_RECIPE=<your copy>.yaml MILES_DATA=<your task sets> MILES_MONITOR_DIR=~/miles-monitor
@@ -95,7 +96,9 @@ modal run --detach -m miles_ext.launch.modal_app --run-id smoke-<you>-1 > smoke-
 ```
 
 Redirecting the launch output to a file lets the monitor tail it for startup
-stages, per-step rewards and errors.
+stages, per-step rewards and errors. The launcher finds that file through `/proc`,
+so on macOS register it by hand after launching:
+`python -m miles_ext.monitor.register smoke-<you>-1 smoke-<you>-1.log <your copy>.yaml`.
 
 The dry check builds the run's arguments in the image, parses them with Miles,
 and checks the tasks and weights, all on one GPU. Fix whatever it reports before
@@ -112,7 +115,7 @@ Its header comment says what it was made for and what it needs.
 The run monitor is a read-only web page over your runs, served from your machine:
 
 ```bash
-pip install wandb                                # on top of step 1's packages
+pip install wandb                                # Python 3.11+ (the config reader uses tomllib)
 export MILES_MONITOR_DIR=~/miles-monitor         # the same dir your launches use
 miles_ext/monitor/start.sh                       # http://127.0.0.1:8787
 miles_ext/monitor/start.sh --tunnel              # a public URL behind a password (needs cloudflared)

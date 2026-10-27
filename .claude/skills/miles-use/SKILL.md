@@ -30,7 +30,7 @@ person you work for watch runs. It only reads, so it is safe to leave running an
 
 1. Pick one data dir and use it everywhere: `export MILES_MONITOR_DIR=<dir>` in the
    shell that launches and in the one that starts the monitor.
-2. `miles_ext/monitor/start.sh` serves http://127.0.0.1:8787. To share it, add `--tunnel`
+2. `miles_ext/monitor/start.sh` (Python 3.11+) serves http://127.0.0.1:8787. To share it, add `--tunnel`
    (a cloudflared quick tunnel; needs `cloudflared` on `PATH`). That prints a
    `trycloudflare.com` URL in `<dir>/url.txt`, and the login is in `<dir>/auth.txt`.
    Give out both. A restart keeps the URL while the tunnel lives. `stop.sh` stops
@@ -40,6 +40,8 @@ person you work for watch runs. It only reads, so it is safe to leave running an
    `<dir>/manifests/<app_id>.json` itself, and the run appears within seconds with
    startup stages, step rewards and error signals read from that log. A launch made
    without it can be added afterwards with `python -m miles_ext.monitor.register <run_id> <log> <recipe>`.
+   The launcher finds the log through `/proc`, which exists only on Linux. On macOS,
+   run that command after each launch to attach the log.
 4. In a shared Modal workspace, set `app_prefixes`, `launcher_apps` and
    `results_volumes` in `<dir>/monitor.toml` to your own names, so the page shows
    your runs only.
