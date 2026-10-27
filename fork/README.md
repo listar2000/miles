@@ -140,6 +140,7 @@ miles_ext/              extensions (top-level package next to miles/, on PYTHONP
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
   monitor/              read-only run monitor web page (ext-039)
+  obs/                  observers: GPU telemetry, rollout loop watchdog; sandbox_profile + sandbox_bench (ext-040)
   platform/             the platform API (ext-006): schema, validate, launch, observe, teardown, secret, weights, checkpoints
 ```
 
