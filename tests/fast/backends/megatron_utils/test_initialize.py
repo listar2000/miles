@@ -196,15 +196,5 @@ class TestReleaseRecomputeInputs:
         assert alive == 0
         assert torch.equal(grads, base_grads)
 
-    def test_env_switch_leaves_megatron_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """MILES_RECOMPUTE_RELEASE=0 keeps Megatron's own backward."""
-        from megatron.core.tensor_parallel import random as tp_random
-
-        monkeypatch.setenv("MILES_RECOMPUTE_RELEASE", "0")
-        original = tp_random.CheckpointFunction.__dict__["backward"]
-        initialize._release_recompute_inputs()
-
-        assert tp_random.CheckpointFunction.__dict__["backward"] is original
-
 
 # [fork fix-011] end

@@ -752,17 +752,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "Requires train_async.py."
                 ),
             )
-            # [fork fix-022] begin
-            parser.add_argument(
-                "--trainer-init-with-rollout",
-                action="store_true",
-                default=False,
-                help=(
-                    "train_async.py: initialize the trainer (model build and weight load) while the rollout side "
-                    "starts its engines, instead of after it. Needs --num-rollout; refuses --colocate."
-                ),
-            )
-            # [fork fix-022] end
             # Sampling values reach the engine per request only: the built-in generate path sends them
             # itself and the session server fills fields an agent omits from its session's defaults.
             # They are never engine launch arguments: an engine shared by rollout and eval has no single default.
@@ -1033,12 +1022,13 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--async-retry-aborted-tries",
                 type=int,
-                default=0,
+                default=1,  # [fork fix-059] on by default; 0 keeps upstream's whole-group handling
                 help=(
                     "Fully async mode regenerates an aborted try at once, up to this many times, and keeps "
                     "its group's other tries, instead of handing the whole group to "
                     "--async-unused-samples-handler. A group with a try still aborted after the last retry "
-                    "is handled as before. 0 (default) turns it off."
+                    "is handled as before. Default 1; 0 turns it off (needed with --group-rm or "
+                    "deterministic inference)."
                 ),
             )
             # [fork fix-048] end
@@ -2908,16 +2898,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=32,
                 help="Number of session server instances.",
             )
-            # [fork fix-017] begin
-            parser.add_argument(
-                "--session-collect-timeout",
-                type=float,
-                default=1800.0,
-                help="Seconds the rollout waits for a session server to return a finished session's training "
-                "samples (and to delete the session). A timeout drops the sample's whole group, so this only "
-                "bounds a server that is stuck; a server sharing a node with a busy trainer can take minutes.",
-            )
-            # [fork fix-017] end
             parser.add_argument(
                 "--session-server-ip",
                 type=str,
@@ -4299,15 +4279,14 @@ def miles_validate_args(args):
             assert args.num_rollout is not None, (
                 "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
             )
-    # [fork fix-022]
-    assert not args.trainer_init_with_rollout or args.num_rollout is not None, (
-        "--trainer-init-with-rollout needs --num-rollout: with only --num-epoch the trainer waits for the "
-        "rollout side to count the dataset"
-    )
-    assert not (args.trainer_init_with_rollout and args.colocate), (
-        "--trainer-init-with-rollout cannot run with --colocate: an engine sizes its memory from what is free on "
-        "its GPUs at start, which the trainer's load would take"
-    )
+    # [fork fix-059] fix-048 runs each try alone, which a group reward or deterministic inference cannot
+    if args.group_rm or getattr(args, "sglang_enable_deterministic_inference", False):
+        if args.async_retry_aborted_tries > 1:  # above the default, so set on purpose
+            logger.warning(
+                f"--async-retry-aborted-tries {args.async_retry_aborted_tries} is ignored: a group reward or "
+                "deterministic inference cannot retry one try alone, so aborted groups are handled whole"
+            )
+        args.async_retry_aborted_tries = 0
 
     if args.enable_mtp_training:
         assert (

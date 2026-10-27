@@ -63,11 +63,6 @@ def test_explicit_micro_batch_indices_set_the_groups(monkeypatch):
     assert lens == [16, 48, 16, 48]
 
 
-def test_old_whole_batch_padding_can_be_turned_back_on(monkeypatch):
-    monkeypatch.setattr(data_utils, "_BSHD_PAD_PER_MICRO_BATCH", False)
-    assert _load_max_seq_lens(monkeypatch, [5, 30, 12, 17]) == [32, 32, 32, 32]
-
-
 def _visit_order(monkeypatch, total_lengths, *, global_batch_size, micro_batch_size=1, **extra):
     monkeypatch.setattr(data_utils, "get_parallel_state", _parallel_state)
     rollout_data = {"tokens": [[0] * n for n in total_lengths], "total_lengths": list(total_lengths), **extra}
@@ -103,13 +98,6 @@ def test_rollout_side_micro_batches_are_reordered_within_each_step(monkeypatch):
         num_microbatches=[2, 1],
     )
     assert order == [[30], [5, 12], [40]]
-
-
-def test_whole_batch_padding_keeps_the_contiguous_order(monkeypatch):
-    monkeypatch.setattr(data_utils, "_BSHD_PAD_PER_MICRO_BATCH", False)
-    order, iterator = _visit_order(monkeypatch, [5, 30, 12, 17], global_batch_size=4)
-    assert order == [[5], [30], [12], [17]]
-    assert iterator.micro_batch_indices is None
 
 
 def test_forward_results_come_back_in_sample_order(monkeypatch):

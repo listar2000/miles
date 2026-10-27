@@ -97,10 +97,8 @@ def _release_recompute_inputs() -> None:
     """Free each full-recompute checkpoint's detached inputs and their .grad once its backward is done.
 
     Module state from the recompute (dispatcher probs, mHC mlp_norm_manager) otherwise keeps them alive via
-    AccumulateGrad. Grads are unchanged. MILES_RECOMPUTE_RELEASE=0 turns this off. See fork/patches/fix-011.
+    AccumulateGrad. Grads are unchanged. Always on [fork fix-059]. See fork/patches/fix-011.
     """
-    if os.environ.get("MILES_RECOMPUTE_RELEASE", "1") == "0":
-        return
     checkpoint_fn = tensor_parallel.random.CheckpointFunction
     original = checkpoint_fn.backward
     if getattr(original, "miles_release", False):

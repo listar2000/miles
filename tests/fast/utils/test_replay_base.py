@@ -4,7 +4,6 @@ register_cpu_ci(est_time=60, suite="stage-b-cpu", labels=["replay"])
 
 import torch
 
-import miles.utils.replay_base as replay_base
 from miles.utils.replay_base import BaseReplayManager
 
 
@@ -70,13 +69,3 @@ def test_get_topk_fn_spreads_pad_rows_over_all_experts():
     assert all(len(set(row.tolist())) == topk for row in pads)
     per_rank = torch.bincount(pads.flatten().long() // (num_experts // num_ranks), minlength=num_ranks)
     assert per_rank.max() - per_rank.min() <= topk, per_rank
-
-
-def test_get_topk_fn_pad_spread_can_be_turned_off(monkeypatch):
-    monkeypatch.setattr(replay_base, "_PAD_SPREAD", False)
-    scores = torch.zeros(2, 5)
-    manager = _make_replay_manager(torch.full((2, 3), -1, dtype=torch.int32))
-
-    top_indices = manager.get_topk_fn(_topk, return_probs=False)(scores, 3)
-
-    torch.testing.assert_close(top_indices, torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.int32))

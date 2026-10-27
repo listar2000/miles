@@ -743,7 +743,7 @@ async def test_create_selects_wire_fields_by_session_server_version(monkeypatch)
 
 # [fork fix-017] begin
 @pytest.mark.asyncio
-async def test_create_takes_the_collect_timeout_from_args(monkeypatch):
+async def test_create_uses_the_session_collect_timeout(monkeypatch):  # [fork fix-059]
     async def fake_post(url, payload, action="post"):
         return {"session_id": "sid-1"}
 
@@ -754,7 +754,6 @@ async def test_create_takes_the_collect_timeout_from_args(monkeypatch):
         rollout_temperature=1.0,
         rollout_top_p=1.0,
         rollout_top_k=-1,
-        session_collect_timeout=1800.0,
     )
     assert (await OpenAIEndpointTracer.create(args)).collect_timeout == 1800.0
 

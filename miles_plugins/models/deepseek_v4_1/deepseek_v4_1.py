@@ -648,16 +648,10 @@ def get_dsv41_spec(args, config, vp_stage):
     config.v41_hf_checkpoint = args.hf_checkpoint
     config.v41_runtime = V41Runtime()
     config.miles_dsa_topk_backend = args.miles_dsa_topk_backend
-    # [fork fix-047] indexer replay pops its own top-k in the recompute, so the two cannot be combined
-    assert not (
-        args.dsv4_reuse_indexer_topk and args.use_indexer_replay
-    ), "--dsv4-reuse-indexer-topk cannot be combined with indexer replay"
-    config.v41_reuse_indexer_topk = args.dsv4_reuse_indexer_topk
-    # [fork fix-052] indexer replay records and replays whole-sequence top-k per rank
-    assert not (
-        args.dsv4_indexer_tp_split and args.use_indexer_replay
-    ), "--dsv4-indexer-tp-split cannot be combined with indexer replay"
-    config.v41_indexer_tp_split = args.dsv4_indexer_tp_split
+    # [fork fix-047] [fork fix-052] always on [fork fix-059], except with indexer replay: it pops its own top-k in
+    # the recompute, and records and replays whole-sequence top-k per rank
+    config.v41_reuse_indexer_topk = not args.use_indexer_replay
+    config.v41_indexer_tp_split = not args.use_indexer_replay
     _install_patches(config)
 
     _orig_get_spec = _eav_specs.get_experimental_attention_variant_module_spec

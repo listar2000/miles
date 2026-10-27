@@ -8,8 +8,6 @@ from miles.platforms import current_platform
 
 logger = logging.getLogger(__name__)
 
-_PAD_SPREAD = os.environ.get("MILES_R3_PAD_SPREAD", "1") != "0"  # [fork fix-014]
-
 
 def _get_rank():
     return dist.get_rank() if dist.is_initialized() else 0
@@ -113,9 +111,9 @@ class BaseReplayManager:
                 # [fork fix-014] begin
                 # Offset each row by row * topk so pad rows spread evenly over all experts: the same arange on every
                 # pad row sends them all to experts 0..topk-1, one expert-parallel rank. See fork/patches/fix-014.
-                if _PAD_SPREAD:
-                    rows = torch.arange(top_indices.shape[0], device=top_indices.device, dtype=top_indices.dtype)
-                    ar = (rows.unsqueeze(-1) * top_indices.shape[1] + ar) % scores.shape[1]
+                # Always on [fork fix-059].
+                rows = torch.arange(top_indices.shape[0], device=top_indices.device, dtype=top_indices.dtype)
+                ar = (rows.unsqueeze(-1) * top_indices.shape[1] + ar) % scores.shape[1]
                 # [fork fix-014] end
                 top_indices = torch.where(all_invalid.unsqueeze(-1), ar, top_indices)
 
