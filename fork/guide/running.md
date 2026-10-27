@@ -23,7 +23,7 @@ public URL. Setup and config: [miles_ext/monitor/README.md](../../miles_ext/moni
 
 ## Lifecycle
 
-- **Resume:** launch the same run id again. It loads the last save in `checkpoints/`.
+- **Resume:** launch the same run id again. It loads the last save in `checkpoints/`. A run id that already finished `num_rollout` returns at once, so raise `--num-rollout` to continue one.
 - **Stop:** `modal app stop <app id>` for the GPU app, by id. The run's sandbox app
   has its own lifetime and idle caps (`sandbox.lifetime_secs`, `sandbox.idle_secs`),
   so sandboxes end even when the trainer is killed. To stop everything a run

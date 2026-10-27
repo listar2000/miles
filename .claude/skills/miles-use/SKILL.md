@@ -19,8 +19,9 @@ read them in and the rules that keep a run cheap and reproducible.
    own project, and look up every field you change in `DEFAULTS`
    (`miles_ext/recipes/recipe.py`).
 3. Always run `--check-only` before a real launch, and fix everything it reports.
-4. Begin with a short run (`--num-rollout 2`, run id `smoke-...`), then launch the
-   same run id again to check resume, before a long or large run.
+4. Begin with a short run (`--num-rollout 2 --save-interval 1`, run id `smoke-...`),
+   then launch the same run id with `--num-rollout 3` to check resume, before a long
+   or large run. A relaunch of a finished run id returns at once without training.
 
 ## Rules
 
