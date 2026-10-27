@@ -61,10 +61,11 @@ if modal.is_local():
     image = fork_image(commit or None, image_ref or None) if (commit or image_ref) else modal.Image.debian_slim()
     if tasks_dir := os.environ.get(TASKS_DIR_ENV):
         image = image.add_local_dir(tasks_dir, str(R.TASKS))
-    secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
     image = image.env({TASKS_VOLUME_ENV: os.environ.get(TASKS_VOLUME_ENV, "")})  # the container mounts the same
 else:
-    image, secrets = modal.Image.debian_slim(), []  # inside the container its own image and env are used
+    image = modal.Image.debian_slim()  # inside the container its own image and env are used
+# the same objects on both sides (the container hydrates them by id, as the launcher's)
+secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
 tasks_volume = os.environ.get(TASKS_VOLUME_ENV, "")
 arm_volumes = {str(R.RESULTS): results_volume}
 if tasks_volume:
@@ -287,12 +288,14 @@ def build_report(bench_id: str) -> str:
 
 
 @app.local_entrypoint()
-def extract(source_run: str, n: int = 64, seed: int = 0):
+def extract(source_run: str, n: int = 64, seed: int = 0, run_id: str = ""):
+    """``run_id``: accepted for monitor/launch.sh, which appends it; the source run names this job."""
     print(json.dumps(extract_traces.remote(source_run, n, seed), indent=1))
 
 
 @app.local_entrypoint()
-def report(bench_id: str):
+def report(bench_id: str, run_id: str = ""):
+    """``run_id``: accepted for monitor/launch.sh, which appends it."""
     print(build_report.remote(bench_id))
 
 
@@ -336,8 +339,8 @@ def plan_arms(
 
 @app.local_entrypoint()
 def main(
-    bench_id: str,
     recipe: str,
+    bench_id: str = "",
     providers: str = "sail,modal",
     concurrency: str = "1,32",
     repeats: int = 2,
@@ -348,7 +351,12 @@ def main(
     think: str = "zero",
     cpus: int = 2,
     memory_mb: int = 4096,
+    run_id: str = "",
 ):
+    """``run_id`` (monitor/launch.sh appends it) is the bench id when ``--bench-id`` is not given."""
+    bench_id = bench_id or run_id
+    if not bench_id:
+        raise SystemExit("give --bench-id (or --run-id)")
     names = [w for w in workloads.split(",") if w]
     unknown = set(names) - set(W.SYNTHETIC) - {W.TRACE}
     if unknown:
