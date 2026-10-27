@@ -17,6 +17,8 @@ From a fork checkout, with Modal credentials (the image is built from a pushed f
     MILES_BENCH_TASKS_DIR=<task dirs> modal run -m miles_ext.obs.sandbox_bench.app::main --bench-id sbxbench-1027-a1 \\
         --recipe <the source run's recipe yaml> --providers sail,modal --concurrency 1,32 --repeats 2 \\
         --workloads noop,read,write,test,fs-scan,install,trace --traces overfit-1020-a6
+    # main first resolves every trace to its task (no sandbox); the same check alone, with the same env:
+    modal run -m miles_ext.obs.sandbox_bench.app::check --recipe <the recipe yaml> --traces overfit-1020-a6
     modal run -m miles_ext.obs.sandbox_bench.app::report --bench-id sbxbench-1027-a1
 
 Providers run in parallel (separate infrastructure); one provider's arms run one after another, so arms never
@@ -110,15 +112,36 @@ def _fill_resources(task_dir: Path, cpus: int, memory_mb: int) -> bool:
     return True
 
 
+def _trace_tasks(traces: str, tasks_src: str, n: int | None = None) -> list[tuple[dict, str]]:
+    """The first ``n`` traces of extract ``traces``, each with its task dir under ``tasks_src``, every one checked
+    (resolved, with a loadable task.toml) before any is used; one error names all that fail."""
+    from harbor.models.task.config import TaskConfig
+
+    picked = [json.loads(line) for line in (TRACES_DIR / f"{traces}.jsonl").read_text().splitlines()][:n]
+    src = Path(tasks_src)
+    dirs = {d.name for d in src.iterdir() if d.is_dir()}
+    out, errors = [], []
+    for t in picked:
+        try:
+            d = traces_lib.resolve_task_dir(t, dirs)
+            TaskConfig.model_validate_toml((src / d / "task.toml").read_text())
+            out.append((t, d))
+        except Exception as e:
+            errors.append(f"{t['trial']}: {type(e).__name__}: {e}")
+    if errors:
+        raise RuntimeError(
+            f"{len(errors)} of {len(picked)} traces have no usable task in {src}:\n" + "\n".join(errors)
+        )
+    return out
+
+
 def _trial_specs(arm: dict, tasks_root: Path) -> list[dict]:
     """Every trial of the arm, workload by workload: session key, task, script."""
     specs = []
     cpus, memory_mb = arm["cpus"], arm["memory_mb"]
     for workload in arm["workloads"]:
         if workload == W.TRACE:
-            lines = (TRACES_DIR / f"{arm['traces']}.jsonl").read_text().splitlines()
-            for t in [json.loads(line) for line in lines][: arm["trace_trials"]]:
-                instance_id = traces_lib.task_dir_name(t["instance_id"])  # extracts before 10-27 kept the org prefix
+            for t, instance_id in _trace_tasks(arm["traces"], arm["tasks_src"], arm["trace_trials"]):
                 if not (tasks_root / instance_id).exists():
                     shutil.copytree(Path(arm["tasks_src"]) / instance_id, tasks_root / instance_id)
                     if _fill_resources(tasks_root / instance_id, cpus, memory_mb):
@@ -294,6 +317,12 @@ def extract_traces(source_run: str, n: int, seed: int) -> dict:
     }
 
 
+@app.function(image=image, cpu=1, memory=2048, timeout=600, volumes=arm_volumes)
+def check_traces(traces: str, tasks_src: str) -> list[dict]:
+    """Every trace of the extract with the task dir it replays on (raises naming each one that has none)."""
+    return [{"trial": t["trial"], "task_dir": d} for t, d in _trace_tasks(traces, tasks_src)]
+
+
 @app.function(image=image, cpu=2, memory=8192, timeout=HOURS, volumes={str(R.RESULTS): results_volume})
 def build_report(bench_id: str) -> str:
     bench = BENCH_DIR / bench_id
@@ -358,6 +387,26 @@ def plan_arms(
     return arms
 
 
+def _tasks_src(resolved: dict) -> str:
+    """Where the arm containers read the recipe's tasks."""
+    if volume := R.tasks_volume(resolved):  # the recipe's tasks live on a volume: read them there
+        if tasks_volume != volume[0]:
+            raise SystemExit(f"the recipe's tasks are on volume {volume[0]}: export {TASKS_VOLUME_ENV}={volume[0]}")
+        return str(R.tasks_path(resolved))
+    if os.environ.get(TASKS_DIR_ENV):
+        return str(R.TASKS)
+    raise SystemExit(f"the trace workload needs the source run's tasks: {TASKS_DIR_ENV} or a tasks_volume recipe")
+
+
+@app.local_entrypoint()
+def check(recipe: str, traces: str, run_id: str = ""):
+    """Resolve every trace of extract ``traces`` to its task under the recipe's tasks, without starting a sandbox.
+
+    ``run_id``: accepted for monitor/launch.sh, which appends it."""
+    for row in check_traces.remote(traces, _tasks_src(R.load(recipe))):
+        print(f"{row['trial']} -> {row['task_dir']}")
+
+
 @app.local_entrypoint()
 def main(
     recipe: str,
@@ -389,18 +438,8 @@ def main(
     if W.TRACE in names:
         if not traces:
             raise SystemExit("the trace workload needs --traces <source run>")
-        if volume := R.tasks_volume(resolved):  # the recipe's tasks live on a volume: read them there
-            if tasks_volume != volume[0]:
-                raise SystemExit(
-                    f"the recipe's tasks are on volume {volume[0]}: export {TASKS_VOLUME_ENV}={volume[0]}"
-                )
-            tasks_src = str(R.tasks_path(resolved))
-        elif os.environ.get(TASKS_DIR_ENV):
-            tasks_src = str(R.TASKS)
-        else:
-            raise SystemExit(
-                f"the trace workload needs the source run's tasks: {TASKS_DIR_ENV} or a tasks_volume recipe"
-            )
+        tasks_src = _tasks_src(resolved)
+        print(f"{len(check_traces.remote(traces, tasks_src))} traces resolve to their tasks", flush=True)
     arms = plan_arms(
         bench_id,
         providers.split(","),
