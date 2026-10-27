@@ -7,7 +7,7 @@ order on the same task image, so a command's exit code matching the original is 
 
 import json
 import random
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from miles_ext.obs.sandbox_bench.workloads import classify
@@ -15,10 +15,29 @@ from miles_ext.obs.sandbox_bench.workloads import classify
 TRAJECTORY = Path("agent") / "mini-swe-agent.trajectory.json"
 
 
-def task_dir_name(task_name: str) -> str:
-    """The task's dir under the tasks root, the agent function's ``instance_id``: Harbor's ``task_name`` may carry
-    an org prefix (``mobius-labs/software-009``), the dir does not (``software-009``)."""
-    return task_name.rsplit("/", 1)[-1]
+def task_dir(result: dict) -> str:
+    """The trial's task dir name (the agent function's ``instance_id``), from the task path Harbor ran.
+
+    Harbor's ``task_name`` is not the dir: it may carry an org prefix (``mobius-labs/...``) and the task's own
+    name may differ from its dir (``security-email-auth-policy-r01`` in ``bp105-security-email-auth-policy-r01``)."""
+    path = ((result.get("task_id") or {}).get("path")) or ""
+    return PurePosixPath(path).name or (result.get("task_name") or "").rsplit("/", 1)[-1]
+
+
+def resolve_task_dir(trace: dict, dirs: set[str]) -> str:
+    """The dir under the tasks root that ``trace`` replays on; ``dirs``: the dir names there.
+
+    Extracts made before 10-28 recorded ``task_name`` without its org prefix rather than the dir; for those the
+    dir is the one whose name ends with that name and starts as the trial name does (Harbor names a trial after
+    its dir's first 32 characters)."""
+    name = trace["instance_id"].rsplit("/", 1)[-1]
+    if name in dirs:
+        return name
+    head = trace["trial"].split("__", 1)[0]
+    found = [d for d in dirs if d.endswith("-" + name) and d[:32].rstrip("_-") == head]
+    if len(found) != 1:
+        raise LookupError(f"trace {trace['trial']}: task {name!r} matches {sorted(found) or 'no'} task dirs")
+    return found[0]
 
 
 def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
@@ -48,7 +67,7 @@ def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
         return None
     return {
         "trial": trial_dir.name,
-        "instance_id": task_dir_name(result.get("task_name") or ""),
+        "instance_id": task_dir(result),
         "commands": commands,
         "think_s": think_s,
         "cmd_s": cmd_s,
