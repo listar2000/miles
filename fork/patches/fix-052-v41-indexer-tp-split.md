@@ -8,7 +8,9 @@ kernel family of the train pass (27% on rank 4 of a full-model profile). With fi
 forward, which is where the duplicate sits.
 
 ## Decision
-`--dsv4-indexer-tp-split` (default off). `indexer_select` cuts the queries into chunks of `query_chunk / tp` rows
+Always on except with indexer replay (since fix-059; before it, `--dsv4-indexer-tp-split`). Measured only on the
+LoRA layout (+3.2 GiB reserved per GPU, 219 to 223 GiB); a full-weight V4.1 run at 256k, which had little headroom,
+checks its memory on its first step. `indexer_select` cuts the queries into chunks of `query_chunk / tp` rows
 and each TP rank scores every tp-th chunk (round-robin, so the causal cost stays balanced). Each index-source call
 assembles the top-k rows with one integer sum all-reduce over the TP group; the candidate-source layer does a second
 all-reduce for its candidate block ids. Each row has exactly one writer and is zero on the other ranks, so the sums

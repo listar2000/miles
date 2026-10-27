@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-059 | Fix | Fork fixes have no off switch: six flags and env vars removed, fix-048's retry on by default | active | [fix-059-no-off-switch.md](fix-059-no-off-switch.md) |
 | ext-038 | Ext | `taskset.harness: single-turn`: one chat completion per prompt row through the agentic generate and session server, graded in process by `metadata.task` against `metadata.label` (first verifier: STAK) | active | [ext-038-single-turn.md](ext-038-single-turn.md) |
 | fix-058 | Fix | Score centering accepts DSpark speculative decoding (exact rejection sampling, top-k from the verify logits); other speculative modes and forced acceptance (`SGLANG_SIMULATE_ACC_LEN > 0`) stay refused | active; remove when upstream allows speculative decoding with score centering | [fix-058-score-centering-dspark.md](fix-058-score-centering-dspark.md) |
 | ext-036 | Ext | `cluster.placement: split`: the engines run in their own Modal function behind a tunnel, the trainer reaches them through local relays and Miles' external-engine addresses; ext-037 carries the LoRA adapter sync through the results volume | active | [ext-036-split-placement.md](ext-036-split-placement.md) |

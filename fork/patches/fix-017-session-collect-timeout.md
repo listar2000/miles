@@ -1,4 +1,4 @@
-# fix-017: collecting a finished session's samples waits up to `--session-collect-timeout`
+# fix-017: collecting a finished session's samples waits up to 1,800 s
 
 ## Why
 When an agent finishes, the rollout asks the try's session server for its training samples
@@ -11,7 +11,7 @@ Every one of those trials had finished normally. The head node's optimizer phase
 792-805 s on the other trainer node, so CPU contention there is the likely cause (inferred, not measured per process).
 
 ## Decision
-`--session-collect-timeout` (default 1,800 s) bounds the collection POST and the session DELETE. It only has to
+`_SESSION_COLLECT_TIMEOUT` (1,800 s; a flag until fix-059 made it a constant) bounds the collection POST and the session DELETE. It only has to
 catch a stuck server: a slow one costs a few minutes, while a timeout costs the whole group. 1,800 s covers the
 longest optimizer phase seen (about 18 min) with room to spare. Direct `OpenAIEndpointTracer` constructions keep
 the old 120 s.

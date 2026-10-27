@@ -9,7 +9,7 @@ time, half of it in recompute. Under all-gather context parallelism the rank hol
 does about three times the causal indexer work, so rank 0 waited 8 s in the mixture-of-experts token-count all-gather.
 
 ## Decision
-`--dsv4-reuse-indexer-topk` (default off). Each index-source attention keeps a FIFO of (top-k as int32, its dtype,
+Always on except with indexer replay (since fix-059; before it, `--dsv4-reuse-indexer-topk`). Each index-source attention keeps a FIFO of (top-k as int32, its dtype,
 candidate blocks) from its checkpointed forwards; the recompute pops the oldest instead of calling the indexer.
 1F1B recomputes micro-batches in forward order, so the FIFO never holds more than the pipeline depth (asserted).
 `train()` empties it, so a train pass that died between a forward and its recompute leaves nothing behind. The
