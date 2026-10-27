@@ -185,34 +185,6 @@ class _Stager:
             self._device_buf = torch.empty(size, dtype=torch.uint8, device=like.device)
         return self._device_buf[: numel * dtype.itemsize].view(dtype)
 
-    # [fork fix-045] begin
-    def copy_host(
-        self, host: torch.Tensor, offset: int, tensor: torch.Tensor, dtype: torch.dtype, *, to_host: bool
-    ) -> int:
-        """Like transfer(), against a page-locked host buffer instead of a file: one DMA per chunk, no staging copy."""
-        flat = tensor.view(-1)
-        nbytes = flat.numel() * dtype.itemsize
-        dst = host[offset : offset + nbytes].view(dtype)
-        if dtype == flat.dtype:
-            if to_host:
-                dst.copy_(flat)
-            else:
-                flat.copy_(dst)
-            return nbytes
-        chunk = self._buf.numel() // dtype.itemsize
-        for pos in range(0, flat.numel(), chunk):
-            numel = min(chunk, flat.numel() - pos)
-            staged = self._device_staging(dtype, numel, flat)
-            if to_host:
-                staged.copy_(flat[pos : pos + numel])
-                dst[pos : pos + numel].copy_(staged)
-            else:
-                staged.copy_(dst[pos : pos + numel])
-                flat[pos : pos + numel].copy_(staged)
-        return nbytes
-
-    # [fork fix-045] end
-
     def transfer(self, fd: int, offset: int, tensor: torch.Tensor, dtype: torch.dtype, *, to_disk: bool) -> int:
         flat = tensor.view(-1)
         cast = dtype != flat.dtype
@@ -243,40 +215,22 @@ class _Stager:
         return flat.numel() * dtype.itemsize
 
 
-# [fork fix-045] shared by _Bucket and the host-budget split in _build_buckets
-def _layout(entries: list[_Entry], dtypes: dict) -> tuple[dict[str, list[int]], int]:
-    """Each segment's per-entry offsets in a bucket's state, and its total size in bytes."""
-    offsets: dict[str, list[int]] = {}
-    at = 0
-    for segment in SEGMENTS:
-        offsets[segment] = []
-        for entry in entries:
-            offsets[segment].append(at)
-            at += _align(entry.main_param.numel() * dtypes[segment].itemsize)
-    return offsets, at
-
-
 class _Bucket:
-    def __init__(self, path: str, entries: list[_Entry], adam, stager: _Stager, dtypes: dict, in_host: bool = False):
+    def __init__(self, path: str, entries: list[_Entry], adam, stager: _Stager, dtypes: dict):
         self.path, self.entries, self.adam, self.dtypes = path, entries, adam, dtypes
         self._stager = stager
         self.group_indices = sorted({e.group_index for e in entries})
         self.numel = sum(e.main_param.numel() for e in entries)
 
-        self.offsets, at = _layout(entries, dtypes)  # [fork fix-045]
+        self.offsets: dict[str, list[int]] = {}
+        at = 0
+        for segment in SEGMENTS:
+            self.offsets[segment] = []
+            for entry in entries:
+                self.offsets[segment].append(at)
+                at += _align(entry.main_param.numel() * dtypes[segment].itemsize)
         self.nbytes = at
-        # [fork fix-045] begin
-        # A bucket inside the host budget keeps its state in page-locked RAM, laid out like the file, so
-        # checkpoints do not depend on which tier a bucket was in.
-        self.fd, self.host = None, None
-        if in_host:
-            self.host = torch.empty(at, dtype=torch.uint8)
-            if torch.cuda.is_available():
-                err = torch.cuda.cudart().cudaHostRegister(self.host.data_ptr(), at, 0)
-                assert int(err) == 0, f"cudaHostRegister of {at} bytes failed: {err}"
-        else:
-            self.fd = _allocate_file(path, at)
-        # [fork fix-045] end
+        self.fd = _allocate_file(path, at)
         self.moments_ready = False
 
     def _tensors(self, segment: str):
@@ -290,12 +244,7 @@ class _Bucket:
             for tensor, offset in self._tensors(segment):
                 if not to_disk:
                     _resize(tensor, tensor.numel())
-                # [fork fix-045] begin
-                if self.host is not None:
-                    moved += self._stager.copy_host(self.host, offset, tensor, self.dtypes[segment], to_host=to_disk)
-                else:
-                    moved += self._stager.transfer(self.fd, offset, tensor, self.dtypes[segment], to_disk=to_disk)
-                # [fork fix-045] end
+                moved += self._stager.transfer(self.fd, offset, tensor, self.dtypes[segment], to_disk=to_disk)
                 if to_disk:
                     _resize(tensor, 0)
         return moved
@@ -307,23 +256,6 @@ class _Bucket:
         moved = self._move(segments, to_disk=True)
         self.moments_ready = self.moments_ready or tuple(segments) == SEGMENTS
         return moved
-
-    # [fork fix-045] begin
-    def save_file(self, path: str) -> None:
-        if self.host is None:
-            shutil.copyfile(self.path, path)
-            return
-        with open(path, "wb") as f:
-            f.write(memoryview(self.host.numpy()))
-
-    def load_file(self, path: str) -> None:
-        if self.host is None:
-            shutil.copyfile(path, self.path)
-            return
-        with open(path, "rb") as f:
-            assert f.readinto(memoryview(self.host.numpy())) == self.nbytes, f"short optimizer state file {path}"
-
-    # [fork fix-045] end
 
     def materialize_main(self) -> None:
         for tensor, _ in self._tensors("main"):
@@ -350,7 +282,6 @@ class NVMeOptimizerStateStore:
         moment_dtype: str = "fp32",
         allow_fresh_state: bool = False,
         mxfp4_qat_group_size: int | None = None,  # [fork fix-006]
-        host_budget_gb: float = 0.0,  # [fork fix-045]
     ):
         self.dist_opt = distrib_optimizer
         self._allow_fresh_state = allow_fresh_state
@@ -402,17 +333,15 @@ class NVMeOptimizerStateStore:
         self._grad_norm: torch.Tensor | float | None = None
 
         self._stager = _Stager(chunk_mb * 1024 * 1024)
-        self._host_budget = int(host_budget_gb * 1024**3)  # [fork fix-045]
         self.buckets = self._build_buckets()
         self._fp32_group_indices, self._fp32_adam = self._build_fp32_optimizer()
         self._assert_no_separate_grad_norm_group()
         self._mxfp4_projected = self._select_mxfp4_projected()  # [fork fix-006]
 
         total_gb = sum(b.nbytes for b in self.buckets) / 1024**3
-        host_gb = sum(b.nbytes for b in self.buckets if b.host is not None) / 1024**3  # [fork fix-045]
         logger.info(
-            f"NVMe optimizer state store: {len(self.buckets)} buckets, {total_gb:.1f} GB, {host_gb:.1f} GB of it "
-            f"in host memory, the rest at {self.dir} (moments stored as {moments})"
+            f"NVMe optimizer state store: {len(self.buckets)} buckets, {total_gb:.1f} GB at "
+            f"{self.dir} (moments stored as {moments})"
         )
 
     @property
@@ -434,18 +363,12 @@ class NVMeOptimizerStateStore:
                 by_ddp_bucket.setdefault(key, []).append(_Entry(model_param, main_param, group_index))
 
         buckets = []
-        host_left = self._host_budget  # [fork fix-045] buckets fill the host budget in order; the rest go to disk
         for index, entries in enumerate(plan_buckets(by_ddp_bucket)):
             params: dict[int, list[torch.Tensor]] = {}
             for entry in entries:
                 params.setdefault(entry.group_index, []).append(entry.main_param)
             path = os.path.join(self.dir, f"bucket{index:05d}.bin")
-            # [fork fix-045] begin
-            nbytes = _layout(entries, self.dtypes)[1]
-            in_host = nbytes <= host_left
-            host_left -= nbytes if in_host else 0
-            buckets.append(_Bucket(path, entries, self._adam_for(params), self._stager, self.dtypes, in_host))
-            # [fork fix-045] end
+            buckets.append(_Bucket(path, entries, self._adam_for(params), self._stager, self.dtypes))
         return buckets
 
     def _build_fp32_optimizer(self):
@@ -636,9 +559,8 @@ class NVMeOptimizerStateStore:
                 source_shard = entry.model_param.view(-1)[param_range.start : param_range.end]
                 entry.main_param.copy_(source_shard)
             written += bucket.flush(segments=("main",))
-            if bucket.fd is not None:  # [fork fix-045]
-                os.fdatasync(bucket.fd)
-                os.posix_fadvise(bucket.fd, 0, bucket.offsets["exp_avg"][0], os.POSIX_FADV_DONTNEED)
+            os.fdatasync(bucket.fd)
+            os.posix_fadvise(bucket.fd, 0, bucket.offsets["exp_avg"][0], os.POSIX_FADV_DONTNEED)
         self._main_ready = True  # [fork fix-010]
         self._main_from_model = False  # [fork fix-021]
         return written
@@ -698,7 +620,7 @@ class NVMeOptimizerStateStore:
             ],
         }
         for bucket in self.buckets:
-            bucket.save_file(os.path.join(dirpath, os.path.basename(bucket.path)))  # [fork fix-045]
+            shutil.copyfile(bucket.path, os.path.join(dirpath, os.path.basename(bucket.path)))
         if self._fp32_adam is not None:
             torch.save(self._fp32_adam.state_dict(), os.path.join(dirpath, "fp32_resident_optimizer.pt"))
         with open(os.path.join(dirpath, "manifest.json"), "w") as f:
@@ -739,7 +661,7 @@ class NVMeOptimizerStateStore:
         for bucket, meta in zip(self.buckets, manifest["buckets"], strict=True):
             assert meta["numel"] == bucket.numel
             assert meta["entry_numels"] == [e.main_param.numel() for e in bucket.entries]
-            bucket.load_file(os.path.join(dirpath, meta["file"]))  # [fork fix-045]
+            shutil.copyfile(os.path.join(dirpath, meta["file"]), bucket.path)
             for group, step in zip(bucket.adam.param_groups, meta["steps"], strict=True):
                 if step:
                     group["step"] = step
@@ -766,8 +688,6 @@ def setup_optimizer_state_streaming(args, optimizer) -> None:
     dir_root = _state_dir_root(args)
     _purge_rank_dir(dir_root)
     stores = []
-    # [fork fix-045] one budget per GPU, shared by the chain's stores
-    host_left_gb = args.stream_optimizer_state_host_gb
     for dist_opt in optimizer.chained_optimizers:
         assert isinstance(
             dist_opt, DistributedOptimizer
@@ -786,9 +706,7 @@ def setup_optimizer_state_streaming(args, optimizer) -> None:
             allow_fresh_state=args.no_load_optim,
             # [fork fix-006]
             mxfp4_qat_group_size=MXFP4_GROUP_SIZE if getattr(args, "mxfp4_qat_routed_experts", False) else None,
-            host_budget_gb=host_left_gb,  # [fork fix-045]
         )
-        host_left_gb -= sum(b.nbytes for b in store.buckets if b.host is not None) / 1024**3  # [fork fix-045]
         _bind(dist_opt, store)  # [fork fix-010]
         stores.append(store)
     _record_grad_norm_into(optimizer, stores)

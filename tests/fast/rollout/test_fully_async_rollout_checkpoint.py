@@ -153,41 +153,6 @@ async def test_running_generation_is_restored_as_a_clean_retry(monkeypatch, tmp_
     assert all(sample.response == "" for sample in pending)
 
 
-# [fork fix-046] begin
-async def test_prompts_mode_regenerates_buffered_groups_after_restore(monkeypatch, tmp_path: Path) -> None:
-    """--async-checkpoint-buffer prompts saves a finished buffered group as its prompt; a restore regenerates it."""
-    args = _checkpoint_args(tmp_path, async_checkpoint_buffer="prompts")
-    fn = make_fn(monkeypatch, args, FakeDataSource())
-    group = await _generate_and_reward(None, make_group(5))
-    for sample in group:
-        sample.response = "before the save"
-    await fn._output.put(DataBufferInput(prompt_group=group, group=group))
-
-    fn.save(tmp_path)
-
-    assert torch.load(tmp_path / "state.pt", weights_only=False).output == []
-    assert all(sample.response == "before the save" for sample in group)
-
-    async def regenerate(_state, group: list[Sample], **_kwargs: Any) -> list[Sample]:
-        for sample in group:
-            sample.response = "regenerated"
-        return await _generate_and_reward(None, group)
-
-    restored = make_fn(monkeypatch, args, FakeDataSource(), generate=regenerate)
-    restored.load(tmp_path)
-    try:
-        output = await asyncio.wait_for(restored(train_input(rollout_id=0)), timeout=5)
-    finally:
-        await restored.dispose()
-    assert [(sample.index, sample.response) for sample in output.samples[0]] == [
-        (50, "regenerated"),
-        (51, "regenerated"),
-    ]
-
-
-# [fork fix-046] end
-
-
 async def test_an_incomplete_batch_stays_in_the_checkpoint(monkeypatch, tmp_path: Path) -> None:
     """A drain waiting for a whole batch restores every buffered group exactly once."""
     args = _checkpoint_args(tmp_path)

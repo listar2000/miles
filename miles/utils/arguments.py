@@ -438,19 +438,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "and are not recommended."
                 ),
             )
-            # [fork fix-045] begin
-            parser.add_argument(
-                "--stream-optimizer-state-host-gb",
-                type=float,
-                default=0.0,
-                help=(
-                    "Per-GPU budget, in GiB, of page-locked host memory for the streamed optimizer state. Buckets "
-                    "fill it in order and the rest stay on disk, so a step moves those bytes over PCIe instead of "
-                    "through the disk. The values are the same either way; size it to what the node's memory request "
-                    "leaves after every other host user (activation offload, Ray)."
-                ),
-            )
-            # [fork fix-045] end
             parser.add_argument(
                 "--offload-train-disk-dir",
                 type=str,
@@ -1047,23 +1034,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             # [fork fix-004] end
-            # [fork fix-046] begin
-            parser.add_argument(
-                "--async-checkpoint-buffer",
-                type=str,
-                choices=["groups", "prompts", "log"],  # [fork hook-008] log
-                default="groups",
-                help=(
-                    "What a fully async rollout checkpoint keeps of the finished groups waiting in the "
-                    "data buffer: groups (default) saves them whole, so a resume trains on them; prompts "
-                    "saves only their prompts, so a resume regenerates them. Use prompts for long "
-                    "agentic trajectories: whole groups carry every token, logprob and routing replay "
-                    "array (tens of GB), and the save runs on the rollout event loop. "
-                    "log: the --custom-async-data-buffer-path buffer stores each group as it enters "
-                    "and saves its own state, so a resume trains on them without one large write."  # [fork hook-008]
-                ),
-            )
-            # [fork fix-046] end
             parser.add_argument(
                 "--custom-async-data-buffer-path",
                 type=str,
@@ -1758,17 +1728,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "Path to a custom function invoked on rank 0 after every checkpoint save. "
                     "Signature: def hook(args, rollout_id: int, checkpoint_dir: str, "
                     "hf_checkpoint_dir: str | None) -> None."
-                ),
-            )
-            # [fork hook-007]
-            parser.add_argument(
-                "--custom-megatron-save-context-path",
-                type=str,
-                default=None,
-                help=(
-                    "Path to a function every trainer rank enters around each Megatron checkpoint save, e.g. to "
-                    "write the save to node-local disk first. Signature: "
-                    "``def context(args, iteration: int) -> contextlib.AbstractContextManager``."
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)
@@ -4099,10 +4058,6 @@ def miles_validate_args(args):
         )
     # [fork fix-006] end
 
-    # [fork fix-045] the host budget only feeds the Adam store; Muon's file-backed buffers ignore it
-    assert args.stream_optimizer_state_host_gb <= 0 or (
-        args.stream_optimizer_state_to_disk and "muon" not in (args.optimizer or "").lower()
-    ), "--stream-optimizer-state-host-gb needs --stream-optimizer-state-to-disk with Adam"
     if args.stream_optimizer_state_to_disk:
         assert args.offload_train_target == "disk" or not args.offload_train, (
             "--stream-optimizer-state-to-disk with --offload-train requires "
