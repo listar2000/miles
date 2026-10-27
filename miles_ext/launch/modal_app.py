@@ -590,7 +590,7 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
     print(f"run_id={run_id} image={'built from ' + FROM_COMMIT[:10] if FROM_COMMIT else IMAGE or stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "
           f"save_interval={recipe['checkpoint']['save_interval']} cluster={SHAPE} "
-          f"wandb={recipe['tracking']['wandb_entity']}/{R.wandb_project(recipe, run_id)}")
+          f"wandb={recipe['tracking']['wandb_entity'] or '<default entity>'}/{R.wandb_project(recipe, run_id)}")
     if check_only:
         check.remote(recipe, run_id)
         print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")
