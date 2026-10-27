@@ -79,9 +79,16 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
     r = _recipe(rollout={"precision": "bf16", "expert_qat": False})
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == RELEASED
+    assert _value(argv, "--ref-load") == _value(argv, "--hf-checkpoint") == "/models/DeepSeek-V4.1-Flash-1017-bf16"
     assert "--custom-weight-quantizer-path" not in argv
     assert R.trainer_env(r)["SGLANG_DSV4_FP4_EXPERTS"] == "0"
+
+
+def test_dsv41_bf16_adapter_keeps_fp8_fusions_off():
+    env = R.trainer_env(
+        _recipe(rollout={"precision": "bf16", "expert_qat": False}, lora={"rank": 32, "serving": "adapter"})
+    )
+    assert env["SGLANG_OPT_FP8_WO_A_GEMM"] == env["SGLANG_OPT_DEEPGEMM_HC_PRENORM"] == "0"
 
 
 def test_dsv41_fused_kernels_off_only_when_base_weights_sync():
@@ -123,6 +130,21 @@ def test_qwen_recipes_keep_their_defaults():
         ({"rollout": {"gpus_per_engine": 3}}, "must divide 8"),
         ({"checkpoint": {"save_hf": True}}, "checkpoint.save_hf"),
         ({"cluster": {"disk_gib": None}}, "cluster.disk_gib"),
+        ({"rollout": {"precision": "bf16", "expert_qat": False, "gpus_per_engine": 4}}, "gpus_per_engine >= 8"),
+        (
+            {
+                "rollout": {"precision": "bf16", "expert_qat": False},
+                "extra_args": ["--sglang-speculative-algorithm", "DSPARK"],
+            },
+            "have no draft",
+        ),
+        (
+            {
+                "rollout": {"precision": "bf16", "expert_qat": False},
+                "extra_args": ["--sglang-speculative-algorithm=DSPARK"],
+            },
+            "have no draft",
+        ),
     ],
 )
 def test_dsv41_refuses(over, message):

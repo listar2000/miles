@@ -504,6 +504,17 @@ def _validate_rollout(recipe: dict) -> None:
     if precision not in preset.precisions:
         raise ValueError(
             f"rollout.precision must be one of {list(preset.precisions)} for this model, got {precision!r}")
+    if gpus < preset.precision_min_gpus.get(precision, 1):
+        raise ValueError(
+            f"rollout.precision {precision} needs rollout.gpus_per_engine >= "
+            f"{preset.precision_min_gpus[precision]} for this model, got {gpus}"
+        )
+    spec = any(str(a).split("=")[0] == "--sglang-speculative-algorithm" for a in recipe["extra_args"])
+    if spec and preset.draft_precisions and precision not in preset.draft_precisions:
+        raise ValueError(
+            f"speculative decoding needs rollout.precision in {list(preset.draft_precisions)} "
+            f"for this model (its {precision} weights have no draft), got {precision!r}"
+        )
     if GPUS_PER_NODE % gpus:
         raise ValueError(
             f"rollout.gpus_per_engine {gpus} must divide {GPUS_PER_NODE} so an engine stays inside a node")
@@ -680,6 +691,9 @@ def reads_task_dirs(recipe: dict) -> bool:
 
 def model_dir(recipe: dict) -> Path:
     preset = PRESETS[recipe["model"]["preset"]]
+    if preset.train_dir_name and rollout_precision(recipe) != FP8_FP4:
+        # BF16 engines serve the trainer's BF16 copy: the released checkpoint would load as FP8 dense
+        return MODELS / preset.train_dir_name
     if revision := recipe["model"].get("revision"):
         return MODELS / f"{preset.hf_repo.replace('/', '--')}/{revision}"  # miles_ext.platform.weights key
     return MODELS / preset.dir_name

@@ -84,6 +84,19 @@ stack end to end before a run on the full task set. The reason for each value: L
   That adapter's targets leave out `wo_a`, so the grouped `wo_a` adapter path under the FP8
   GEMM is not yet exercised by a run. Rejected: keeping both off for adapter serving (the
   conservative choice; one replay pair does not establish its throughput cost).
+- **BF16 rollout** (`rollout.precision: bf16`): the engines and the trainer both load the
+  preset's BF16 copy (`train_dir_name`), ahead of `model.revision`, because the release
+  checkpoint would load as FP8 dense. The copy is not a revision-keyed snapshot, so `launch()`
+  checks `.ready` only for those; `validate()` still needs the copy's `config.json`. New
+  `Preset` fields: `precision_min_gpus` (default `{}`: one GPU) and `draft_precisions`
+  (default `()`: no restriction). V4.1 sets 8 GPUs for BF16 (the 1.31 TB copy needs ~327
+  GB/GPU at TP4; B300 has 268) and allows speculative decoding only for `fp8_fp4` (the BF16
+  copy has no DSpark/MTP tensors; the release's FP8 draft does not boot on BF16 engines in a
+  one-node startup check). The BF16 precision env also forces the two fused kernels above off, adapter
+  serving included: with them on, BF16 engines crash in decode CUDA graph capture
+  (unspecified launch failure) with or without LoRA, reproduced on 1x B300; with them off,
+  BF16 + LoRA at TP8 boots and trained a 10-step LoRA overfit. Rejected: a BF16 draft
+  (needs a cast of the DSpark head, not yet done).
 
 ## How it is applied
 `miles_ext/recipes/presets.py` (`deepseek-v4.1-flash`), `miles_ext/recipes/recipe.py`,

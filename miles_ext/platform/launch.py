@@ -45,8 +45,9 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
     """Start one segment; returns ``{launched, complete, app_id, call_id, names, timeout, segment_seconds}``.
 
     - ``recipe``: the resolved recipe (``validate`` passed); ``target``: where it runs.
-      The per-run secret (``create_run_secret``) and, with ``model.revision``, the
-      weights (``prepare_weights``) must exist first; launch checks, it does not create.
+      The per-run secret (``create_run_secret``) and, for a revision-keyed snapshot, the
+      weights (``prepare_weights``) must exist first; launch checks, it does not create. A
+      preset's BF16 copy has no readiness marker and must already be on the weights volume.
     - ``segment_seconds``: rank 0 saves and exits this long after its container starts
       (exit reason ``segment_end``); the function timeout is that plus ``GRACE_SECS``.
       None: no deadline, the recipe's ``cluster.timeout_hours`` is the timeout.
@@ -82,7 +83,9 @@ def launch(recipe: dict, run_id: str, target: Target | dict | None, *, segment_s
         return out
     if not run_secret_exists(run_id, target):
         raise RuntimeError(f"secret {target.secret_name} does not exist (create_run_secret first)")
-    if recipe["model"].get("revision") and not recipe_weights_ready(recipe, target):
+    # only a revision-keyed snapshot has a .ready of its own; a preset's BF16 copy does not
+    keyed = R.model_dir(recipe).name == recipe["model"].get("revision")
+    if keyed and not recipe_weights_ready(recipe, target):
         raise RuntimeError(f"weights {R.model_dir(recipe)} are not ready (prepare_weights first)")
     _claim(run_id, target)
     try:
