@@ -93,7 +93,7 @@ def test_mini_swe_agent_reads_the_scripted_replies():
     assert [line["step"] for line in log] == [1, 2, 3]
 
 
-def _trial(d, task="t1", steps=((0.5, "ls", 0, 0.2), (0.4, "grep -rn x /", 1, 3.0)), wall=10.0):
+def _trial(d, task="t1", task_path=None, steps=((0.5, "ls", 0, 0.2), (0.4, "grep -rn x /", 1, 3.0)), wall=10.0):
     """A trial dir as Harbor and mini-swe-agent write it: (model wait s, command, rc, command s) per step."""
     (d / "agent").mkdir(parents=True)
     t0 = datetime(2026, 10, 27, tzinfo=timezone.utc)
@@ -105,6 +105,7 @@ def _trial(d, task="t1", steps=((0.5, "ls", 0, 0.2), (0.4, "grep -rn x /", 1, 3.
         json.dumps(
             {
                 "task_name": task,
+                "task_id": {"path": task_path or f"/inputs/tasks/{task.rsplit('/', 1)[-1]}"},
                 "started_at": at(0),
                 "finished_at": at(wall),
                 "environment_setup": {"started_at": at(0), "finished_at": at(2)},
@@ -186,14 +187,15 @@ def test_plan_runs_each_provider_in_its_own_sequence():
 
 
 def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypatch):
-    """Extracted traces name tasks as Harbor's task_name (with an org prefix); the volume holds tasks/<name>/."""
+    """The tb4t layout: a task's name is not always its dir; older extracts recorded the name, newer the dir."""
     from harbor.models.task.task import Task
 
     from miles_ext.harbor.agent_function import hf
     from miles_ext.obs.sandbox_bench import app
 
     src = tmp_path / "datasets" / "tb4t" / "tasks"
-    for name in ("software-009", "wal-1"):
+    names = ("software-009", "wal-1", "bp105-security-email-auth-policy-r01", "bp105-security-email-auth-policy-r02")
+    for name in names:
         (src / name / "environment").mkdir(parents=True)
         (src / name / "tests").mkdir()
         (src / name / "task.toml").write_text('version = "1.0"\n')
@@ -202,25 +204,58 @@ def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypa
         (src / name / "tests" / "test.sh").write_text("exit 0\n")
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir()
+    old_style = [  # (trial name, the task_name the extract kept)
+        ("software-009__20261020-1__a", "mobius-labs/software-009"),
+        ("wal-1__20261020-1__b", "wal-1"),
+        ("bp105-security-email-auth-policy__20261020-1__c", "security-email-auth-policy-r01"),
+        ("bp105-security-email-auth-policy__20261020-1__d", "bp105-security-email-auth-policy-r02"),  # a new extract
+    ]
     lines = [
-        {"trial": f"t{i}", "instance_id": iid, "commands": ["ls"], "think_s": [1.0], "cmd_s": [0.1], "rc": [0]}
-        for i, iid in enumerate(["mobius-labs/software-009", "wal-1", "mobius-labs/software-009"])
+        {"trial": trial, "instance_id": iid, "commands": ["ls"], "think_s": [1.0], "cmd_s": [0.1], "rc": [0]}
+        for trial, iid in old_style
     ]
     (traces_dir / "src.jsonl").write_text("".join(json.dumps(t) + "\n" for t in lines))
     monkeypatch.setattr(app, "TRACES_DIR", traces_dir)
+    assert [r["task_dir"] for r in app.check_traces.local("src", str(src))] == [
+        "software-009",
+        "wal-1",
+        "bp105-security-email-auth-policy-r01",
+        "bp105-security-email-auth-policy-r02",
+    ]
     (arm,) = app.plan_arms("b", ["modal"], [32], 1, ["noop", "trace"], 2, 1, "src", "zero", 2, 4096)
     arm["tasks_src"] = str(src)
     root = tmp_path / "root"
     root.mkdir()
     specs = app._trial_specs(arm, root)
-    trace_specs = [s for s in specs if s["workload"] == "trace"]
-    assert [s["instance_id"] for s in trace_specs] == ["software-009", "wal-1", "software-009"]
-    assert len({s["key"] for s in specs}) == len(specs) == 5
+    assert len({s["key"] for s in specs}) == len(specs) == 6
     for s in specs:  # what the agent function resolves for each trial
         env = Task(hf._task_path(root, s["instance_id"])).config.environment
         assert (env.cpus, env.memory_mb) == (2, 4096)  # sizeless tasks take the arm's size
 
 
+def test_a_trace_without_its_task_fails_before_any_trial(tmp_path, monkeypatch):
+    from miles_ext.obs.sandbox_bench import app
+
+    src = tmp_path / "tasks"
+    for name in ("x-policy-r01", "y-policy-r01"):
+        (src / name).mkdir(parents=True)
+        (src / name / "task.toml").write_text('version = "1.0"\n')
+    (tmp_path / "src.jsonl").write_text(
+        json.dumps({"trial": "x-policy-r01__1__a", "instance_id": "policy-r01"})
+        + "\n"
+        + json.dumps({"trial": "gone__1__b", "instance_id": "gone"})
+        + "\n"
+    )
+    monkeypatch.setattr(app, "TRACES_DIR", tmp_path)
+    with pytest.raises(RuntimeError, match="1 of 2") as e:
+        app._trace_tasks("src", str(src))
+    assert "gone__1__b" in str(e.value) and "x-policy-r01__1__a" not in str(e.value)
+
+
 def test_extract_names_the_task_dir(tmp_path):
-    d = _trial(tmp_path / "x", task="mobius-labs/software-009")
-    assert traces.trial_trace(d)["instance_id"] == "software-009"
+    d = _trial(
+        tmp_path / "x",
+        task="mobius-labs/security-email-auth-policy-r01",
+        task_path="/datasets/tb4t-20261016/tasks/bp105-security-email-auth-policy-r01",
+    )
+    assert traces.trial_trace(d)["instance_id"] == "bp105-security-email-auth-policy-r01"
