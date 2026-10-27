@@ -3,11 +3,15 @@
 Per trial, every piece is a duration measured on one clock (the trial's wall time splits exactly into Harbor's
 phases plus teardown; the agent phase splits into model round trips, commands and the rest):
 
-    sandbox_start     Harbor's environment setup (create, image, boot)
+    sandbox_start     Harbor's environment setup (create, image, boot) minus the calibration probes
+    probes            the no-op exec probes the benchmark runs right after start (calibration, not trial work)
     harness_install   Harbor's agent setup (mini-swe-agent install and patches)
-    proxy             the session proxy's time for the trial's model calls (host clock)
+    proxy             the session proxy's time for the trial's model calls, receipt to response (host clock);
+                      with a scripted model that is the proxy, in training it also holds the model's time
     tunnel            model wait seen in the sandbox minus proxy time: tunnel, network and client overhead
-    tool:<class>      command time in the sandbox, by command class (workloads.CLASSES)
+    model_unsplit     the model wait of a trial whose calls do not match its proxy lines one to one (a retry):
+                      proxy and tunnel stay unknown there, so the wait is kept whole rather than dropped
+    tools             command time in the sandbox (by command class in ``tool_share_by_class``)
     agent_other       the rest of the agent phase: mini-swe-agent start-up, Harbor's exec and polling
     verifier          Harbor's verifier phase
     teardown          what is left of the trial's wall time (stop, downloads, result write)
@@ -29,7 +33,18 @@ from miles_ext.obs.sandbox_profile import TRIAL_FILE
 
 MANIFEST = "manifest.json"
 PROXY_LOG = "proxy.jsonl"
-PIECES = ("sandbox_start", "harness_install", "proxy", "tunnel", "tools", "agent_other", "verifier", "teardown")
+PIECES = (
+    "sandbox_start",
+    "probes",
+    "harness_install",
+    "proxy",
+    "tunnel",
+    "model_unsplit",
+    "tools",
+    "agent_other",
+    "verifier",
+    "teardown",
+)
 
 
 def _lines(path: Path) -> list[dict]:
@@ -83,22 +98,26 @@ def trial_row(trial_dir: Path, proxy_by_session: dict[str, list[float]]) -> dict
     # a call is matched to its proxy line by order; a retry (more proxy lines than waits) leaves tunnel unknown
     matched = len(proxied) == len(waits)
     tools = sum(s for _, s, _ in commands)
+    probes = [s["dt"] for s in spans if s.get("op") == "probe_exec"]
     row = {
         "trial": trial_dir.name,
         "wall": wall,
-        "sandbox_start": phases["environment_setup"],
+        "sandbox_start": phases["environment_setup"] - sum(probes),
+        "probes": sum(probes),
         "harness_install": phases["agent_setup"],
-        "proxy": sum(proxied) if matched else None,
-        "tunnel": sum(waits) - sum(proxied) if matched else None,
+        "proxy": sum(proxied) if matched else 0.0,
+        "tunnel": sum(waits) - sum(proxied) if matched else 0.0,
+        "model_unsplit": 0.0 if matched else sum(waits),
+        "matched": matched,
         "model_wait": sum(waits),
         "tools": tools,
         "agent_other": phases["agent_execution"] - sum(waits) - tools,
         "verifier": phases["verifier"],
         "teardown": wall - sum(phases.values()),
         "calls": len(waits),
-        "tunnel_per_call": [w - p for w, p in zip(waits, proxied)] if matched else [],
+        "tunnel_per_call": [w - p for w, p in zip(waits, proxied, strict=True)] if matched else [],
         "commands": commands,
-        "probe_exec": [s["dt"] for s in spans if s.get("op") == "probe_exec"],
+        "probe_exec": probes,
         "host_exec": [s["dt"] for s in spans if s.get("op") == "exec" and s.get("depth") == 0],
         "start_span": next((s["dt"] for s in spans if s.get("op") == "start"), None),
         "exception": (result.get("exception_info") or {}).get("exception_type"),
@@ -127,21 +146,25 @@ def _stats(xs: list[float]) -> dict[str, Any]:
     return {"n": len(xs), "p50": _q(xs, 0.5), "p90": _q(xs, 0.9), "ci95": [lo, hi]}
 
 
-def summarize(rows: list[dict]) -> dict[str, Any]:
-    """Shares of total trial wall time per piece, and per-trial / per-call / per-command distributions."""
+def summarize(rows: list[dict], no_result: int = 0) -> dict[str, Any]:
+    """Shares of total trial wall time per piece, and per-trial / per-call / per-command distributions.
+
+    ``no_result``: trials that ended without a Harbor result (no row); they count as failed."""
     total = sum(r["wall"] for r in rows) or 1.0
-    share = {p: sum((r[p] or 0.0) for r in rows) / total for p in PIECES}
+    share = {p: sum(r[p] for r in rows) / total for p in PIECES}
     by_class: dict[str, list[float]] = defaultdict(list)
     for r in rows:
         for cls, s, _ in r["commands"]:
             by_class[cls].append(s)
     return {
-        "trials": len(rows),
-        "failed": sum(1 for r in rows if r["exception"]),
+        "trials": len(rows) + no_result,
+        "failed": sum(1 for r in rows if r["exception"]) + no_result,
+        "no_result": no_result,
+        "unmatched_calls": sum(1 for r in rows if not r["matched"]),
         "share": share,
         "tool_share_by_class": {c: sum(xs) / total for c, xs in sorted(by_class.items())},
         "wall": _stats([r["wall"] for r in rows]),
-        "per_trial": {p: _stats([r[p] for r in rows if r[p] is not None]) for p in PIECES},
+        "per_trial": {p: _stats([r[p] for r in rows]) for p in PIECES},
         "tunnel_per_call": _stats([x for r in rows for x in r["tunnel_per_call"]]),
         "command_by_class": {c: _stats(xs) for c, xs in sorted(by_class.items())},
         "probe_exec": _stats([x for r in rows for x in r["probe_exec"]]),
@@ -153,11 +176,15 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
     """Replays only: how often a command's exit code matches the original, and replay / original command time."""
     by_trial = {r["trial"]: r for r in rows}
     same, compared, ratios = 0, 0, defaultdict(list)
+    replays, short = 0, 0
     for t in trials:
         row, trace = by_trial.get(Path(t.get("trial_dir") or "").name), traces.get(t.get("trace") or "")
         if not row or not trace:
             continue
-        for (cls, s, rc), orig_rc, orig_s in zip(row["commands"], trace["rc"], trace["cmd_s"]):
+        replayed = [c for c in row["commands"] if c[0] != "submit"]
+        replays += 1
+        short += len(replayed) < len(trace["commands"])  # the replay stopped before its last command
+        for (cls, s, rc), orig_rc, orig_s in zip(replayed, trace["rc"], trace["cmd_s"], strict=False):
             if orig_rc is not None and rc is not None:
                 compared += 1
                 same += rc == orig_rc
@@ -166,6 +193,8 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
     return {
         "rc_match": same / compared if compared else None,
         "compared": compared,
+        "replays": replays,
+        "replays_cut_short": short,
         "time_ratio_by_class": {c: _stats(xs) for c, xs in sorted(ratios.items())},
     }
 
@@ -183,11 +212,11 @@ def arm_report(arm_dir: Path, traces: dict[str, dict] | None = None) -> dict[str
         if t.get("trial_dir") and (row := trial_row(Path(t["trial_dir"]), proxy_by_session)):
             by_workload[t["workload"]].append(row)
     out = {"arm": manifest["arm"], "workloads": {}}
-    for workload, rows in sorted(by_workload.items()):
-        out["workloads"][workload] = summarize(rows)
+    for workload in sorted(trials_by_workload):
+        rows = by_workload.get(workload, [])
+        out["workloads"][workload] = summarize(rows, no_result=len(trials_by_workload[workload]) - len(rows))
         if traces is not None and any(t.get("trace") for t in trials_by_workload[workload]):
             out["workloads"][workload]["fidelity"] = fidelity(rows, trials_by_workload[workload], traces)
-    out["workloads_without_results"] = sorted(set(trials_by_workload) - set(by_workload))
     return out
 
 

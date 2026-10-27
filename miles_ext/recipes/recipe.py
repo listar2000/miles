@@ -188,11 +188,11 @@ DEFAULTS: dict[str, Any] = {
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
     "parallel": {"tp": 1, "pp": 1, "cp": 1, "ep": None},
-    # wandb_entity None: the W&B API key's default entity
-    # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
     # sandbox_profile: time each trial's sandbox calls and the session proxy's requests (ext-040,
     # miles_ext.obs.sandbox_profile); off, trials and the proxy run exactly as without it
     "obs": {"sandbox_profile": False},
+    # wandb_entity None: the W&B API key's default entity
+    # wandb_name: the W&B display name (the platform's "<short id> · <run name>"); None: the run id
     "tracking": {"wandb_project": None, "wandb_entity": None, "wandb_name": None, "tags": []},
     "extra_args": [],
 }

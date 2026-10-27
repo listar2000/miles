@@ -10,11 +10,9 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from aiohttp import web
 
-from miles_ext.obs.sandbox_profile import write_line
 
 SUBMIT = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"  # mini-swe-agent's finish command (its mini.yaml)
 
@@ -60,8 +58,9 @@ def completion(command: str, step: int) -> dict:
     }
 
 
-def make_app(scripts: dict[str, Script], log_path: str | Path | None = None) -> web.Application:
-    """``scripts``: session id -> its script; the caller adds sessions before their trials start."""
+def make_app(scripts: dict[str, Script], log: list[dict] | None = None) -> web.Application:
+    """``scripts``: session id -> its script; the caller adds sessions before their trials start.
+    ``log``: a list each call's server time is appended to."""
 
     async def chat(request: web.Request) -> web.Response:
         t0, mono = time.time(), time.monotonic()
@@ -74,8 +73,8 @@ def make_app(scripts: dict[str, Script], log_path: str | Path | None = None) -> 
         if think > 0:
             await asyncio.sleep(think)
         response = web.json_response(completion(command, script.calls))
-        if log_path:
-            write_line(log_path, {"t0": t0, "dt": time.monotonic() - mono, "session": key, "step": script.calls})
+        if log is not None:  # the caller writes it, off the event loop
+            log.append({"t0": t0, "dt": time.monotonic() - mono, "session": key, "step": script.calls})
         return response
 
     async def health(request):

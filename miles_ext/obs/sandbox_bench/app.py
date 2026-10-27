@@ -12,7 +12,8 @@ From a fork checkout, with Modal credentials (the image is built from a pushed f
     export MILES_FORK_COMMIT=<pushed commit> MILES_DOTENV_DIR=<dir with the .env the launcher uses>
     # once per source run: the commands of N of its trials (traces.py)
     modal run -m miles_ext.obs.sandbox_bench.app::extract --source-run overfit-1020-a6 --n 64
-    # the arms; MILES_BENCH_TASKS_DIR: the source run's task dirs, needed for the trace workload
+    # the arms; the trace workload needs the source run's tasks: MILES_BENCH_TASKS_DIR=<its taskset.tasks_dir>,
+    # or MILES_BENCH_TASKS_VOLUME=<the volume> when its recipe sets taskset.tasks_volume
     MILES_BENCH_TASKS_DIR=<task dirs> modal run -m miles_ext.obs.sandbox_bench.app::main --bench-id sbxbench-1027-a1 \\
         --recipe <the source run's recipe yaml> --providers sail,modal --concurrency 1,32 --repeats 2 \\
         --workloads noop,read,write,test,fs-scan,install,trace --traces overfit-1020-a6
@@ -49,7 +50,8 @@ HOURS = 3600
 BENCH_DIR = R.RESULTS / "sbx-bench"
 TRACES_DIR = BENCH_DIR / "traces"
 PROBES = 20  # no-op exec calls after each sandbox start
-TASKS_DIR_ENV = "MILES_BENCH_TASKS_DIR"
+TASKS_DIR_ENV = "MILES_BENCH_TASKS_DIR"  # replay task dirs from this machine (a recipe's taskset.tasks_dir)
+TASKS_VOLUME_ENV = "MILES_BENCH_TASKS_VOLUME"  # or the volume of the recipe's taskset.tasks_volume, mounted read-only
 LIFETIME_CAP_S, IDLE_CAP_S = 7200, 900  # project limits for benchmark sandboxes
 
 app = modal.App("miles-sbx-bench")
@@ -60,8 +62,13 @@ if modal.is_local():
     if tasks_dir := os.environ.get(TASKS_DIR_ENV):
         image = image.add_local_dir(tasks_dir, str(R.TASKS))
     secrets = [modal.Secret.from_dotenv(os.environ.get("MILES_DOTENV_DIR") or os.getcwd())]
+    image = image.env({TASKS_VOLUME_ENV: os.environ.get(TASKS_VOLUME_ENV, "")})  # the container mounts the same
 else:
     image, secrets = modal.Image.debian_slim(), []  # inside the container its own image and env are used
+tasks_volume = os.environ.get(TASKS_VOLUME_ENV, "")
+arm_volumes = {str(R.RESULTS): results_volume}
+if tasks_volume:
+    arm_volumes[str(R.DATASETS)] = modal.Volume.from_name(tasks_volume).read_only()
 
 
 def _versions() -> dict:
@@ -94,7 +101,8 @@ def _trial_specs(arm: dict, tasks_root: Path) -> list[dict]:
         if workload == W.TRACE:
             lines = (TRACES_DIR / f"{arm['traces']}.jsonl").read_text().splitlines()
             for t in [json.loads(line) for line in lines][: arm["trace_trials"]]:
-                shutil.copytree(R.TASKS / t["instance_id"], tasks_root / t["instance_id"], dirs_exist_ok=True)
+                src = Path(arm["tasks_src"]) / t["instance_id"]
+                shutil.copytree(src, tasks_root / t["instance_id"], dirs_exist_ok=True)
                 specs.append(
                     {
                         "workload": workload,
@@ -129,7 +137,8 @@ async def _run_trials(arm: dict, recipe: dict, specs: list[dict], arm_dir: Path)
     from miles.rollout.agentic.agent_function import call_agent_function
 
     scripts: dict = {}
-    runner = web.AppRunner(make_app(scripts, arm_dir / "model.jsonl"))
+    model_log: list[dict] = []
+    runner = web.AppRunner(make_app(scripts, model_log))
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", R.SESSION_PORT).start()
     gate = asyncio.Semaphore(arm["concurrency"])
@@ -160,14 +169,26 @@ async def _run_trials(arm: dict, recipe: dict, specs: list[dict], arm_dir: Path)
             batch = [s for s in specs if s["workload"] == workload]
             print(f"[{arm['name']}] {workload}: {len(batch)} trials at concurrency {arm['concurrency']}", flush=True)
             await asyncio.gather(*(one(s) for s in batch))
-            (arm_dir / report_lib.MANIFEST).write_text(json.dumps(manifest, indent=1))
-            results_volume.commit()
+            await asyncio.to_thread(_save, arm_dir, manifest, model_log)
     finally:
         await runner.cleanup()
 
 
+def _save(arm_dir: Path, manifest: dict, model_log: list[dict]) -> None:
+    (arm_dir / report_lib.MANIFEST).write_text(json.dumps(manifest, indent=1))
+    (arm_dir / "model.jsonl").write_text("".join(json.dumps(r) + "\n" for r in model_log))
+    results_volume.commit()
+
+
+# single_use_containers: every arm starts in a fresh container, so no arm inherits another's env or task dirs
 @app.function(
-    image=image, secrets=secrets, cpu=8, memory=32768, timeout=12 * HOURS, volumes={str(R.RESULTS): results_volume}
+    image=image,
+    secrets=secrets,
+    cpu=8,
+    memory=32768,
+    timeout=12 * HOURS,
+    volumes=arm_volumes,
+    single_use_containers=True,
 )
 def run_arm(arm: dict, recipe: dict) -> dict:
     from miles_ext.platform.teardown import sandbox_adapter
@@ -177,6 +198,9 @@ def run_arm(arm: dict, recipe: dict) -> dict:
         {
             "sandbox": {
                 "provider": arm["provider"],
+                # the sandbox app is always <app_prefix><bench id>-<provider>, never one the source recipe pins:
+                # each arm terminates what is left in it
+                "app_name": None,
                 "lifetime_secs": min(recipe["sandbox"]["lifetime_secs"], LIFETIME_CAP_S),
                 "idle_secs": min(recipe["sandbox"]["idle_secs"], IDLE_CAP_S),
             },
@@ -329,11 +353,25 @@ def main(
     unknown = set(names) - set(W.SYNTHETIC) - {W.TRACE}
     if unknown:
         raise SystemExit(f"unknown workloads {sorted(unknown)}; known: {sorted(W.SYNTHETIC)} and {W.TRACE}")
-    if W.TRACE in names and not (traces and os.environ.get(TASKS_DIR_ENV)):
-        raise SystemExit(f"the trace workload needs --traces <source run> and {TASKS_DIR_ENV}")
     if think not in ("zero", "recorded"):
         raise SystemExit("--think is zero or recorded")
     resolved = R.load(recipe)
+    tasks_src = ""
+    if W.TRACE in names:
+        if not traces:
+            raise SystemExit("the trace workload needs --traces <source run>")
+        if volume := R.tasks_volume(resolved):  # the recipe's tasks live on a volume: read them there
+            if tasks_volume != volume[0]:
+                raise SystemExit(
+                    f"the recipe's tasks are on volume {volume[0]}: export {TASKS_VOLUME_ENV}={volume[0]}"
+                )
+            tasks_src = str(R.tasks_path(resolved))
+        elif os.environ.get(TASKS_DIR_ENV):
+            tasks_src = str(R.TASKS)
+        else:
+            raise SystemExit(
+                f"the trace workload needs the source run's tasks: {TASKS_DIR_ENV} or a tasks_volume recipe"
+            )
     arms = plan_arms(
         bench_id,
         providers.split(","),
@@ -347,6 +385,8 @@ def main(
         cpus,
         memory_mb,
     )
+    for arm in arms:
+        arm["tasks_src"] = tasks_src
     by_provider: dict[str, list[dict]] = {}
     for arm in arms:
         by_provider.setdefault(arm["provider"], []).append(arm)
