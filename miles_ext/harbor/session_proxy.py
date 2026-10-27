@@ -52,12 +52,11 @@ def make_app(upstream_host: str, ports: range, token: str, profile_log: str | No
             out_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _DROP}
             return web.Response(status=upstream.status, body=payload, headers=out_headers)
 
-    middlewares = []
+    app = web.Application(client_max_size=256 * 1024**2)
     if profile_log:
-        from miles_ext.obs.sandbox_profile import proxy_middleware
+        from miles_ext.obs.sandbox_profile import install_proxy_profile
 
-        middlewares.append(proxy_middleware(profile_log))
-    app = web.Application(client_max_size=256 * 1024**2, middlewares=middlewares)
+        install_proxy_profile(app, profile_log)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     app.router.add_get("/healthz", health)
