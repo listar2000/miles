@@ -1,6 +1,6 @@
 ---
 name: miles-fork
-description: "How to change miles-mobius, our Miles (listar2000/miles, branch main), without making it harder to sync with upstream. Use for any change here: fixing a bug in upstream Miles code, adding a hook or an extension under miles_ext/, porting a file from a newer Miles or Harbor, writing a patch page, merging a new upstream release, landing on main and building the image, or marking a version stable. Not needed for work in upstream radixark/miles itself."
+description: "How to change miles-mobius, our Miles (listar2000/miles, branch main), without making it harder to sync with upstream. Use for any change here: fixing a bug in upstream Miles code, adding a hook or an extension under miles_ext/, porting a file from a newer Miles or Harbor, writing a patch page, merging a new upstream release, landing on main and building the image, or marking a version stable. Not needed for work in upstream radixark/miles itself, or for running training with the fork (that is the miles-use skill)."
 ---
 
 # Working with the Miles fork
@@ -47,7 +47,7 @@ even one whose PR closed.
 | fix a bug in SGLang, or add a hook there | Fix or Hook | `fork/deps/sglang/<id>-<slug>.patch` (below) | `Fork-Fix: fix-NNN` / `Fork-Hook: hook-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
-| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
+| change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
 
 Prefer Ext and Infra: they cannot conflict on a sync, a Fix or Hook can. If an extension needs upstream to call it somewhere it doesn't, write a
 separate Hook commit; never edit upstream code from an Ext commit.
@@ -181,8 +181,8 @@ recipe or harness needs that recipe's run.
 
 ## W&B projects
 
-Every recipe sets `tracking.wandb_project: miles-<campaign>` (entity
-`mobiuslab`); a new purpose, model family or sandbox provider gets a new
+Every recipe sets `tracking.wandb_project: miles-<campaign>` (the maintainers'
+recipes set entity `mobiuslab`); a new purpose, model family or sandbox provider gets a new
 project. Use run ids starting with `smoke-` or `debug-` for smoke and debug
 runs: they go to `miles-smoke`. Never log to `miles-swe-rl` (archive). Details:
 `fork/README.md` "W&B projects".

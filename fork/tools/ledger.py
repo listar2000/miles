@@ -58,6 +58,9 @@ OWN_PATHS = (
     "FORK.md",
     ".claude/skills/miles-fork/",
     ".claude/skills/miles-review/",
+    ".claude/skills/miles-use/",
+    ".claude/rules/fork.md",
+    ".github/ISSUE_TEMPLATE/",
     ".github/pull_request_template.md",
     ".github/workflows/miles-mobius-image.yml",
 )
