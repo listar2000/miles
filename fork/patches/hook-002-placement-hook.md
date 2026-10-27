@@ -21,7 +21,7 @@ metrics (kept out until that scrape is needed; `WANDB__DISABLE_STATS` also mutes
 `--sglang-enable-metrics` scrape, which no recipe sets today).
 
 ## How it is applied
-`miles/utils/arguments.py` (flag) and `create_placement_groups` in `miles/ray/placement_group.py`
+`miles/utils/fork_arguments.py` (flag, hook-014) and `create_placement_groups` in `miles/ray/placement_group.py`
 (the call before `return ans`, plus the `load_function` import); all spots are marked. Not called
 on the Kubernetes backend, which creates no placement group. On a sync, re-insert the two lines if
 upstream reshapes `create_placement_groups`.

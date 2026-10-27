@@ -16,7 +16,10 @@ Keep Outcome, Contract and Done; delete Side-effects or Verification when they w
 Every new or changed thing callers must follow: the miles_ext.platform API, recipe or run-spec
 fields and their defaults, image refs, Modal names, teardown, config keys, persisted layouts.
 Write "No caller-facing changes." when there are none.
+Always keep the "New flags" line; fork/README.md "Flags, recipe keys and env vars" has the rule.
 -->
+
+New flags, recipe keys, env vars: none <!-- or, for each: name, kind, the run that uses the other value -->
 
 ## Side-effects
 

@@ -21,7 +21,7 @@ Not ported: 61f7ff8b1 (MXFP4 detection in the FP8 dispatch for MiMo checkpoints)
 here calls it; the DeepSeek V4.1 layout goes through ext-007 instead.
 
 ## How it is applied
-`miles/utils/mxfp4.py`, `miles/utils/arguments.py` (flag and validation),
+`miles/utils/mxfp4.py`, `miles/utils/fork_arguments.py` (flag, hook-014), `miles/utils/arguments.py` (validation),
 `miles_plugins/optimizers/nvme_stream.py` (projection in `_copy_main_to_model_params`); every spot
 is marked. Verify: `tests/fast/backends/megatron_utils/test_quantizer_mxfp4.py`,
 `tests/fast/optimizers/test_nvme_stream_mxfp4_qat.py` (CPU) and

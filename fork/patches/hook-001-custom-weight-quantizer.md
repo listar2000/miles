@@ -14,7 +14,7 @@ Rejected: another built-in branch in the dispatch, which would need a model-spec
 per layout. First user: ext-007.
 
 ## How it is applied
-`miles/utils/arguments.py` (flag) and `quantize_params` (the early return); both spots are marked.
+`miles/utils/fork_arguments.py` (flag, hook-014) and `quantize_params` (the early return); both spots are marked.
 On a sync, re-insert the few lines if upstream reshapes `quantize_params`.
 
 ## Remove when

@@ -80,6 +80,38 @@ rather than editing upstream code from the extension's commit.
 
 `python fork/tools/ledger.py markdown` prints our commits since the upstream base as a table.
 
+## Flags, recipe keys and env vars
+
+Every switch doubles the runs someone has to reason about, so the fork adds one
+only when a real run needs its other value. `miles/utils/fork_arguments.py`
+holds every Miles flag the fork adds, registered by one call in
+`add_miles_arguments` (hook-014). The one exception is hook-006's LoRA flags
+(`--lora-merged-sync`, `--custom-lora-spec-path`), which stay in
+`miles/utils/lora/arguments.py` because upstream tests build that parser alone; recipe keys and their defaults live in
+`miles_ext/recipes/recipe.py`.
+
+- **A fix has no switch.** Turning it off brings the bug back. If upstream code
+  needs the old behavior (a test, an option the fix cannot serve), the fix
+  refuses that case or falls back for it alone, as fix-059 does for
+  `--async-retry-aborted-tries` with a group reward.
+- **A new flag, recipe key or env var needs a second real user**: a run, recipe
+  or test that sets the value other than the default. Name it in the PR body
+  (the template's "New flags" line). Without one, write the value as a
+  constant.
+- **Values that move together are one key or a preset.** Derive the rest from
+  that owner in `recipe.py` or `presets.py`; never ask a run to set several
+  flags in step.
+- **The default is what runs use.** A key every recipe sets the same way
+  should not need setting.
+- **Tuning constants are module constants, not env vars.** An env var read
+  inside upstream code is a switch nobody sees in a recipe.
+- **Debug switches** live under the recipe's `obs.*`, off by default.
+- **No compatibility shims.** A removed flag or key is gone; an old run
+  reproduces from its image plus its `recipe-*.json`, not from a shim.
+- **At each sync** ("Sync" below), list the recipe keys every config under
+  `miles_ext/recipes/configs/` leaves at the default and the fork flags no
+  recipe passes, and remove them in the sync PR or say why each stays.
+
 ## Patch pages
 
 `ledger.py` lists every change; a few deserve an explanation a reader can
@@ -317,7 +349,8 @@ release fixed the bug, take upstream's side and drop the markers, mark the
 patch page removed, and add a `Retires: <id>` trailer to the sync's stack
 commit (one per retired fix or hook; `ledger.py` then stops asking for its
 files and markers and lists it as retired); otherwise re-apply the same intent to the new code and
-keep the markers. After the merge: set `HARBOR_COMMIT` from the new tag's
+keep the markers. Prune switches no run uses ("Flags, recipe keys and env
+vars"). After the merge: set `HARBOR_COMMIT` from the new tag's
 `examples/experimental/harbor/README.md`, recheck vendored files (drop any
 that upstream now ships), recheck SGLang patches when the base image's SGLang
 moved (SGLang patches, "On a sync"), read the `REVIEW_PATHS` diff for API drift in what

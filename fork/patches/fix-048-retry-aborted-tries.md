@@ -36,8 +36,8 @@ set N = 1.
 
 ## How it is applied
 
-`miles/rollout/fully_async_rollout.py` (`_generate_group`, `_generate_tries`, `_generate_try`, `_try_metrics`) and `miles/utils/arguments.py` (the
-flag), marked `[fork fix-048]`. On by default (1 try) since fix-059; recipes no longer set it. Verify:
+`miles/rollout/fully_async_rollout.py` (`_generate_group`, `_generate_tries`, `_generate_try`, `_try_metrics`) and `miles/utils/fork_arguments.py` (the
+flag, hook-014), marked `[fork fix-048]`. Default 1 since fix-059, forced to 0 with a group reward or deterministic inference; recipes no longer set it. Verify:
 `pytest tests/fast/rollout/test_fully_async_rollout.py -k only_aborted_tries`. In a run, look for
 `Regenerating aborted try` in the rollout log and `retried_tries` in W&B.
 

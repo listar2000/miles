@@ -15,7 +15,7 @@ sync needs a protocol Miles does not ship (ext-037, through the results volume).
   `--custom-megatron-init-path` hook (a runtime patch of upstream code).
 
 ## How it is applied
-`miles/utils/arguments.py` (the flag, next to hook-002's) and
+`miles/utils/fork_arguments.py` (the flag, hook-014) and
 `miles/backends/training_utils/weight_update/protocol.py` (the check), marked `[fork hook-013]`.
 Verify: a split run logs `[split sync vN]` lines and passes `--check-lora-weight-equal`. On a sync, re-insert the three
 lines at the top of `get_weight_transfer_protocol`.

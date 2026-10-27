@@ -134,6 +134,12 @@ Each break is **blocking** unless marked otherwise.
 - **Evidence a reader can open.** Commit and PR evidence points at GitHub,
   W&B, Linear or files in the repo. Host-only paths (`investigations/...`) and
   scripts that are not in the repo are should-fix: quote the numbers instead.
+- **Switches** (`fork/README.md` "Flags, recipe keys and env vars"). A fix
+  behind a flag or env var is blocking. Each new Miles flag, recipe key or env
+  var is on the PR body's "New flags" line with the run, recipe or test that
+  uses its other value; a missing line or a switch with no such user is
+  should-fix. Fork flags are added in `miles/utils/fork_arguments.py`, not in
+  `miles/utils/arguments.py`.
 - **Caller-facing changes** (the `miles_ext.platform` API, recipe or run-spec
   fields and defaults, image refs, Modal names, teardown) are listed under
   Contract.
@@ -247,8 +253,8 @@ and the code the PR touches or calls, given with `--context`). Two questions:
 - Memory: peak GPU and host memory, pinned buffers and their lifetime.
 - State: routing replay (R3), LoRA adapter and weight sync to the engines,
   checkpoint save and resume, process restarts.
-- Switches: the change is off by default or behind a flag, and off restores the
-  old behavior exactly; an invalid combination is refused at startup.
+- Switches: a fix is on with no way to turn it off; a new option's default
+  matches what runs use; an invalid combination is refused at startup.
 
 Rules `measurement` (a claim the evidence does not support as stated) and
 `technical` (a correctness, numerics, memory or state risk). Evidence quotes the

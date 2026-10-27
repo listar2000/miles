@@ -49,6 +49,10 @@ even one whose PR closed.
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
 | change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
 
+Adding a Miles flag, recipe key or env var? Follow `fork/README.md` "Flags, recipe keys and env
+vars": a fix has no switch, a new switch needs a run that uses its other value, and fork flags go
+in `miles/utils/fork_arguments.py`.
+
 Prefer Ext and Infra: they cannot conflict on a sync, a Fix or Hook can. If an extension needs upstream to call it somewhere it doesn't, write a
 separate Hook commit; never edit upstream code from an Ext commit.
 
@@ -259,6 +263,8 @@ Only after the platform's owner reports that a `latest` build passed staging
 
 - Don't edit upstream files from Infra or Ext commits, even "just one line".
 - Don't edit a vendored file; subclass it.
+- Don't put a fix behind a flag or env var, and don't add a flag in `miles/utils/arguments.py`;
+  fork flags go in `miles/utils/fork_arguments.py`.
 - Don't patch SGLang at runtime (monkeypatching, appliers) from `miles_ext`; carry a patch file.
 - Don't rebase `main` onto upstream; merge the tag. Don't force-push `main` or move a tag.
 - Don't add `miles_ext` to upstream's `setup.py`; the image puts
