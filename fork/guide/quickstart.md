@@ -81,8 +81,13 @@ pushed commit instead. It is slow the first time, so use it only when you change
 
 ## 6. Dry check, then train
 
+Copy the closest shipped recipe into your own project first. In the copy, set
+`tracking.wandb_entity` to your W&B entity (or delete the line to use your API
+key's default) and `tracking.wandb_project` to your own project. The shipped
+recipes log to the maintainers' entity, which your key cannot write to.
+
 ```bash
-export MILES_RECIPE=miles_ext/recipes/configs/qwen35-9b-swegym8-sandbox.yaml MILES_DATA=<your task sets>
+export MILES_RECIPE=<your copy>.yaml MILES_DATA=<your task sets>
 modal run -m miles_ext.launch.modal_app --run-id smoke-<you>-1 --check-only    # one GPU, minutes
 modal run --detach -m miles_ext.launch.modal_app --run-id smoke-<you>-1        # train
 ```
