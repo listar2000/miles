@@ -13,6 +13,14 @@ What a run looks like from outside, after `modal run --detach -m miles_ext.launc
 | Curves | W&B `<tracking.wandb_entity>/<tracking.wandb_project>`, group = run id. Tags record the recipe, model, sandbox, harness, image version and commit. Per-GPU-node system metrics are labelled `train` or `rollout` |
 | The exact Miles arguments | the first lines of the app log; for a shipped recipe, also `miles_ext/tests/golden/<recipe>.json` |
 
+## The run monitor
+
+`miles_ext/monitor/` is a read-only web page over your runs: what is live, every
+run and attempt, trial progress, curves and GPU use. Set `MILES_MONITOR_DIR`
+before you launch, and the launcher registers each run there. Then
+`miles_ext/monitor/start.sh` serves the page locally, and `--tunnel` gives it a
+public URL. Setup and config: [miles_ext/monitor/README.md](../../miles_ext/monitor/README.md).
+
 ## Lifecycle
 
 - **Resume:** launch the same run id again. It loads the last save in `checkpoints/`.
