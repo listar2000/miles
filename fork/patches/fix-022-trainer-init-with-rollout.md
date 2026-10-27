@@ -7,11 +7,13 @@ on DeepSeek-V4.1-Flash, more without fix-021, PR #39) started only after the eng
 both in turn. The trainer needs nothing from the rollout side until it reports its parallel layout.
 
 ## Decision
-`--trainer-init-with-rollout` (default off) runs `create_rollout_components` and the new `init_training_models` together
+A fully async run on separate GPUs with `--num-rollout` runs (since fix-059 always; before it, behind
+`--trainer-init-with-rollout`) `create_rollout_components` and the new `init_training_models` together
 and calls `connect_training_models` (the parallel-config handoff and the rollout data reload on resume) once both are
-done. `create_training_models` is now those two calls in order, so the default path is unchanged. The flag needs
+done. `create_training_models` is now those two calls in order, so the default path is unchanged. Each side registers
+its handles for cleanup as it finishes, so a failure on the other side still releases them. It needs
 `--num-rollout`: with only `--num-epoch` the trainer's iteration count waits for the rollout side to count the
-dataset, and it refuses `--colocate`, where an engine sizes its memory from what is free on GPUs the trainer is
+dataset, and it does not apply with `--colocate`, where an engine sizes its memory from what is free on GPUs the trainer is
 loading onto. Both sides then read their checkpoints at the same time; four containers reading one Modal Volume
 together each kept 2.4-5.3 GB/s (CPU read test, 2026-10-18), so sharing a volume costs nothing measurable. The existing
 `MILES_SGLANG_DUMMY_LOAD=1` would still skip the engines' read, since the first weight update fills them.

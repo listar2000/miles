@@ -26,7 +26,7 @@ Not covered: `te_checkpoint` (FP8/FP4 training) and `CheckpointWithoutOutput`.
 
 ## How it is applied
 `_release_recompute_inputs()` in `miles/backends/megatron_utils/initialize.py`, called from `init()` after the
-seeds are set; on by default for every Megatron trainer, `MILES_RECOMPUTE_RELEASE=0` turns it off. Verify:
+seeds are set; always on for every Megatron trainer (fix-059 removed `MILES_RECOMPUTE_RELEASE`). Verify:
 `tests/fast/backends/megatron_utils/test_initialize.py::TestReleaseRecomputeInputs` (CPU, real
 `CheckpointFunction`: 8 retained activation storages without the fix, 0 with it, identical grads). On a sync,
 check that `CheckpointFunction.backward` still calls `ctx.run_function(*detached_inputs)`.

@@ -35,11 +35,11 @@ Two side effects of many distinct lengths are handled in the same change:
 ## How it is applied
 `get_rollout_data` in `miles/backends/training_utils/data/rollout.py` (`_micro_batch_groups`,
 `_micro_batch_max_seq_lens`), and `get_data_iterator` there (`_longest_micro_batch_first`); the order restore in
-`aggregate_forward_results` (`miles/backends/training_utils/metrics/log_utils.py`). On by default;
-`MILES_BSHD_PAD_PER_MICRO_BATCH=0` restores batch-max padding and data order. The rope change is in
+`aggregate_forward_results` (`miles/backends/training_utils/metrics/log_utils.py`). Always on
+(fix-059 removed `MILES_BSHD_PAD_PER_MICRO_BATCH`). The rope change is in
 `miles_plugins/models/deepseek_v4/ops/rope.py`. Verify:
 `tests/fast/backends/training_utils/test_bshd_pad_per_micro_batch.py` (per-sample and per-micro-batch lengths,
-longest-first order within each step, forward results back in sample order, the switch, rope tables bit-identical)
+longest-first order within each step, forward results back in sample order, rope tables bit-identical)
 and `miles_ext/tests/test_ckpt_offload.py` (GPU: the pool stays at the working set).
 On a sync, check that `get_rollout_data` still sets `max_seq_lens` and that upstream has not done the TODO itself.
 

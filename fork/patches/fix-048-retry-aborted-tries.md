@@ -10,7 +10,8 @@ tries.
 
 ## Decision
 
-`--async-retry-aborted-tries N` (default 0): with it on, each try of a group runs as a group of one. When a try
+`--async-retry-aborted-tries N` (default 1 since fix-059, which also sets it to 0 under `--group-rm` or
+deterministic inference; upstream's tests run with 0): with it on, each try of a group runs as a group of one. When a try
 is aborted, it is regenerated at once from a fresh copy of its prompt sample, stamped with the current KV-cache
 namespace, up to N times, while its siblings keep running. The group keeps its finished tries. A try still
 aborted after the last retry leaves the whole group to `--async-unused-samples-handler`, as before. Recipes
@@ -23,7 +24,8 @@ set N = 1.
 - Not chosen: retrying only after the whole group finishes. The group would then wait for its slowest try plus
   a full retry, which makes it more likely to go stale before the trainer takes it.
 - Running tries one by one means no `--group-rm` (a reward over the whole group) and no per-try seed under
-  deterministic inference. The rollout refuses to start with either.
+  deterministic inference. With either, the retry count is forced to 0 (since fix-059; a value above
+  the default logs a warning) and aborted groups are handled whole.
 - A retried try samples with newer weights. The group's staleness is its oldest try's, so the staleness check
   is unchanged. Retries are counted in flight (`on_submit`) and release their slots as they finish. They may
   briefly exceed `--async-max-concurrent-samples`.
@@ -35,7 +37,7 @@ set N = 1.
 ## How it is applied
 
 `miles/rollout/fully_async_rollout.py` (`_generate_group`, `_generate_tries`, `_generate_try`, `_try_metrics`) and `miles/utils/arguments.py` (the
-flag), marked `[fork fix-048]`. Recipes: `async.retry_aborted_tries` (ext-012). Verify:
+flag), marked `[fork fix-048]`. On by default (1 try) since fix-059; recipes no longer set it. Verify:
 `pytest tests/fast/rollout/test_fully_async_rollout.py -k only_aborted_tries`. In a run, look for
 `Regenerating aborted try` in the rollout log and `retried_tries` in W&B.
 

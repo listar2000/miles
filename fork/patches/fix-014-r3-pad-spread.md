@@ -22,9 +22,9 @@ Alternatives that lost:
 - Use the router's own top-k for pad rows: identical pad tokens can still pile onto a few experts.
 
 ## How it is applied
-`_get_replay_result` in `miles/utils/replay_base.py`; on by default, `MILES_R3_PAD_SPREAD=0` restores the old fill.
+`_get_replay_result` in `miles/utils/replay_base.py`; always on (fix-059 removed `MILES_R3_PAD_SPREAD`).
 Verify: `tests/fast/utils/test_replay_base.py` (pad rows within one row per rank of an even split over 8
-expert-parallel ranks, real rows bit-identical, the switch restores arange). On a sync, check the fill is still in
+expert-parallel ranks, real rows bit-identical). On a sync, check the fill is still in
 `_get_replay_result`.
 
 ## Remove when
