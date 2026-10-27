@@ -1,8 +1,10 @@
 """Where a rollout's sandbox time goes: timing spans for each Harbor trial and for the session proxy (ext-040).
 
-Off by default (recipe ``obs.sandbox_profile``). Off, nothing here is imported on the trial
-path: the agent function hands Harbor the provider unchanged and the proxy builds its app
-without the middleware. On, two writers record JSON lines, each duration taken on one clock:
+Off by default (recipe ``obs.sandbox_profile``). Off, nothing here runs on the trial path: the
+agent function hands Harbor the provider unchanged and the proxy builds its app without the
+middleware. On, two writers record JSON lines, each duration taken on one clock, and neither
+writes on an event loop (a trial's spans are written once, off the loop, when its sandbox stops;
+the proxy's lines go through one writer thread):
 
 ``<trial_dir>/sandbox_profile.jsonl`` (host side, one file per trial)
     ``ProfiledEnvironment`` wraps the run's sandbox provider (Sail or Harbor's Modal) and
@@ -10,7 +12,9 @@ without the middleware. On, two writers record JSON lines, each duration taken o
     inside another timed call (a provider's ``start`` that execs), so sums use depth 0 only.
     ``note_session`` adds the trial's session path, which joins the proxy's lines.
 ``<run_dir>/sandbox_profile/proxy.jsonl`` (host side, one file per run)
-    the proxy's time for every forwarded request, keyed by session path (never the token).
+    the proxy's time for every forwarded request, receipt to response, keyed by session path (never
+    the token). It includes the upstream's time: in the benchmark (a scripted model) that is near
+    zero, in training it is the session server and SGLang, so there it reads "model + proxy".
 
 The in-sandbox side needs nothing new: Harbor's mini-swe-agent step-timing patch already
 writes each step's model wait (``harbor_llm_wait_msec``) and command time
@@ -18,9 +22,11 @@ writes each step's model wait (``harbor_llm_wait_msec``) and command time
 joins the three.
 """
 
+import asyncio
 import contextvars
 import functools
 import importlib
+import inspect
 import json
 import os
 import time
@@ -57,10 +63,15 @@ def profiled_config(config):
     return config.model_copy(update={"type": None, "import_path": IMPORT_PATH})
 
 
-def write_line(path: str | Path, record: dict[str, Any]) -> None:
-    # one write per line, appended: concurrent writers (the proxy's requests) never interleave a line
+def write_lines(path: str | Path, records: list[dict[str, Any]]) -> None:
+    if not records:
+        return
     with open(path, "a") as f:
-        f.write(json.dumps(record, separators=(",", ":")) + "\n")
+        f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records))
+
+
+def write_line(path: str | Path, record: dict[str, Any]) -> None:
+    write_lines(path, [record])
 
 
 def note_session(trial_dir: str | Path, session_url: str) -> None:
@@ -72,15 +83,22 @@ def note_session(trial_dir: str | Path, session_url: str) -> None:
 
 
 def _timed(op: str, describe=None):
+    """Time an async provider method; ``describe(arguments)`` (the call's bound arguments by name) adds fields."""
+
     def wrap(method):
+        signature = inspect.signature(method)
+
         @functools.wraps(method)
         async def timed(self, *args, **kwargs):
             depth = _depth.get()
-            token = _depth.set(depth + 1)
             t0, mono = time.time(), time.monotonic()
             record: dict[str, Any] = {"op": op, "t0": t0, "depth": depth}
             if describe:
-                record.update(describe(*args, **kwargs))
+                try:  # a description never fails the call it describes
+                    record.update(describe(signature.bind(self, *args, **kwargs).arguments))
+                except Exception as e:
+                    record["describe_error"] = type(e).__name__
+            token = _depth.set(depth + 1)
             try:
                 result = await method(self, *args, **kwargs)
                 record["ok"] = True
@@ -93,19 +111,21 @@ def _timed(op: str, describe=None):
             finally:
                 _depth.reset(token)
                 record["dt"] = time.monotonic() - mono
-                self._profile_write(record)
+                self.__dict__.setdefault("_profile_spans", []).append(record)
 
         return timed
 
     return wrap
 
 
-def _describe_exec(command, cwd=None, env=None, timeout_sec=None, user=None, **_):
-    return {"cmd": command[:_CMD_CHARS], "timeout_sec": timeout_sec}
+def _describe_exec(a: dict) -> dict:
+    return {"cmd": str(a.get("command"))[:_CMD_CHARS], "timeout_sec": a.get("timeout_sec")}
 
 
-def _describe_transfer(source, target, *_, **__):
-    return {"src": str(source)[:_CMD_CHARS], "dst": str(target)[:_CMD_CHARS]}
+def _describe_transfer(a: dict) -> dict:
+    src = a.get("source_path", a.get("source_dir"))
+    dst = a.get("target_path", a.get("target_dir"))
+    return {"src": str(src)[:_CMD_CHARS], "dst": str(dst)[:_CMD_CHARS]}
 
 
 @functools.cache
@@ -113,9 +133,6 @@ def profiled(inner: type) -> type:
     """A subclass of the provider class ``inner`` that times its sandbox calls into the trial dir."""
 
     class Profiled(inner):
-        def _profile_write(self, record: dict[str, Any]) -> None:
-            write_line(Path(self.trial_paths.trial_dir) / TRIAL_FILE, record)
-
         async def start(self, force_build: bool) -> None:
             await self._profiled_start(force_build)
             for _ in range(int(os.getenv(PROBES_ENV) or 0)):
@@ -129,13 +146,22 @@ def profiled(inner: type) -> type:
         async def _probe_exec(self, command: str):
             return await super().exec(command)
 
-        @_timed("stop")
         async def stop(self, delete: bool):
+            try:
+                return await self._profiled_stop(delete)
+            finally:  # the trial's spans, written once and off the event loop
+                spans, self.__dict__["_profile_spans"] = self.__dict__.get("_profile_spans", []), []
+                path = Path(self.trial_paths.trial_dir) / TRIAL_FILE
+                await asyncio.to_thread(write_lines, path, spans)
+
+        @_timed("stop")
+        async def _profiled_stop(self, delete: bool):
             return await super().stop(delete)
 
         @_timed("exec", _describe_exec)
-        async def exec(self, command: str, *args, **kwargs):
-            return await super().exec(command, *args, **kwargs)
+        async def exec(self, command: str, cwd=None, env=None, timeout_sec=None, user=None):
+            # BaseEnvironment.exec's signature, so spans see each argument by name
+            return await super().exec(command, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user)
 
         @_timed("upload_file", _describe_transfer)
         async def upload_file(self, source_path, target_path):
@@ -169,12 +195,32 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 
-def proxy_middleware(log_path: str | Path):
-    """aiohttp middleware for the session proxy: one line per forwarded request, timed from receipt to response."""
+def install_proxy_profile(app, log_path: str | Path) -> None:
+    """Time every request the session proxy forwards (receipt to response) into ``log_path``.
+
+    The middleware only queues each line; one writer thread appends them, so the proxy's loop never
+    waits on the file (the results volume)."""
+    import queue
+    import threading
+
     from aiohttp import web
 
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: queue.SimpleQueue = queue.SimpleQueue()
+    done = object()
+
+    def writer() -> None:
+        while True:
+            batch = [lines.get()]
+            while not lines.empty():
+                batch.append(lines.get())
+            finished = batch[-1] is done
+            write_lines(log_path, [r for r in batch if r is not done])
+            if finished:
+                return
+
+    thread = threading.Thread(target=writer, name="proxy-profile-writer", daemon=True)
 
     @web.middleware
     async def timing(request, handler):
@@ -190,15 +236,23 @@ def proxy_middleware(log_path: str | Path):
         finally:
             info = request.match_info
             if "port" in info:  # forwarded requests only, never the token
-                write_line(
-                    log_path,
+                lines.put(
                     {
                         "t0": t0,
                         "dt": time.monotonic() - mono,
                         "status": status,
                         "path": f"/{info['port']}/{info['tail']}",
                         "method": request.method,
-                    },
+                    }
                 )
 
-    return timing
+    async def start(app):
+        thread.start()
+
+    async def stop(app):
+        lines.put(done)
+        await asyncio.to_thread(thread.join, 30)
+
+    app.middlewares.append(timing)
+    app.on_startup.append(start)
+    app.on_cleanup.append(stop)

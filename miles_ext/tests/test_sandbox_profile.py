@@ -65,6 +65,12 @@ class _Fake:
     async def stop(self, delete):
         pass
 
+    async def upload_file(self, source_path, target_path):
+        pass
+
+    async def upload_dir(self, source_dir, target_dir):
+        pass
+
 
 def test_spans_time_each_call_and_mark_nested_ones(tmp_path, monkeypatch):
     monkeypatch.setenv(sp.PROBES_ENV, "2")
@@ -95,6 +101,38 @@ def test_spans_time_each_call_and_mark_nested_ones(tmp_path, monkeypatch):
     assert spans[4]["rc"] == 3 and spans[4]["timeout_sec"] == 60 and spans[4]["cmd"] == "false"
     assert spans[5]["ok"] is False and spans[5]["error"] == "RuntimeError"
     assert all(s["dt"] >= 0 for s in spans)
+
+
+def test_transfers_by_keyword_are_timed(tmp_path):
+    """Harbor's artifact handler passes source_path= / source_dir= by keyword."""
+    env = sp.profiled(_Fake)(tmp_path)
+
+    async def go():
+        await env.upload_file(source_path="/a/b", target_path="/c")
+        await env.upload_dir(source_dir="/d", target_dir="/e")
+        await env.upload_file("/f", "/g")
+        await env.stop(True)
+
+    asyncio.run(go())
+    spans = _lines(tmp_path / sp.TRIAL_FILE)
+    assert [(s["op"], s["src"], s["dst"]) for s in spans[:3]] == [
+        ("upload_file", "/a/b", "/c"),
+        ("upload_dir", "/d", "/e"),
+        ("upload_file", "/f", "/g"),
+    ]
+    assert sp._depth.get() == 0
+
+
+def test_spans_reach_the_file_only_when_the_sandbox_stops(tmp_path):
+    env = sp.profiled(_Fake)(tmp_path)
+
+    async def go():
+        await env.exec("true")
+        assert not (tmp_path / sp.TRIAL_FILE).exists()
+        await env.stop(True)
+
+    asyncio.run(go())
+    assert [s["op"] for s in _lines(tmp_path / sp.TRIAL_FILE)] == ["exec", "stop"]
 
 
 def test_module_attribute_wraps_the_configured_provider(monkeypatch):
@@ -136,7 +174,8 @@ def test_proxy_logs_each_forwarded_request_without_the_token(tmp_path):
 
 
 def test_proxy_without_a_log_has_no_middleware():
-    assert not make_app("127.0.0.1", range(30000, 30001), "tok").middlewares
+    app = make_app("127.0.0.1", range(30000, 30001), "tok")
+    assert not app.middlewares
 
 
 def test_recipe_switch_sets_the_env_only_when_on():

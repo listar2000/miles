@@ -5,13 +5,13 @@ read what Harbor and mini-swe-agent write, and the synthetic workloads run:
 """
 
 import asyncio
+import functools
 import json
 import subprocess
-import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from miles_ext.obs import sandbox_profile as sp
 from miles_ext.obs.sandbox_bench import report, traces
@@ -69,42 +69,28 @@ def test_task_dir_is_a_harbor_task(tmp_path):
     )
 
 
-def test_mini_swe_agent_reads_the_scripted_replies(tmp_path):
+def test_mini_swe_agent_reads_the_scripted_replies():
     """The real mini-swe-agent model class against the scripted server: each script command, then the submit."""
     from minisweagent.models.litellm_model import LitellmModel
 
-    scripts = {"s1": Script(["ls -la", "cat x"])}
-    loop = asyncio.new_event_loop()
-    started = threading.Event()
-    box = {}
+    scripts, log = {"s1": Script(["ls -la", "cat x"])}, []
 
-    async def serve():
-        runner = web.AppRunner(make_app(scripts, tmp_path / "model.jsonl"))
-        await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        box["port"], box["runner"] = site._server.sockets[0].getsockname()[1], runner
-        started.set()
+    async def go():
+        async with TestServer(make_app(scripts, log)) as server:
+            model = LitellmModel(
+                model_name="openai/model",
+                cost_tracking="ignore_errors",
+                model_kwargs={
+                    "api_base": str(server.make_url("/sessions/s1/v1")),
+                    "api_key": "dummy",
+                    "drop_params": True,
+                },
+            )
+            query = functools.partial(model.query, [{"role": "user", "content": "go"}])
+            return [(await asyncio.to_thread(query))["extra"]["actions"][0]["command"] for _ in range(3)]
 
-    thread = threading.Thread(target=lambda: (loop.run_until_complete(serve()), loop.run_forever()), daemon=True)
-    thread.start()
-    started.wait(10)
-    try:
-        model = LitellmModel(
-            model_name="openai/model",
-            cost_tracking="ignore_errors",
-            model_kwargs={
-                "api_base": f"http://127.0.0.1:{box['port']}/sessions/s1/v1",
-                "api_key": "dummy",
-                "drop_params": True,
-            },
-        )
-        got = [model.query([{"role": "user", "content": "go"}])["extra"]["actions"][0]["command"] for _ in range(3)]
-    finally:
-        asyncio.run_coroutine_threadsafe(box["runner"].cleanup(), loop).result(10)
-        loop.call_soon_threadsafe(loop.stop)
-    assert got == ["ls -la", "cat x", SUBMIT]
-    assert [line["step"] for line in map(json.loads, (tmp_path / "model.jsonl").read_text().splitlines())] == [1, 2, 3]
+    assert asyncio.run(go()) == ["ls -la", "cat x", SUBMIT]
+    assert [line["step"] for line in log] == [1, 2, 3]
 
 
 def _trial(d, task="t1", steps=((0.5, "ls", 0, 0.2), (0.4, "grep -rn x /", 1, 3.0)), wall=10.0):
@@ -165,10 +151,29 @@ def test_report_splits_the_wall_time_exactly(tmp_path):
     assert abs(sum(s["share"].values()) - 1.0) < 1e-9 and s["tool_share_by_class"]["fs-scan"] == 0.3
 
 
-def test_a_retried_call_leaves_tunnel_unknown(tmp_path):
+def test_a_retried_call_keeps_its_wait_whole(tmp_path):
     d = _trial(tmp_path / "t")
     row = report.trial_row(d, {"/30000/sessions/t/v1/chat/completions": [0.1] * 4})
-    assert row["tunnel"] is None and row["proxy"] is None
+    assert not row["matched"] and row["tunnel"] == row["proxy"] == 0.0 and abs(row["model_unsplit"] - 1.0) < 1e-9
+    assert abs(sum(row[p] for p in report.PIECES) - row["wall"]) < 1e-9
+    s = report.summarize([row], no_result=2)
+    assert abs(sum(s["share"].values()) - 1.0) < 1e-9
+    assert (s["trials"], s["failed"], s["no_result"], s["unmatched_calls"]) == (3, 2, 2, 1)
+
+
+def test_probes_are_not_sandbox_start(tmp_path):
+    d = _trial(tmp_path / "p")
+    sp.write_lines(d / sp.TRIAL_FILE, [{"op": "probe_exec", "dt": 0.25, "depth": 0}] * 2)
+    row = report.trial_row(d, {})
+    assert row["probes"] == 0.5 and abs(row["sandbox_start"] - 1.5) < 1e-9
+
+
+def test_fidelity_counts_a_replay_cut_short(tmp_path):
+    d = _trial(tmp_path / "f")
+    row = report.trial_row(d, {})
+    trace = {"commands": ["ls", "grep -rn x /", "make"], "rc": [0, 1, 0], "cmd_s": [0.1, 3.0, 1.0]}
+    out = report.fidelity([row], [{"trial_dir": str(d), "trace": "orig"}], {"orig": trace})
+    assert out["rc_match"] == 1.0 and out["compared"] == 2 and out["replays_cut_short"] == 1
 
 
 def test_plan_runs_each_provider_in_its_own_sequence():

@@ -1,7 +1,7 @@
 # ext-040: where a rollout's sandbox time goes, and a CPU-only benchmark of Sail and Modal sandboxes
 
 ## Why
-The a6 env-time study (10-21) found 46% of trajectory time outside the model: 37% tool commands, 6% verifier,
+The a6 env-time study (10-21; listar2000/miles-ops `notes/rollout-env/RESULT-2026-10-21.md`) found 46% of trajectory time outside the model: 37% tool commands, 6% verifier,
 2% start and install, read from mini-swe-agent's step timestamps. It could not say whether Sail runs the same
 command slower than another provider, or how much of each model round trip is the tunnel and proxy. Measuring
 that with real inference costs GPUs and mixes in model speed.
@@ -13,6 +13,12 @@ that with real inference costs GPUs and mixes in model speed.
   `HARBOR_ENV_IMPORT_PATH` / `HARBOR_ENV_TYPE`) and writes `<trial_dir>/sandbox_profile.jsonl`; the proxy's
   `--profile-log` writes `<run_dir>/sandbox_profile/proxy.jsonl`. The in-sandbox side reuses the step timings
   Harbor's mini-swe-agent patch already records. A wrapper by import path, not a patch to the providers.
+  Nothing is written on an event loop: a trial's spans are written once, in a thread, when its sandbox stops;
+  the proxy queues its lines to one writer thread.
+- The proxy's time is receipt to response, so it includes the upstream: near zero with the benchmark's scripted
+  model, the session server and SGLang in training (there it reads "model + proxy"; tunnel = in-sandbox wait
+  minus that, in both). A call that does not match its proxy line one to one (a retry) keeps its wait whole as
+  `model_unsplit`, so every trial's pieces still sum to its wall time.
 - Benchmark in `miles_ext/obs/sandbox_bench/`: a CPU Modal function runs the production agent function
   (`agent_function.run` through Miles' agent-function child processes) against a scripted OpenAI-compatible model
   behind the real `session_proxy` and `modal.forward` tunnel. Workloads: six synthetic scripts on one image pinned
