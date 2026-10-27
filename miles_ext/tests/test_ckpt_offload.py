@@ -4,7 +4,7 @@ import torch
 pytest.importorskip("megatron.core")
 from megatron.core import tensor_parallel
 
-from miles_ext.memory import ckpt_offload, recompute_offload
+from miles_ext.memory import ckpt_offload
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
@@ -87,81 +87,24 @@ def test_no_grad_forward_saves_nothing_and_is_untouched(offloading):
         assert torch.equal(offloading(None, x, weights), _block(None, x, weights))
 
 
-def _deep_block(self, hidden, weights):
-    def layer(x):
-        for w in weights:
-            x = torch.tanh(x @ w)
-        return x
-
-    return tensor_parallel.checkpoint(layer, False, hidden)
-
-
-def _recompute_step():
-    torch.manual_seed(0)
-    x = torch.randn(2 * ROWS, COLS, device="cuda", requires_grad=True)  # 32 MiB activations
-    weights = [(torch.randn(COLS, COLS, device="cuda") / COLS**0.5).requires_grad_() for _ in range(LAYERS)]
-    out = _deep_block(None, x * 1.0, weights)
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
-    base = torch.cuda.memory_allocated()
-    out.square().sum().backward()
-    peak = torch.cuda.max_memory_allocated() - base
-    return [x.grad] + [w.grad for w in weights], peak
-
-
-@pytest.mark.parametrize("resident", [0, 2])
-def test_recompute_offload_is_bit_identical_and_bounds_what_backward_holds(monkeypatch, resident):
-    grads_ref, peak_ref = _recompute_step()
-    function = tensor_parallel.random.CheckpointFunction
-    act = 2 * ROWS * COLS * 4
-    monkeypatch.setattr(recompute_offload, "WINDOW_BYTES", 2 * act)
-    monkeypatch.setattr(recompute_offload, "RESIDENT_BYTES", resident * act)
-    monkeypatch.setattr(function, "backward", recompute_offload._offloading_backward(function.backward))
-    seen = []
-    unpack = recompute_offload._Window.unpack
-
-    def watched(self, index):
-        seen.append((len(self.items), self.oldest, self.ahead))
-        return unpack(self, index)
-
-    monkeypatch.setattr(recompute_offload._Window, "unpack", watched)
-    grads, peak = _recompute_step()
-
-    assert all(torch.equal(a, b) for a, b in zip(grads, grads_ref, strict=True))
-    # x @ w saves x and tanh saves its output, the next layer's x: one host copy per activation, not two
-    assert seen[0][0] == LAYERS + 1
-    assert seen[0][1] == LAYERS + 1 - resident  # the last `resident` activations never left the GPU
-    assert max(ahead for _, _, ahead in seen) <= 3 * act
-    assert peak < peak_ref
-
-
 def test_copies_back_land_in_the_compute_streams_pool(monkeypatch, offloading):
-    function = tensor_parallel.random.CheckpointFunction
-    monkeypatch.setattr(function, "backward", recompute_offload._offloading_backward(function.backward))
     torch.cuda.empty_cache()
     _step(offloading)
-    _recompute_step()
     compute = torch.cuda.current_stream().cuda_stream
     assert {seg["stream"] for seg in torch.cuda.memory_snapshot()} == {compute}
 
 
-@pytest.mark.parametrize("resident", [0, 2])
-def test_both_offloads_compose_with_the_recompute_release(monkeypatch, offloading, resident):
-    """fix-011 (released recompute inputs) wraps the same backward as recompute_offload: values stay bit-identical."""
+def test_offload_composes_with_the_recompute_release(monkeypatch, offloading):
+    """fix-011 (released recompute inputs) wraps the recompute's backward; the offload stays bit-identical."""
     from miles.backends.megatron_utils import initialize
 
     out_ref, grads_ref, _ = _step(_block)
-    recompute_grads_ref, _ = _recompute_step()
     function = tensor_parallel.random.CheckpointFunction
     monkeypatch.setattr(function, "backward", function.backward)  # restored after the test
-    initialize._release_recompute_inputs()  # first, as in init(); the offload installs later from the init path
+    initialize._release_recompute_inputs()  # as in init(); the offload installs later from the init path
     assert getattr(function.backward, "miles_release", False)
-    monkeypatch.setattr(function, "backward", recompute_offload._offloading_backward(function.backward))
-    monkeypatch.setattr(recompute_offload, "RESIDENT_BYTES", resident * 2 * ROWS * COLS * 4)
 
     for _ in range(2):
         out, grads, _ = _step(offloading)
-        recompute_grads, _ = _recompute_step()
         assert torch.equal(out, out_ref)
         assert all(torch.equal(a, b) for a, b in zip(grads, grads_ref, strict=True))
-        assert all(torch.equal(a, b) for a, b in zip(recompute_grads, recompute_grads_ref, strict=True))

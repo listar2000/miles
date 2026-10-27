@@ -55,3 +55,8 @@ with the hidden states first.
 
 ## Remove when
 Megatron supports offloading full-recompute checkpoints with PP>1, or the trainer no longer uses full recompute.
+
+## Since 2026-10-27
+
+`recompute_offload` and its `MILES_RECOMPUTE_OFFLOAD_*` env vars are gone: no run used them. The V4.1 preset
+installs `ckpt_offload` for every V4.1 run.

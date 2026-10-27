@@ -56,3 +56,8 @@ record only which groups are buffered.
 
 Upstream Miles checkpoints buffered groups without one blocking write, or stops buffering finished groups across
 saves. fix-046's `prompts` mode stays as a fallback (`async.checkpoint_buffer: prompts`).
+
+## Since 2026-10-27
+
+The recipe passes `--custom-async-data-buffer-path` for every fully async run; `async.checkpoint_buffer`,
+`--async-checkpoint-buffer` and the `prompts` fallback are gone (fix-060).

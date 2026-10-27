@@ -39,3 +39,7 @@ stayed at or below 0.33. Nothing in the logs said what held the loop.
 ## Remove when
 
 Upstream Miles monitors its rollout loop itself, and its recipes default to subprocess agents.
+
+## Since 2026-10-27
+
+`agent.function_mode` is gone: no recipe ran `inline`, so every run passes `--custom-agent-function-mode subproc`.

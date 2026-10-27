@@ -56,7 +56,6 @@ class GroupLogDataBuffer(DefaultDataBuffer):
     def __init__(self, input: DataBufferConstructorInput):
         super().__init__(input)
         assert not resolve_megatron_config(self._args).is_multi_policy, MULTI_POLICY_CHECKPOINT_UNSUPPORTED
-        assert self._args.async_checkpoint_buffer == "log", "the group log runs with --async-checkpoint-buffer log"
         self._dir = Path(self._args.save) / GROUPS_DIRNAME if self._args.save else None
         self._writer = ThreadPoolExecutor(max_workers=2, thread_name_prefix="group-log")
         self._known: set[str] = set()  # uids with a file in self._dir that no GC has deleted

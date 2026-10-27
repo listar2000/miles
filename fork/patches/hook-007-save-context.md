@@ -27,3 +27,8 @@ sync: re-indent whatever upstream's save call becomes into the block.
 
 ## Remove when
 Upstream lets the caller stage or redirect Megatron checkpoint saves; upstream status: not filed.
+
+## Removed 2026-10-27
+
+The flag prune removed this change (fix-060 for fixes and hooks, ext commits for extensions). The page
+records what it did; the code is in git history and in images built before the prune.

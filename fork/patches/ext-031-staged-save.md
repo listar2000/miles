@@ -76,3 +76,8 @@ the launcher watches live under `--save`, and a lost container loses them).
 ## Remove when
 Megatron's async save works on the image and the volume takes GPU-container writes at local-disk
 speed; upstream status: not filed.
+
+## Removed 2026-10-27
+
+The flag prune removed this change (fix-060 for fixes and hooks, ext commits for extensions). The page
+records what it did; the code is in git history and in images built before the prune.

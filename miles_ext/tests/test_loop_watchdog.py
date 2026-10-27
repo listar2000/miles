@@ -29,12 +29,6 @@ def test_stall_logs_the_blocking_frame_and_its_length(caplog):
     assert float(ended.split("after ")[1].rstrip("s")) >= 0.5
 
 
-def test_recipe_runs_trials_in_subprocesses_unless_set_inline():
-    def mode(recipe):
-        argv = R.miles_args(recipe, "t-1", resume=False)
-        return argv[argv.index("--custom-agent-function-mode") + 1]
-
-    recipe = R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}})
-    assert mode(recipe) == "subproc"
-    recipe = R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}, "agent": {"function_mode": "inline"}})
-    assert mode(recipe) == "inline"
+def test_recipe_runs_trials_in_subprocesses():
+    argv = R.miles_args(R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}}), "t-1", resume=False)
+    assert argv[argv.index("--custom-agent-function-mode") + 1] == "subproc"

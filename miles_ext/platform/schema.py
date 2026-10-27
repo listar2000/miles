@@ -37,7 +37,7 @@ RESERVED_FLAGS = {
     "--prompt-data": "taskset",
     "--custom-agent-function-path": "taskset.harness",
     "--custom-generate-function-path": "taskset.harness",
-    "--custom-agent-function-mode": "agent.function_mode",
+    "--custom-agent-function-mode": "the recipe (each trial in its own process, ext-033)",
     "--session-server-port": "platform (session servers)",
     "--use-session-server": "platform (session servers)",
     # named knobs (r6): reserved even when the recipe leaves the flag out
@@ -68,8 +68,7 @@ RESERVED_FLAGS = {
     "--pause-generation-mode": "async.pause_generation",
     "--async-single-pass": "async.single_pass",
     "--async-retry-aborted-tries": "fixed: Miles retries an aborted try once (fix-048, fix-059)",
-    "--async-checkpoint-buffer": "async.checkpoint_buffer",
-    "--custom-async-data-buffer-path": "async.checkpoint_buffer (log uses the write-ahead group log, ext-034)",
+    "--custom-async-data-buffer-path": "the recipe (the write-ahead group log, ext-034)",
     "--partial-rollout": "unsupported: Miles rejects it in fully async mode",
 }
 

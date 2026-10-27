@@ -23,3 +23,8 @@ On a sync, keep the choice next to fix-046's flag.
 
 ## Remove when
 ext-034 and fix-046 are both removed. Upstream status: not filed.
+
+## Removed 2026-10-27
+
+The flag prune removed this change (fix-060 for fixes and hooks, ext commits for extensions). The page
+records what it did; the code is in git history and in images built before the prune.

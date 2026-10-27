@@ -29,7 +29,6 @@ import threading
 import time
 from pathlib import Path
 
-from miles_ext.checkpoint.staged_save import UPLOAD_TIMEOUT_SECS
 from miles_ext.platform import progress as P
 from miles_ext.platform.layout import read_tracker
 
@@ -177,14 +176,11 @@ class _EventTail:
 
 class Supervisor:
     def __init__(self, run_id: str, recipe: dict, run_dir: Path, *, progress_dict, segment: int,
-                 deadline: float | None, commit, image: dict, backend: str, call_id: str | None = None,
-                 pending=None):
+                 deadline: float | None, commit, image: dict, backend: str, call_id: str | None = None):
         self.run_id, self.recipe, self.run_dir = run_id, recipe, Path(run_dir)
         self.dict, self.keys = progress_dict, P.keys(run_id)
         self.segment, self.deadline, self.commit, self.image = segment, deadline, commit, image
         self.call_id = call_id
-        # pending() is True while a save Miles finished is not in the tracker yet (ext-031 staged saves)
-        self.pending = pending or (lambda: False)
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)
         self.error_lines: list[str] = []  # the first error lines of the whole output, past the tail's reach
@@ -286,7 +282,7 @@ class Supervisor:
                     self.save_requested = (time.time(), why)
                     self.phase = "checkpointing"
                     print(f"supervisor: asked Miles to save ({why})", flush=True)
-            elif self.save_requested is not None and not os.path.exists(SENTINEL) and not self.pending():
+            elif self.save_requested is not None and not os.path.exists(SENTINEL):
                 # Miles removes the sentinel once saved
                 self.save_secs = time.time() - self.save_requested[0]
                 self.tracker = self._tracker()
@@ -307,7 +303,7 @@ class Supervisor:
             proc.wait()
         piper.join(timeout=10)
         self.events.poll()
-        self._await_pending()
+        self._commit_last_save()
         self.tracker = self._tracker()
         lines = self.cause_lines + self.error_lines + list(self.tail)
         if reason is None:
@@ -315,19 +311,8 @@ class Supervisor:
         note = first_error(lines, reason) if reason not in ("success", "segment_end", "lease_expired") else None
         return self.finish(reason, proc.returncode, note=note)
 
-    def _await_pending(self):
-        """Let the last save reach the tracker before the exit record reads it."""
-        by, last_beat = time.time() + UPLOAD_TIMEOUT_SECS, time.time()
-        while self.pending() and time.time() < by:
-            time.sleep(POLL_SECS)
-            if time.time() - last_beat >= P.HEARTBEAT_SECS:
-                self.heartbeat()
-                last_beat = time.time()
-        if self.pending():
-            print(
-                f"supervisor: a save is still uploading after {UPLOAD_TIMEOUT_SECS}s; recording the tracker as is",
-                flush=True,
-            )
+    def _commit_last_save(self):
+        """Commit the last save before the exit record reads the tracker."""
         tracker = self._tracker()
         if tracker != self.tracker:
             self.commit()

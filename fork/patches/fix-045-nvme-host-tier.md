@@ -34,3 +34,8 @@ request was in use.
 
 ## Remove when
 Upstream `nvme_stream` gains a host-memory tier. Status 2026-10-20: not filed.
+
+## Removed 2026-10-27
+
+The flag prune removed this change (fix-060 for fixes and hooks, ext commits for extensions). The page
+records what it did; the code is in git history and in images built before the prune.

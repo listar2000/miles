@@ -282,17 +282,10 @@ def _native_lora_args(argv: list[str], **overrides):
     )
 
 
-@pytest.mark.parametrize(
-    "mode, buffer",
-    [("log", "miles_ext.rollout.group_log.GroupLogDataBuffer"), ("prompts", None), ("groups", None)],
-)
-def test_checkpoint_buffer_modes(mode, buffer):
-    r = _recipe(**{"async": {"checkpoint_buffer": mode}})
-    R.validate(r, local_inputs=False)
-    argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--async-checkpoint-buffer") == mode
-    path = "--custom-async-data-buffer-path"
-    assert (_value(argv, path) if path in argv else None) == buffer
+def test_fully_async_buffers_groups_in_the_group_log():
+    argv = R.miles_args(_recipe(), "run1", resume=False)
+    assert _value(argv, "--custom-async-data-buffer-path") == "miles_ext.rollout.group_log.GroupLogDataBuffer"
+    assert "--async-checkpoint-buffer" not in argv
 
 
 def test_token_weighted_staleness_bound():

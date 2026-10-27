@@ -34,3 +34,8 @@ or the checkpoint state.
 ## Remove when
 Upstream checkpoints the fully async buffer without the generated payloads, or off the rollout
 loop. Upstream status: not filed.
+
+## Since 2026-10-27
+
+fix-060 removed `--async-checkpoint-buffer` and the `prompts` mode: every fully async recipe runs the
+write-ahead group log (ext-034). The cheaper reset copy in `_copy_and_reset_for_retry` stays.

@@ -25,7 +25,6 @@ from typing import Any
 import yaml
 
 from miles.utils.external_utils.model_args_utils import load_model_args
-from miles_ext.checkpoint.staged_save import STAGE_ENV
 from miles_ext.recipes.presets import PRESETS
 
 HARNESS_SANDBOX = "mini-swe-agent-sandbox"  # Harbor's mini-swe-agent inside the task sandbox
@@ -69,7 +68,7 @@ DEFAULTS: dict[str, Any] = {
     "model": {"preset": None, "backend": None, "revision": None},
     # cpu/memory are requests (Modal bills max(request, usage)); timeout caps a hung run
     # disk_gib: node-local disk per container (None: Modal's default quota, 512 GiB); needed when
-    # optimizer.offload disk streams Adam's state to optimizer.disk_dir on that disk
+    # optimizer.offload disk streams Adam's state to OPTIMIZER_DISK_DIR on that disk
     # placement split (ext-036): engine fields set to None take the cluster's value
     "cluster": {
         "gpu": "H200",
@@ -96,9 +95,6 @@ DEFAULTS: dict[str, Any] = {
         "cwd": None,  # None: where Harbor starts the agent (task.toml workdir, else the image WORKDIR)
         # True: a trial that fills the context window scores 0 whatever its verifier says
         "context_exhausted_scores_zero": True,
-        # "subproc": each trial in its own process, so one trial's blocking work cannot stall the others;
-        # "inline": trials share the rollout event loop
-        "function_mode": "subproc",
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -106,10 +102,6 @@ DEFAULTS: dict[str, Any] = {
         # Sail terminates at lifetime_secs and may sleep (stop billing) after idle_secs
         "lifetime_secs": 7200,
         "idle_secs": 900,
-        # Modal only: request Modal's minimum, keep the task's cpus/memory as hard
-        # limits. Sail sizes are fixed shapes billed by observed usage, so the
-        # task's resources only pick the size.
-        "resource_policy": "limit",
         # sandbox app = app_prefix + run_id; callers that scope cleanup by name
         # (the platform's mdev-/mrl- prefixes) set their own prefix
         "app_prefix": DEFAULT_APP_PREFIX,
@@ -171,28 +163,26 @@ DEFAULTS: dict[str, Any] = {
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
                 "speculative": True},
     # Megatron only. offload "disk": stream Adam's state to node-local disk between steps
-    # (disk_dir on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
+    # (OPTIMIZER_DISK_DIR on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
     # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
-    "optimizer": {"offload": None, "disk_dir": "/tmp/miles-optimizer", "moment_dtype": None, "grad_dtype": "fp32"},
+    "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32"},
     # serving "merged": engines get the adapter folded into full weights; "adapter": they keep the base and
     # apply the bf16 adapter (SGLang LoRA, hook-010 for V4.1). target_modules: Miles' selector syntax; None selects
     # attention and MLP groups.
     "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "adapter"},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
-    # for max_concurrent_samples; checkpoint_buffer: hook-008 (fork/patches/)
+    # for max_concurrent_samples. A fully async run always buffers finished groups in the write-ahead group log
+    # (ext-034), so a save does not write them in one go
     "async": {"over_sampling_batch_size": None, "max_concurrent_samples": None, "unused_samples": "drop",
-              "pause_generation": "in_place", "single_pass": False,
-              "checkpoint_buffer": "log"},
+              "pause_generation": "in_place", "single_pass": False},
     # keep: full saves kept while training (applied by the platform's retention);
     # keep_final_full: at the end keep the final full save (resume or continue
     # training) or only its HF weights; save_hf: Megatron writes HF weights at each save
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
     # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
     # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
-    # stage_dir (Megatron only): each node saves to this node-local dir and uploads to the results
-    # volume in the background (miles_ext.checkpoint.staged_save); None: saves go to the volume directly
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True, "save_rollout_data": False, "stage_dir": None},
+                   "save_optimizer": True, "save_rollout_data": False},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -248,8 +238,8 @@ SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # 
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
 ADVANTAGE_ESTIMATORS = ("grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline")
 UNUSED_SAMPLES = ("drop", "retry")
-CHECKPOINT_BUFFERS = ("log", "prompts", "groups")
 GROUP_LOG_BUFFER = "miles_ext.rollout.group_log.GroupLogDataBuffer"
+OPTIMIZER_DISK_DIR = "/tmp/miles-optimizer"  # optimizer.offload disk: Adam's state on each trainer node's disk
 PAUSE_GENERATION = ("in_place", "retract")
 GROUP_FILTERS = {
     "no_aborted": "miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted",
@@ -289,11 +279,9 @@ FIELD_RULES: dict[str, dict] = {
     "agent.verifier_timeout": {"type": "int", "min": 1},
     "agent.setup_timeout": {"type": "int", "min": 1},
     "agent.cwd": {"type": "str", "nullable": True},
-    "agent.function_mode": {"type": "str", "enum": ("subproc", "inline")},
     "sandbox.provider": {"type": "str", "enum": SANDBOX_PROVIDERS},
     "sandbox.lifetime_secs": {"type": "int", "min": 60},
     "sandbox.idle_secs": {"type": "int", "min": 1},
-    "sandbox.resource_policy": {"type": "str", "enum": ("limit", "request")},
     "sandbox.build_timeout_multiplier": {"type": "number", "nullable": True, "min": 1},
     "algorithm.mode": {"type": "str", "enum": ("fully_async", "sync")},
     "algorithm.num_rollout": {"type": "int", "min": 1},
@@ -325,7 +313,6 @@ FIELD_RULES: dict[str, dict] = {
     "rollout.context_length": {"type": "int", "nullable": True, "min": 1},
     "rollout.max_running_requests": {"type": "int", "nullable": True, "min": 1},
     "optimizer.offload": {"type": "str", "nullable": True, "enum": ("disk",)},
-    "optimizer.disk_dir": {"type": "str"},
     "optimizer.moment_dtype": {"type": "str", "nullable": True, "enum": ("bf16",)},
     "optimizer.grad_dtype": {"type": "str", "enum": tuple(_GRAD_DTYPE_FLAGS)},
     "lora.rank": {"type": "int", "min": 0},
@@ -335,11 +322,9 @@ FIELD_RULES: dict[str, dict] = {
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
-    "async.checkpoint_buffer": {"type": "str", "enum": CHECKPOINT_BUFFERS},
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
-    "checkpoint.stage_dir": {"type": "str", "nullable": True},
     "parallel.tp": {"type": "int", "min": 1},
     "parallel.pp": {"type": "int", "min": 1},
     "parallel.cp": {"type": "int", "min": 1},
@@ -450,8 +435,6 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
-    if ckpt["stage_dir"] and backend(recipe) != "megatron":
-        raise ValueError("checkpoint.stage_dir is Megatron-only")
     revision = recipe["model"]["revision"]
     if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
         raise ValueError(f"model.revision must be a full commit sha, got {revision!r}")
@@ -825,10 +808,11 @@ def _sandbox_env(recipe: dict, run_id: str) -> dict[str, str]:
             "sandbox_idle_timeout_secs": int(sandbox["idle_secs"]),
         }),
         "MODAL_SANDBOX_V2": "1",
+        # request Modal's minimum and keep the task's cpus/memory as hard limits (Sail sizes are fixed shapes
+        # billed by observed usage, so there the task's resources only pick the size)
+        "HARBOR_CPU_ENFORCEMENT_POLICY": "limit",
+        "HARBOR_MEMORY_ENFORCEMENT_POLICY": "limit",
     }
-    if policy := sandbox["resource_policy"]:
-        env["HARBOR_CPU_ENFORCEMENT_POLICY"] = policy
-        env["HARBOR_MEMORY_ENFORCEMENT_POLICY"] = policy
     return env
 
 
@@ -861,8 +845,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
         {f"--max-token-weighted-staleness {tws}" if (tws := algo["max_token_weighted_staleness"]) is not None else ""}
-        --async-checkpoint-buffer {aio["checkpoint_buffer"]}
-        {f"--custom-async-data-buffer-path {GROUP_LOG_BUFFER}" if aio["checkpoint_buffer"] == "log" else ""}
+        --custom-async-data-buffer-path {GROUP_LOG_BUFFER}
         {f"--over-sampling-batch-size {aio['over_sampling_batch_size']}" if aio["over_sampling_batch_size"] else ""}
         {"--async-single-pass" if aio["single_pass"] else ""}
         """
@@ -905,7 +888,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
 
         --custom-generate-function-path miles_ext.obs.loop_watchdog.generate
         --custom-agent-function-path {AGENT_FUNCTIONS[recipe["taskset"]["harness"]]}
-        --custom-agent-function-mode {recipe["agent"]["function_mode"]}
+        --custom-agent-function-mode subproc
         --custom-rm-path miles_ext.harbor.reward.reward_func
         --dynamic-sampling-filter-path {GROUP_FILTERS[algo["group_filter"]]}
         --tito-model {preset.tito_model}
@@ -931,8 +914,6 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
-    if recipe["checkpoint"]["stage_dir"]:
-        args += ["--custom-megatron-save-context-path", "miles_ext.checkpoint.staged_save.context"]
     if recipe["checkpoint"]["save_rollout_data"]:
         args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
     # torch_memory_saver (colocated offload) rejects expandable segments; a fully async trainer needs them so its
@@ -990,8 +971,6 @@ def trainer_env(recipe: dict) -> dict[str, str]:
         env.update(preset.weight_sync_env)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    if recipe["checkpoint"]["stage_dir"]:
-        env[STAGE_ENV] = recipe["checkpoint"]["stage_dir"]
     return env
 
 
@@ -1026,7 +1005,7 @@ def _optimizer_args(recipe: dict, resume: bool) -> str:
     opt, ckpt = recipe["optimizer"], recipe["checkpoint"]
     args = ""
     if opt["offload"] == "disk":
-        args += f" --stream-optimizer-state-to-disk --offload-train-disk-dir {opt['disk_dir']}"
+        args += f" --stream-optimizer-state-to-disk --offload-train-disk-dir {OPTIMIZER_DISK_DIR}"
         if opt["moment_dtype"]:
             args += f" --stream-optimizer-state-moment-dtype {opt['moment_dtype']}"
     if not ckpt["save_optimizer"]:
