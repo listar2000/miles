@@ -61,7 +61,7 @@ RESERVED_FLAGS = {
     "--async-unused-samples-handler": "async.unused_samples",
     "--pause-generation-mode": "async.pause_generation",
     "--async-single-pass": "async.single_pass",
-    "--async-retry-aborted-tries": "async.retry_aborted_tries",
+    "--async-retry-aborted-tries": "fixed: Miles retries an aborted try once (fix-048, fix-059)",
     "--async-checkpoint-buffer": "async.checkpoint_buffer",
     "--custom-async-data-buffer-path": "async.checkpoint_buffer (log uses the write-ahead group log, ext-034)",
     "--partial-rollout": "unsupported: Miles rejects it in fully async mode",
@@ -90,7 +90,7 @@ def reserved_flag_errors(recipe: dict, run_id: str = "reserved-check") -> list[d
         flag = arg.split("=", 1)[0]
         if flag in RESERVED_FLAGS:
             owner = RESERVED_FLAGS[flag]
-            message = f"{flag} is {owner}" if owner.startswith("unsupported") else f"{flag} is set by {owner}; use that"
+            message = f"{flag} is {owner}" if owner.startswith(("unsupported", "fixed")) else f"{flag} is set by {owner}; use that"
             errors.append({"path": "extra_args", "message": message})
         elif flag in emitted:
             errors.append({"path": "extra_args", "message": f"{flag} is already set by the recipe"})
