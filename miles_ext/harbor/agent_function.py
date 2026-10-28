@@ -187,6 +187,8 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     if import_path := _IMPORT_PATHS.get(harness):
         config.agent.name = None
         config.agent.import_path = import_path
+    if os.getenv(sandbox_profile.NO_VERIFIER_ENV) == "1":  # ext-040's benchmark times commands, not the task
+        config.verifier.disable = True
     # upstream's agent function leaves Harbor's agent-install cap at 360 s x HARBOR_TIMEOUT_MULTIPLIER
     if setup_timeout := os.getenv("HARBOR_AGENT_SETUP_TIMEOUT_SEC"):
         config.agent.override_setup_timeout_sec = float(setup_timeout)

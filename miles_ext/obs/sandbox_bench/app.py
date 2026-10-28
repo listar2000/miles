@@ -18,7 +18,8 @@ From a fork checkout, with Modal credentials (the image is built from a pushed f
     # overfit-1020-a6-rep (a few distinct commands per class at the median and p90 of their time)
     MILES_BENCH_TASKS_VOLUME=<volume> modal run -m miles_ext.obs.sandbox_bench.app::analyze \\
         --recipe <the source run's recipe yaml> --traces overfit-1020-a6
-    # the arms (defaults: concurrency 1 and 16, 3 / 16 trials per synthetic workload, 2 repeats, every trace)
+    # the arms (defaults: concurrency 1 and 16, 3 / 16 trials per synthetic workload, 2 repeats, every trace,
+    # no verifier); a -rep extract replays each picked command after the commands that led up to it
     MILES_BENCH_TASKS_VOLUME=<volume> modal run -m miles_ext.obs.sandbox_bench.app::main --bench-id sbxbench-1028-a1 \\
         --recipe <the source run's recipe yaml> --providers sail,modal --traces overfit-1020-a6-rep
     # main first resolves every trace to its task (no sandbox); the same check alone, with the same env:
@@ -270,6 +271,7 @@ def run_arm(arm: dict, recipe: dict) -> dict:
             "HARBOR_TRIALS_DIR": str(arm_dir / "trials"),
             "MILES_EXT_HARNESS": R.HARNESS_SANDBOX,
             sandbox_profile.PROBES_ENV: str(PROBES),
+            sandbox_profile.NO_VERIFIER_ENV: "0" if arm["verifier"] else "1",
         }
     )
     token = uuid.uuid4().hex
@@ -450,12 +452,14 @@ def main(
     trials_at_1: int = 3,
     traces: str = "",
     trace_trials: int = 0,
+    verifier: bool = False,
     think: str = "zero",
     cpus: int = 2,
     memory_mb: int = 4096,
     run_id: str = "",
 ):
-    """``run_id`` (monitor/launch.sh appends it) is the bench id when ``--bench-id`` is not given."""
+    """``run_id`` (monitor/launch.sh appends it) is the bench id when ``--bench-id`` is not given. Trials skip the
+    task's verifier unless ``--verifier``: the bench times sandbox work, and a task's verifier is the task's own."""
     bench_id = bench_id or run_id
     if not bench_id:
         raise SystemExit("give --bench-id (or --run-id)")
@@ -487,7 +491,7 @@ def main(
         trace_trials,
     )
     for arm in arms:
-        arm["tasks_src"] = tasks_src
+        arm["tasks_src"], arm["verifier"] = tasks_src, verifier
     by_provider: dict[str, list[dict]] = {}
     for arm in arms:
         by_provider.setdefault(arm["provider"], []).append(arm)

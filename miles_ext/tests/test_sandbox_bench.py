@@ -307,17 +307,40 @@ def test_command_breakdown_counts_time_by_class_and_bucket():
     assert b["by_bucket"]["timeout"]["n"] == 1 and b["by_bucket"]["<1 s"]["n"] == 4
 
 
-def test_representative_picks_distinct_untimed_out_commands_per_class_grouped_by_task():
+def test_representative_replays_each_pick_after_its_prefix():
     rep = traces.representative(_rep_traces(), lambda t: "dir-" + t["instance_id"])
-    commands = [c for r in rep for c in r["commands"]]
-    assert len(commands) == len(set(commands))
-    assert "python -m pytest -q" not in commands  # timed out: counted, not replayed
-    assert "python -m pytest -q tests/test_x.py" in commands
-    assert {r["instance_id"] for r in rep} == {"dir-a", "dir-b"} and all(
-        r["trial"] == "rep-" + r["instance_id"] for r in rep
-    )
+    by_trial = {r["trial"]: r for r in rep}
+    picked = {r["commands"][p] for r in rep for p in r["measure"]}
+    assert "python -m pytest -q" not in picked  # timed out: counted, not replayed
+    assert "python -m pytest -q tests/test_x.py" in picked and "sed -i 's/x/y/' a.py" in picked
+    a = by_trial["rep-a__1__x"]  # the edit replays after everything before it in its trial
+    assert a["instance_id"] == "dir-a" and a["commands"][-1] == "sed -i 's/x/y/' a.py" and len(a["commands"]) == 5
     for r in rep:
         assert len(r["commands"]) == len(r["cmd_s"]) == len(r["rc"]) == len(r["think_s"])
+        assert max(r["measure"]) == len(r["commands"]) - 1
+
+
+def test_representative_prefers_the_shortest_prefix_among_similar_commands():
+    t = {
+        "trial": "t__1__x",
+        "instance_id": "t",
+        "commands": ["python slow.py", "python a.py", "python b.py"],
+        "cmd_s": [200.0, 5.0, 5.1],
+        "rc": [0, 0, 0],
+    }
+    early = {**t, "trial": "u__1__y", "commands": ["python c.py"], "cmd_s": [5.05], "rc": [0]}
+    rep = traces.representative([t, early], lambda x: x["instance_id"], quantiles=(0.5,), max_prefix_s=60)
+    assert [(r["trial"], r["commands"]) for r in rep] == [("rep-u__1__y", ["python c.py"])]
+
+
+def test_fidelity_lists_the_measured_commands(tmp_path):
+    d = _trial(tmp_path / "m")
+    row = report.trial_row(d, {})
+    trace = {"commands": ["ls", "grep -rn x /"], "rc": [0, 0], "cmd_s": [0.1, 2.5], "measure": [1]}
+    out = report.fidelity([row], [{"trial_dir": str(d), "trace": "rep"}], {"rep": trace})
+    assert out["measured"] == [
+        {"class": "fs-scan", "recorded_s": 2.5, "replay_s": 3.0, "rc": 1, "recorded_rc": 0, "cmd": "grep -rn x /"}
+    ]
 
 
 def test_command_time_comes_from_timestamps_when_the_step_timing_field_is_missing(tmp_path):

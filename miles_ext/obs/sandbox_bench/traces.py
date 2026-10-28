@@ -173,35 +173,51 @@ def command_breakdown(traces: list[dict]) -> dict[str, Any]:
     }
 
 
-def representative(traces: list[dict], dir_of, quantiles=(0.5, 0.9)) -> list[dict]:
+def representative(
+    traces: list[dict], dir_of, quantiles=(0.5, 0.9), window: int = 10, max_prefix_s: float = 120.0
+) -> list[dict]:
     """A few distinct commands per class, at the given quantiles of their recorded time, as replayable traces.
 
-    Commands that timed out are left out (the breakdown counts them; a replay would only wait out the timeout).
-    Each command runs on a fresh sandbox of the task it came from, grouped one sandbox per task; ``dir_of(trace)``
-    is the trace's task dir. A command replayed without the steps before it may exit differently: the report's
-    fidelity check shows how often."""
-    seen: dict[str, tuple[str, float, Any, dict]] = {}  # normalized command -> (class, seconds, rc, trace)
-    for t in traces:
-        for c, s, rc in zip(t["commands"], t["cmd_s"], t["rc"], strict=True):
+    Each picked command replays after the commands that led up to it in its trial (its prefix), so the files and
+    scripts it needs exist. At each quantile the pick is, of the ``window`` commands of nearest recorded time,
+    the one with the shortest recorded prefix (within ``max_prefix_s`` when one is). One replay per source trial,
+    up to its last pick; ``measure`` lists the picked positions, the commands the report compares. Commands that
+    timed out are left out (the breakdown counts them; a replay would only wait out the timeout).
+    ``dir_of(trace)`` is the trace's task dir."""
+    seen, by_class = set(), {}
+    prefix = []  # per trace: recorded command time before each position
+    for k, t in enumerate(traces):
+        acc, before = 0.0, []
+        for pos, (c, sec) in enumerate(zip(t["commands"], t["cmd_s"], strict=True)):
+            before.append(acc)
+            acc += sec or 0.0
             cls, key = classify(c), " ".join(c.split())
-            if s is None or s >= TIMEOUT_S or cls in ("submit", "noop") or key in seen:
+            if sec is None or sec >= TIMEOUT_S or cls in ("submit", "noop") or key in seen:
                 continue
-            seen[key] = (cls, s, rc, t)
-    by_class: dict[str, list[tuple[float, str, Any, dict]]] = {}
-    for key, (cls, s, rc, t) in seen.items():
-        by_class.setdefault(cls, []).append((s, key, rc, t))
-    by_task: dict[str, dict] = {}
+            seen.add(key)
+            by_class.setdefault(cls, []).append((sec, k, pos))
+        prefix.append(before)
+    picks: dict[int, set[int]] = {}
     for _, xs in sorted(by_class.items()):
-        xs.sort(key=lambda x: x[0])
-        for i in sorted({min(len(xs) - 1, int(q * len(xs))) for q in quantiles}):
-            s, command, rc, t = xs[i]
-            task = dir_of(t)
-            rep = by_task.setdefault(
-                task,
-                {"trial": f"rep-{task}", "instance_id": task, "commands": [], "think_s": [], "cmd_s": [], "rc": []},
-            )
-            rep["commands"].append(command)
-            rep["think_s"].append(0.0)
-            rep["cmd_s"].append(s)
-            rep["rc"].append(rc)
-    return list(by_task.values())
+        xs.sort()
+        for q in quantiles:
+            mid = min(len(xs) - 1, int(q * len(xs)))
+            near = xs[max(0, mid - window // 2) : mid + window // 2 + 1]
+            short = [x for x in near if prefix[x[1]][x[2]] <= max_prefix_s] or near
+            _, k, pos = min(short, key=lambda x: (prefix[x[1]][x[2]], abs(x[0] - xs[mid][0])))
+            picks.setdefault(k, set()).add(pos)
+    reps = []
+    for k, positions in sorted(picks.items()):
+        t, end = traces[k], max(positions) + 1
+        reps.append(
+            {
+                "trial": f"rep-{t['trial']}",
+                "instance_id": dir_of(t),
+                "commands": t["commands"][:end],
+                "think_s": [0.0] * end,
+                "cmd_s": t["cmd_s"][:end],
+                "rc": t["rc"][:end],
+                "measure": sorted(positions),
+            }
+        )
+    return reps

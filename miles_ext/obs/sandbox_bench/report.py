@@ -171,6 +171,7 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
     by_trial = {r["trial"]: r for r in rows}
     same, compared, ratios = 0, 0, defaultdict(list)
     replays, short = 0, 0
+    measured = []  # -rep replays: the picked commands, each run after its prefix
     for t in trials:
         row, trace = by_trial.get(Path(t.get("trial_dir") or "").name), traces.get(t.get("trace") or "")
         if not row or not trace:
@@ -178,7 +179,21 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
         replayed = [c for c in row["commands"] if c[0] != "submit"]
         replays += 1
         short += len(replayed) < len(trace["commands"])  # the replay stopped before its last command
-        for (cls, s, rc), orig_rc, orig_s in zip(replayed, trace["rc"], trace["cmd_s"], strict=False):
+        measure = set(trace.get("measure") or ())
+        for pos, ((cls, s, rc), orig_rc, orig_s) in enumerate(
+            zip(replayed, trace["rc"], trace["cmd_s"], strict=False)
+        ):
+            if pos in measure:
+                measured.append(
+                    {
+                        "class": cls,
+                        "recorded_s": orig_s,
+                        "replay_s": s,
+                        "rc": rc,
+                        "recorded_rc": orig_rc,
+                        "cmd": trace["commands"][pos][:80],
+                    }
+                )
             if orig_rc is not None and rc is not None:
                 compared += 1
                 same += rc == orig_rc
@@ -190,6 +205,7 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
         "replays": replays,
         "replays_cut_short": short,
         "time_ratio_by_class": {c: _stats(xs) for c, xs in sorted(ratios.items())},
+        "measured": measured,
     }
 
 
@@ -232,6 +248,12 @@ def markdown(arms: list[dict]) -> str:
         "| provider | conc | rep | workload | tunnel per call | no-op exec | commands by class |",
         "|---|---|---|---|---|---|---|",
     ]
+    rows3 = [
+        "## Measured commands (replayed after the commands that led up to them; seconds)",
+        "",
+        "| provider | conc | rep | class | recorded | replay | exit (recorded) | command |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     for arm in arms:
         a = arm["arm"]
         for workload, s in arm["workloads"].items():
@@ -258,4 +280,10 @@ def markdown(arms: list[dict]) -> str:
                 f"{_sec(s['tunnel_per_call']['p50'])} / {_sec(s['tunnel_per_call']['p90'])} | "
                 f"{_sec(s['probe_exec']['p50'])} / {_sec(s['probe_exec']['p90'])} | {cmds} |"
             )
-    return "\n".join(lines + [""] + rows2) + "\n"
+            for m in s.get("fidelity", {}).get("measured", []):
+                cmd = m["cmd"].replace("|", "\\|").replace("\n", " ")
+                rows3.append(
+                    f"| {a['provider']} | {a['concurrency']} | {a['repeat']} | {m['class']} | {_sec(m['recorded_s'])} | "
+                    f"{_sec(m['replay_s'])} | {m['rc']} ({m['recorded_rc']}) | `{cmd}` |"
+                )
+    return "\n".join(lines + [""] + rows2 + ([""] + rows3 if len(rows3) > 4 else [])) + "\n"
