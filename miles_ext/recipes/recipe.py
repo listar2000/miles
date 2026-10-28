@@ -37,6 +37,7 @@ AGENT_FUNCTIONS = {
     HARNESS_HOST: "miles_ext.harbor.agent_function.run",
     HARNESS_SINGLE_TURN: "miles_ext.tasks.single_turn.run",
 }
+AGENT_FUNCTION_MODE = "subproc"  # ext-033: each trial in its own process
 # Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
 # miles_ext (the pinned Harbor predates it), loaded by import path
 SANDBOX_PROVIDERS = ("modal", "sail")
@@ -894,7 +895,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
 
         --custom-generate-function-path miles_ext.obs.loop_watchdog.generate
         --custom-agent-function-path {AGENT_FUNCTIONS[recipe["taskset"]["harness"]]}
-        --custom-agent-function-mode subproc
+        --custom-agent-function-mode {AGENT_FUNCTION_MODE}
         --custom-rm-path miles_ext.harbor.reward.reward_func
         --dynamic-sampling-filter-path {GROUP_FILTERS[algo["group_filter"]]}
         --tito-model {preset.tito_model}
