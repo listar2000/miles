@@ -49,13 +49,19 @@ def enabled() -> bool:
 
 
 def inner_import_path() -> str:
-    """The provider this run would use unprofiled: ``HARBOR_ENV_IMPORT_PATH``, else Harbor's class for ``HARBOR_ENV_TYPE``."""
+    """The provider this run would use unprofiled: ``HARBOR_ENV_IMPORT_PATH``, else the class for ``HARBOR_ENV_TYPE``
+    (the fork's for ``modal``, Harbor's otherwise)."""
     if path := os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip():
         return path
     from harbor.environments.factory import _ENVIRONMENT_REGISTRY
     from harbor.models.environment_type import EnvironmentType
 
-    entry = _ENVIRONMENT_REGISTRY[EnvironmentType(os.environ["HARBOR_ENV_TYPE"].strip().lower())]
+    from miles_ext.harbor import modal_env
+
+    env_type = os.environ["HARBOR_ENV_TYPE"].strip().lower()
+    if env_type == modal_env.REPLACES_TYPE:  # ext-041: the agent function runs the fork's Modal class
+        return modal_env.IMPORT_PATH
+    entry = _ENVIRONMENT_REGISTRY[EnvironmentType(env_type)]
     return f"{entry.module}:{entry.class_name}"
 
 

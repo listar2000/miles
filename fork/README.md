@@ -174,7 +174,8 @@ miles_ext/              extensions (top-level package next to miles/, on PYTHONP
   stack.py              pins: upstream tag, base image digest, Harbor commit, mini-swe-agent, Sail SDK; image repo
   stable.json           the stable versions: name, commit, image digest, date, note
   harbor/               agent function, in-sandbox and host-side mini-swe-agent, reward, session proxy;
-                        harbor/sail/: Harbor's Sail provider (vendored) and the fork's subclass
+                        harbor/sail/: Harbor's Sail provider (vendored) and the fork's subclass;
+                        modal_env.py: Harbor's Modal provider for no-network tasks (ext-041)
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
   monitor/              read-only run monitor web page (ext-039)

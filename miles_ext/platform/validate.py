@@ -229,7 +229,8 @@ def run_deep_check(recipe: dict, run_id: str, *, libcuda_stub: bool = False) -> 
         env_cfg = config.environment
         EnvironmentFactory.run_preflight(env_cfg.type, env_cfg.import_path)
         EnvironmentFactory.validate_resource_policies(env_cfg)
-        return {"agent": config.agent.import_path or str(config.agent.name), "environment": str(env_cfg.type),
+        environment = env_cfg.type.value if env_cfg.type is not None else env_cfg.import_path  # ext-041: an import path
+        return {"agent": config.agent.import_path or str(config.agent.name), "environment": environment,
                 "environment_import_path": env_cfg.import_path, "environment_kwargs": env_cfg.kwargs,
                 "tasks": len(tasks), "prompt_rows": len(ids)}
 

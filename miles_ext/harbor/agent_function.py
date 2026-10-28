@@ -144,7 +144,12 @@ def _environment_config():
 def _provider_config():
     import_path = os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()
     if not import_path:
-        return _upstream_environment_config()
+        from miles_ext.harbor import modal_env
+
+        config = _upstream_environment_config()
+        if config.type is not None and config.type.value == modal_env.REPLACES_TYPE:  # ext-041
+            return config.model_copy(update={"type": None, "import_path": modal_env.IMPORT_PATH})
+        return config
     from harbor.models.trial.config import EnvironmentConfig
 
     if set_vars := [v for v in _TYPE_ONLY_VARS if os.getenv(v, "").strip()]:
