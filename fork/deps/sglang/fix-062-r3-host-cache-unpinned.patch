@@ -1,0 +1,41 @@
+diff --git a/python/sglang/srt/state_capturer/base.py b/python/sglang/srt/state_capturer/base.py
+index eef28da364..619609c55d 100644
+--- a/python/sglang/srt/state_capturer/base.py
++++ b/python/sglang/srt/state_capturer/base.py
+@@ -6,8 +6,6 @@ import torch
+ 
+ from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+ from sglang.srt.mem_cache.pool_host.common import (
+-    ALLOC_MEMORY_FUNCS,
+-    HostTensorAllocator,
+     _cuda_host_unregister,
+ )
+ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+@@ -64,15 +62,9 @@ class BaseHostCache:
+     def __init__(
+         self, num_tokens: int, num_layers: int, topk_size: int, name: str, device: str
+     ):
+-        alloc = ALLOC_MEMORY_FUNCS[device]
+-        self.buffer = alloc(
+-            (num_tokens, num_layers, topk_size),
+-            dtype=torch.int32,
+-            device="cpu",
+-            pin_memory=True,
+-            allocator=HostTensorAllocator(),
+-        )
+-        self.buffer.zero_()
++        # [fork fix-062] only the CPU reads and writes this cache, so it needs no pinned storage
++        self.pinned = False
++        self.buffer = torch.zeros((num_tokens, num_layers, topk_size), dtype=torch.int32, device="cpu")
+         self.num_tokens = num_tokens
+         self.num_layers = num_layers
+         self.topk_size = topk_size
+@@ -82,7 +74,7 @@ class BaseHostCache:
+     def destroy(self):
+         if self.buffer is None:
+             return
+-        if _is_cuda or _is_hip:
++        if self.pinned and (_is_cuda or _is_hip):  # [fork fix-062]
+             _cuda_host_unregister(self.buffer)
+         self.buffer = None
+ 
