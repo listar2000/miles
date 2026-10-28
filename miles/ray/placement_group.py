@@ -10,6 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from miles.backends.megatron_utils.megatron_config import MegatronTrainerConfig, compute_trainer_args
 from miles.backends.training_utils.checkpoint.tracker import read_checkpoint_tracker_iteration
+from miles.backends.training_utils.weight_update.session import check_weight_sync_results  # [fork fix-063]
 from miles.ray.rollout.inference_controller import UpdatableEngines
 from miles.ray.rollout.router_manager import resolve_router_addrs, wait_session_server_ready
 from miles.ray.specs.inference import (
@@ -47,6 +48,7 @@ from miles.utils.hot_restart import (
     wait_trainers_idle,
     wait_until_worker_not_initialized,
 )
+from miles.utils.lora.utils import LORA_ADAPTER_NAME, build_lora_config, lora_rollout_enabled  # [fork fix-063]
 from miles.utils.test_utils.fault_injector.controller import reach_fault_hook_async
 from miles.utils.test_utils.fault_injector.models import FaultHookName
 from miles.utils.workers.types import DeployComponent, DeploymentIdentity
@@ -259,6 +261,7 @@ async def init_training_models(args) -> tuple[BaseWorkerHandle, BaseWorkerHandle
         ), f"a run without --use-critic needs no critic, but the trainer configs are {trainer_configs}"
 
     args.start_rollout_id = actor_info.start_rollout_id
+    args.trainer_restored_rollout_id = actor_info.restored_rollout_id  # [fork fix-063]
 
     # [fork fix-022] begin: split so the trainer can initialize before the rollout side exists
     return actor_info.handle, critic_info.handle if critic_info is not None else None
@@ -361,6 +364,56 @@ async def update_weights(
 
     if output.weight_version is not None:
         await rollout_executor.set_weight_version(output.weight_version, trainer_model_id=trainer_model_id)
+
+
+# [fork fix-063] begin
+def rollout_can_start_before_trainer(args) -> bool:
+    """A fresh unmerged-LoRA run: its zero adapter over the engines' base is the trainer's starting policy."""
+    return (
+        args.train_backend == "megatron"
+        and args.start_rollout_id == 0
+        and args.megatron_config is None
+        and args.ckpt_step is None
+        and read_checkpoint_tracker_iteration(args.requested_load) is None
+        and not args.debug_train_only
+        and not args.debug_rollout_only
+        and not args.debug_skip_weight_update
+        and args.load_debug_rollout_data is None
+        and (args.eval_interval is None or args.skip_eval_before_train)
+        and lora_rollout_enabled(args)
+        and args.lora_adapter_path is None
+    )
+
+
+async def publish_initial_weights(args, inference_controller: BaseWorkerHandle, rollout_executor) -> bool:
+    """Publish the engines' loaded policy as version 0; False, with nothing changed, if an engine has served."""
+    # nothing else drives the engines before rollout 0, so no cell can start serving between the check and the window
+    if not await inference_controller.awaits_first_weights():
+        logger.info("an engine has already served, so rollout waits for the trainer's first weight sync")
+        return False
+    info: UpdatableEngines = await inference_controller.start_update_weights()
+    try:
+        config = build_lora_config(args, target_modules=args.lora_adapter_targets)
+        results = await asyncio.gather(
+            *[
+                engine.register_lora_adapter(lora_name=LORA_ADAPTER_NAME, config_dict=config)
+                for engine in info.rollout_engines
+            ]
+        )
+        check_weight_sync_results(results, is_lora=True)
+        await asyncio.gather(*[engine.update_weight_version(weight_version="0") for engine in info.rollout_engines])
+    except BaseException:
+        await inference_controller.abort_update_weights()
+        raise
+    await inference_controller.end_update_weights(
+        snapshot_cell_id_to_hashes=info.snapshot_cell_id_to_hashes, failed_cell_ids=[]
+    )
+    await rollout_executor.set_weight_version(0)
+    logger.info(f"rollout starts on the engines' loaded weights ({len(info.rollout_engines)} engines, version 0)")
+    return True
+
+
+# [fork fix-063] end
 
 
 def _log_inference_engine_weight_checksums(

@@ -51,6 +51,7 @@ def _make_args(**overrides: Any) -> SimpleNamespace:
         save_trigger_sentinel=None,
         skip_eval_before_train=False,
         start_rollout_id=0,
+        trainer_restored_rollout_id=0,  # [fork fix-063]
         update_weights_interval=1,
         use_critic=False,
         use_rollout_logprobs=False,
@@ -97,6 +98,8 @@ def _install_driver_fakes(
 
     monkeypatch.setattr(train_async_driver, "init_training_models", init_training_models)
     monkeypatch.setattr(train_async_driver, "connect_training_models", connect_training_models)
+    # [fork fix-063] rollout waits for the trainer's first sync unless a test opens the engines early
+    monkeypatch.setattr(train_async_driver, "rollout_can_start_before_trainer", lambda _args: False)
     monkeypatch.setattr(train_async_driver, "maybe_start_mini_ft_controller", lambda _args: None)
     monkeypatch.setattr(train_async_driver, "update_weights", update_weights)
     monkeypatch.setattr(train_async_driver, "remove_rollout_data_refs", lambda *_args, **_kwargs: None)
@@ -379,3 +382,113 @@ class TestTrainerInitWithRollout:
             await with_disposer(train_async_driver.train, args)
 
         assert events == ["executor_dispose", "inference_dispose"]
+
+
+# [fork fix-063]
+async def _until(condition) -> None:
+    while not condition():
+        await asyncio.sleep(0)
+
+
+# [fork fix-063]
+class TestRolloutAtEngineReady:
+    def _open_engines_early(self, monkeypatch: pytest.MonkeyPatch, events: list[str], *, published: bool = True):
+        async def publish_initial_weights(_args: Any, _controller: Any, _executor: Any) -> bool:
+            events.append("publish_initial_weights")
+            return published
+
+        monkeypatch.setattr(train_async_driver, "rollout_can_start_before_trainer", lambda _args: True)
+        monkeypatch.setattr(train_async_driver, "publish_initial_weights", publish_initial_weights)
+
+    async def test_rollout_zero_starts_before_the_trainer_is_ready(self, monkeypatch: pytest.MonkeyPatch):
+        """A fresh run generates rollout 0 on the engines' loaded weights while the trainer initializes."""
+        events: list[str] = []
+        args = _make_args(fully_async=True, num_rollout=2)
+        components = _install_driver_fakes(monkeypatch, args, events)
+        self._open_engines_early(monkeypatch, events)
+        trainer_may_finish = asyncio.Event()
+
+        async def init_training_models(_args: SimpleNamespace) -> tuple[Any, Any]:
+            await trainer_may_finish.wait()
+            events.append("trainer_ready")
+            return components.actor_model, None
+
+        monkeypatch.setattr(train_async_driver, "init_training_models", init_training_models)
+        driver = asyncio.create_task(with_disposer(train_async_driver.train, args))
+        await asyncio.wait_for(_until(lambda: "generate_done:0" in events), timeout=5)
+        trainer_may_finish.set()
+        await asyncio.wait_for(driver, timeout=10)
+
+        assert events[:4] == ["publish_initial_weights", "prepare_rollout:0", "generate_start:0", "generate_done:0"]
+        # the first sync still runs, then health monitoring resumes, and rollout 0 is not generated twice
+        assert events.index("trainer_ready") < events.index("update_weights:None")
+        assert events[events.index("update_weights:None") + 1] == "prepare_rollout:0"
+        assert events.count("generate_start:0") == 1
+        assert components.actor_model.trained == [0, 1]
+
+    async def test_engines_that_already_served_wait_for_the_first_sync(self, monkeypatch: pytest.MonkeyPatch):
+        """When the engines cannot be opened on their loaded weights, rollout 0 follows the trainer's sync."""
+        events: list[str] = []
+        args = _make_args(fully_async=True, num_rollout=1)
+        _install_driver_fakes(monkeypatch, args, events)
+        self._open_engines_early(monkeypatch, events, published=False)
+
+        await asyncio.wait_for(with_disposer(train_async_driver.train, args), timeout=10)
+
+        assert events.index("update_weights:None") < events.index("generate_start:0")
+        assert events.count("prepare_rollout:0") == 1
+
+    async def test_a_trainer_init_failure_cancels_the_early_rollout(self, monkeypatch: pytest.MonkeyPatch):
+        events: list[str] = []
+        args = _make_args(fully_async=True)
+        components = _install_driver_fakes(monkeypatch, args, events)
+        self._open_engines_early(monkeypatch, events)
+        components.rollout_executor.generation_gates[0] = asyncio.Event()
+
+        async def fail_init(_args: SimpleNamespace) -> None:
+            await asyncio.wait_for(_until(lambda: "generate_start:0" in events), timeout=5)
+            raise RuntimeError("trainer init failed")
+
+        monkeypatch.setattr(train_async_driver, "init_training_models", fail_init)
+        with pytest.raises(RuntimeError, match="trainer init failed"):
+            await with_disposer(train_async_driver.train, args)
+
+        assert "generate_done:0" not in events
+        assert events[-2:] == ["executor_dispose", "inference_dispose"]
+
+    async def test_a_trainer_that_resumes_past_zero_is_refused(self, monkeypatch: pytest.MonkeyPatch):
+        events: list[str] = []
+        args = _make_args(fully_async=True)
+        components = _install_driver_fakes(monkeypatch, args, events)
+        self._open_engines_early(monkeypatch, events)
+
+        async def resume_init(run_args: SimpleNamespace) -> tuple[Any, Any]:
+            run_args.trainer_restored_rollout_id = run_args.start_rollout_id = 3
+            return components.actor_model, None
+
+        monkeypatch.setattr(train_async_driver, "init_training_models", resume_init)
+        with pytest.raises(AssertionError, match="restored rollout 3 and starts at 3"):
+            await with_disposer(train_async_driver.train, args)
+
+    async def test_a_taken_over_trainer_with_trained_weights_is_refused(self, monkeypatch: pytest.MonkeyPatch):
+        """A surviving trainer can restore a later rollout while --start-rollout-id stays 0."""
+        events: list[str] = []
+        args = _make_args(fully_async=True)
+        components = _install_driver_fakes(monkeypatch, args, events)
+        self._open_engines_early(monkeypatch, events)
+        gate = components.rollout_executor.generation_gates[0] = asyncio.Event()
+
+        async def take_over_init(run_args: SimpleNamespace) -> tuple[Any, Any]:
+            await asyncio.wait_for(_until(lambda: "generate_start:0" in events), timeout=5)
+            run_args.trainer_restored_rollout_id = 4
+            return components.actor_model, None
+
+        monkeypatch.setattr(train_async_driver, "init_training_models", take_over_init)
+        with pytest.raises(AssertionError, match="restored rollout 4 and starts at 0"):
+            await with_disposer(train_async_driver.train, args)
+
+        # the early rollout is cancelled, so opening its gate now generates nothing
+        gate.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert "generate_done:0" not in events

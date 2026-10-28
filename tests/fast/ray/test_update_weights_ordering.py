@@ -599,3 +599,123 @@ class TestChecksumCollectionOwnsTheUpdateWindow:
         assert reconciled.is_set()
         assert not controller.context_lock.locked
         assert not controller.servers["default"].all_server_cells["cell-0"].is_pending_weights
+
+
+# [fork fix-063]
+class _EarlyStartController:
+    """start/end/abort recorded in order; awaits_first_weights answers as told."""
+
+    def __init__(self, order: list[str], engines: list[Any], *, first: bool = True) -> None:
+        self._order, self._engines, self._first = order, engines, first
+
+    async def start_update_weights(self, model_id=None):
+        self._order.append("start_update_weights")
+        return SimpleNamespace(rollout_engines=self._engines, snapshot_cell_id_to_hashes={"c0": "h0"})
+
+    async def awaits_first_weights(self, model_id=None):
+        self._order.append("awaits_first_weights")
+        return self._first
+
+    async def end_update_weights(self, *, snapshot_cell_id_to_hashes, failed_cell_ids):
+        assert (snapshot_cell_id_to_hashes, failed_cell_ids) == ({"c0": "h0"}, [])
+        self._order.append("end_update_weights")
+
+    async def abort_update_weights(self):
+        self._order.append("abort_update_weights")
+
+
+class _EarlyStartEngine:
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    async def register_lora_adapter(self, lora_name, config_dict, pinned=False):
+        self._order.append(f"register:{lora_name}:r{config_dict['r']}")
+        return {"success": True}
+
+    async def update_weight_version(self, weight_version, abort_all_requests=False):
+        self._order.append(f"version:{weight_version}")
+
+
+def _early_start_args(**overrides: Any) -> Namespace:
+    values = dict(
+        train_backend="megatron",
+        start_rollout_id=0,
+        megatron_config=None,
+        ckpt_step=None,
+        requested_load=None,
+        debug_train_only=False,
+        debug_rollout_only=False,
+        debug_skip_weight_update=False,
+        load_debug_rollout_data=None,
+        eval_interval=None,
+        skip_eval_before_train=False,
+        lora_rank=8,
+        lora_alpha=16,
+        lora_dropout=0.0,
+        lora_adapter_path=None,
+        lora_adapter_targets=["q_proj"],
+        lora_train_only=False,
+        lora_merged_sync=False,
+    )
+    return Namespace(**(values | overrides))
+
+
+class TestRolloutAtEngineReady:
+    async def test_fresh_lora_engines_open_on_the_zero_adapter(self) -> None:
+        from miles.ray import placement_group
+
+        order: list[str] = []
+        controller = _EarlyStartController(order, [_EarlyStartEngine(order), _EarlyStartEngine(order)])
+        executor = SimpleNamespace(set_weight_version=AsyncMock())
+
+        assert await placement_group.publish_initial_weights(_early_start_args(), controller, executor)
+
+        assert order == [
+            "awaits_first_weights",
+            "start_update_weights",
+            "register:miles_lora:r8",
+            "register:miles_lora:r8",
+            "version:0",
+            "version:0",
+            "end_update_weights",
+        ]
+        executor.set_weight_version.assert_awaited_once_with(0)
+
+    async def test_engines_that_served_are_left_alone(self) -> None:
+        from miles.ray import placement_group
+
+        order: list[str] = []
+        controller = _EarlyStartController(order, [_EarlyStartEngine(order)], first=False)
+        executor = SimpleNamespace(set_weight_version=AsyncMock())
+
+        assert not await placement_group.publish_initial_weights(_early_start_args(), controller, executor)
+
+        assert order == ["awaits_first_weights"]
+        executor.set_weight_version.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("overrides", "eligible"),
+        [
+            ({}, True),
+            ({"start_rollout_id": None}, False),
+            ({"lora_adapter_path": "/adapters/a"}, False),
+            ({"eval_interval": 5}, False),
+            ({"eval_interval": 5, "skip_eval_before_train": True}, True),
+            ({"debug_rollout_only": True}, False),
+            ({"lora_rank": 0}, False),
+            ({"lora_merged_sync": True}, False),
+            ({"lora_train_only": True}, False),
+            ({"train_backend": "fsdp"}, False),
+        ],
+    )
+    def test_which_runs_start_rollout_before_the_trainer(self, overrides: dict, eligible: bool) -> None:
+        from miles.ray import placement_group
+
+        assert placement_group.rollout_can_start_before_trainer(_early_start_args(**overrides)) is eligible
+
+    def test_a_saved_checkpoint_keeps_rollout_waiting(self, tmp_path: Path) -> None:
+        from miles.ray import placement_group
+
+        (tmp_path / "latest_checkpointed_iteration.txt").write_text("4")
+        args = _early_start_args(requested_load=str(tmp_path))
+        assert not placement_group.rollout_can_start_before_trainer(args)

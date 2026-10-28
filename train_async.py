@@ -8,6 +8,8 @@ from miles.ray.placement_group import (
     create_training_models,
     init_training_models,  # [fork fix-022]
     maybe_start_api_server,
+    publish_initial_weights,  # [fork fix-063]
+    rollout_can_start_before_trainer,  # [fork fix-063]
     update_weights,
 )
 from miles.ray.rollout.eval_dispatch import EvalDispatcher
@@ -31,13 +33,30 @@ async def train(args, *, disposer: Disposer):
     # [fork fix-059] always for fully async runs on separate GPUs with --num-rollout: the trainer needs nothing
     # from the rollout side until it connects. Colocated engines size their memory from what is free at start,
     # and with only --num-epoch the trainer waits for the rollout side to count the dataset.
+    first_rollout = None  # [fork fix-063]
     if args.fully_async and not args.colocate and args.num_rollout is not None:
+        rollout_starts_early = rollout_can_start_before_trainer(args)  # [fork fix-063]
 
         # each side registers its handles as it finishes, so a failure on the other side still disposes them
         async def start_rollout_side():
             components = await create_rollout_components(args)
             disposer.add(components[0], components[1])
-            return components
+            # [fork fix-063] a fresh run's engines already hold the starting policy: begin rollout 0 now
+            logger.info(f"rollout 0 starts {'at engine ready' if rollout_starts_early else 'after the first sync'}")
+            try:
+                published = rollout_starts_early and await publish_initial_weights(args, components[0], components[1])
+            except BaseException:
+                # the gather below raises it only once the trainer side has finished loading
+                logger.exception("publishing the engines' loaded weights failed")
+                raise
+            if published:
+
+                async def generate_first():
+                    await components[0].prepare_rollout(0)
+                    return await components[1].get(0)
+
+                return components, await eager_create_task(generate_first())
+            return components, None
 
         async def start_trainer_side():
             models = await init_training_models(args)
@@ -49,10 +68,22 @@ async def train(args, *, disposer: Disposer):
         )
         for result in (rollout_side, trainer_side):
             if isinstance(result, BaseException):
+                if not isinstance(rollout_side, BaseException) and rollout_side[1] is not None:
+                    rollout_side[1].cancel()  # [fork fix-063]
                 raise result
-        inference_controller, rollout_executor, num_rollout_per_epoch = rollout_side
+        (inference_controller, rollout_executor, num_rollout_per_epoch), first_rollout = rollout_side  # [fork fix-063]
         actor_model, critic_model = trainer_side
-        await connect_training_models(args, actor_model, rollout_executor)
+        try:
+            # [fork fix-063] a take-over may restore a later rollout yet keep start_rollout_id 0
+            assert first_rollout is None or args.start_rollout_id == args.trainer_restored_rollout_id == 0, (
+                f"rollout 0 started on the engines' loaded weights, but the trainer restored rollout "
+                f"{args.trainer_restored_rollout_id} and starts at {args.start_rollout_id}"
+            )
+            await connect_training_models(args, actor_model, rollout_executor)
+        except BaseException:
+            if first_rollout is not None:
+                first_rollout.cancel()  # [fork fix-063]
+            raise
     else:
         # create the rollout manager, with sglang engines inside.
         # need to initialize rollout manager first to calculate num_rollout
@@ -72,6 +103,8 @@ async def train(args, *, disposer: Disposer):
 
     # always update weight first so that sglang has the loaded weights from training.
     await update_weights(args, actor_model, rollout_executor, inference_controller)
+    if first_rollout is not None:
+        await inference_controller.prepare_rollout(0)  # [fork fix-063] the sync paused health monitoring
 
     if args.check_weight_update_equal:
         await inference_controller.check_weights(
@@ -111,7 +144,9 @@ async def train(args, *, disposer: Disposer):
         return await rollout_executor.get(rollout_id)
 
     # async train loop.
-    rollout_data_next_future = await eager_create_task(prepare_and_generate(args.start_rollout_id))
+    rollout_data_next_future = first_rollout  # [fork fix-063]
+    if rollout_data_next_future is None:
+        rollout_data_next_future = await eager_create_task(prepare_and_generate(args.start_rollout_id))
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # Sync the last generation
         if rollout_data_next_future is not None:

@@ -680,3 +680,43 @@ class TestRolloutCheckpointDir:
     def test_every_rollout_gets_its_own_directory(self, tmp_path: Path) -> None:
         """The rollout id names the directory, so two checkpoints never share one."""
         assert compute_rollout_checkpoint_dir(tmp_path, rollout_id=3) == tmp_path / "rollout" / "3"
+
+
+# [fork fix-063]
+class TestTrainParallelConfigWait:
+    async def test_rollout_data_waits_for_the_trainer_to_connect(self, tmp_path: Path, monkeypatch) -> None:
+        """Rollout 0 can finish before the trainer sends its layout; get() then waits for it."""
+        executor = _make_executor(tmp_path, _CountingRolloutFn())
+        executor._train_parallel_configs_of_model_id.clear()
+        executor._rollouts_since_publish_of_model_id = defaultdict(int)
+        executor.set_weight_version(0)
+        executor.use_legacy_rollout_v1 = False
+        generated = asyncio.Event()
+        processed = []
+        config = make_train_parallel_config()
+
+        async def generate(_input):
+            generated.set()
+            return RolloutFnTrainOutput(samples=[[make_sample(group_index=0, index=0)]])
+
+        def postprocess(_args, data, *, train_parallel_config):
+            processed.append(train_parallel_config)
+            return data, {}
+
+        executor.generate_rollout = generate
+        monkeypatch.setattr(rollout_executor_module, "postprocess_rollout_data", postprocess)
+        monkeypatch.setattr(rollout_executor_module, "log_rollout_data", lambda *args, **kwargs: None)
+        monkeypatch.setattr(rollout_executor_module, "convert_samples_to_train_data", lambda *args, **kwargs: {})
+        monkeypatch.setattr(rollout_executor_module, "split_train_data_by_dp", lambda *args: [])
+        monkeypatch.setattr(rollout_executor_module.object_store, "get_instance", _FakeObjectStore)
+        fetching = asyncio.create_task(executor.get(0))
+        try:
+            await asyncio.wait_for(generated.wait(), timeout=1)
+            assert not fetching.done()
+            assert processed == []
+            executor.set_train_parallel_config(config)
+            await asyncio.wait_for(fetching, timeout=2)
+            assert processed == [config]
+        finally:
+            fetching.cancel()
+            await asyncio.gather(fetching, return_exceptions=True)

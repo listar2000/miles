@@ -1736,6 +1736,40 @@ class TestErroredCellsLeaveTheUpdateWindow:
         assert updatable.snapshot_cell_id_to_hashes == {"engine-0": "hash-0"}
 
 
+# [fork fix-063]
+class TestAwaitsFirstWeights:
+    @staticmethod
+    def _controller(*, served: bool = False) -> InferenceController:
+        cells = {f"engine-{i}": _FakeUpdatableCell(f"hash-{i}", cell_id=f"engine-{i}", gpu_offset=i) for i in range(2)}
+        cells["engine-1"].is_pending_weights = not served
+        return _make_controller({"default": _RecordingServer(cells, update_weights=True)})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("served", "expected"), [(False, True), (True, False)])
+    async def test_it_reads_the_cells_under_its_own_lock(self, served, expected):
+        """A remote caller holds no lock, and the check must not need the update window's detached one."""
+        controller = self._controller(served=served)
+
+        assert await controller.awaits_first_weights() is expected
+        assert not controller.context_lock.locked
+
+    @pytest.mark.asyncio
+    async def test_it_waits_for_an_open_update_window(self):
+        """Inside start/end the cells are being rewritten, so the check waits until the window closes."""
+        controller = self._controller()
+        info = await controller.start_update_weights()
+
+        check = asyncio.create_task(controller.awaits_first_weights())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not check.done()
+
+        await controller.end_update_weights(
+            snapshot_cell_id_to_hashes=info.snapshot_cell_id_to_hashes, failed_cell_ids=[]
+        )
+        assert await asyncio.wait_for(check, timeout=1) is True
+
+
 class TestEndUpdateWeightsTakesFailedCellsOutOfService:
     async def test_checksum_timeout_returns_failure_and_releases_the_update_window(self) -> None:
         """A published receiver that stops answering leaves explicit evidence without holding the update lock."""

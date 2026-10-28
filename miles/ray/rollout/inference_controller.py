@@ -95,6 +95,15 @@ class InferenceController:
     async def is_initialized(self) -> bool:
         return self._init_once.is_initialized()
 
+    @with_lock
+    async def awaits_first_weights(self, model_id: str | None = None) -> bool:  # [fork fix-063]
+        """Every cell of the model is up and none has served yet: the engines hold only their loaded weights.
+
+        Call it before start_update_weights: it reads the cells under the lock, which that window detaches.
+        """
+        cells = [cell for srv in self._get_servers_of_model_id(model_id) for cell in srv.normal_server_cells.values()]
+        return bool(cells) and all(cell.is_pending_weights for cell in cells)
+
     @lock_exempt
     async def wait_expected_num_cells(self, timeout: float = CELLS_READY_TIMEOUT_SECONDS) -> None:
         await asyncio.gather(*[srv.wait_init_expected_num_cells(timeout=timeout) for srv in self.servers.values()])

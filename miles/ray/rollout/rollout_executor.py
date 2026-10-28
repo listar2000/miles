@@ -209,7 +209,7 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
                 data_ref = object_store.get_instance().put(value=train_data, value_spec=ROLLOUT_DATA_VALUE_SPEC)
             else:
                 shards = split_train_data_by_dp(
-                    self.args, train_data, self._train_parallel_configs_of_model_id[trainer_model_id]
+                    self.args, train_data, await self._train_parallel_config(trainer_model_id)  # [fork fix-063]
                 )
                 store = object_store.get_instance()
                 data_ref = [store.put(value=shard, value_spec=ROLLOUT_DATA_VALUE_SPEC) for shard in shards]
@@ -341,9 +341,8 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
                 )
             metrics = data.metrics
             data = data.samples
-            data, metadata = postprocess_rollout_data(
-                self.args, data, train_parallel_config=self._train_parallel_configs_of_model_id[trainer_model_id]
-            )
+            train_parallel_config = await self._train_parallel_config(trainer_model_id)  # [fork fix-063]
+            data, metadata = postprocess_rollout_data(self.args, data, train_parallel_config=train_parallel_config)
             assert_samples_weight_version_sane(self.args, samples=data)
             if RolloutDataInjectionUtil.should_inject(self.args, rollout_id):
                 generated_data = data
@@ -416,6 +415,14 @@ class RolloutExecutor(DedicatedRpcLoopWorker):
             logger.warning(message)
         self._weight_versions_of_model_id[trainer_model_id] = weight_version
         self._rollouts_since_publish_of_model_id[trainer_model_id] = 0
+
+    async def _train_parallel_config(self, trainer_model_id: str | None) -> TrainParallelConfig | None:
+        """[fork fix-063] rollout 0 may finish before the trainer connects and sends its layout"""
+        if trainer_model_id not in self._train_parallel_configs_of_model_id:
+            logger.info("rollout data is ready; waiting for the trainer to connect")
+        while trainer_model_id not in self._train_parallel_configs_of_model_id:
+            await asyncio.sleep(1)
+        return self._train_parallel_configs_of_model_id[trainer_model_id]
 
     def set_train_parallel_config(
         self, config: TrainParallelConfig | None, trainer_model_id: str | None = None
