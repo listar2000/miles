@@ -12,7 +12,9 @@ The image is ``BASE_IMAGE`` (amd64) with every upstream layer untouched, then:
         the layer is exactly the files of the distributions that install added
         or replaced (their RECORD files), plus whiteouts for the files of the
         versions it removed, plus the SGLang files the fork's patches
-        (fork/deps/sglang/) changed. Nothing else in the environment can differ.
+        (fork/deps/sglang/) changed, plus the bytecode (``.pyc``) the install
+        compiled that the base image lacked (uv does not list it in RECORD).
+        Nothing else in the environment can differ.
   src   the fork commit's tree (``git archive``) over /root/miles, the base
         image's own checkout of the upstream tag, plus whiteouts for files the
         fork commit deletes relative to that tag.
@@ -89,6 +91,13 @@ def _dists() -> dict[str, list[str]]:
     return out
 
 
+def _pycs() -> list[str]:
+    """Absolute paths of every compiled module under the environment's site-packages."""
+    import site
+
+    return sorted(str(p) for sp in site.getsitepackages() for p in Path(sp).glob("**/__pycache__/*.pyc"))
+
+
 def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
     """Absolute (present, deleted) paths of the SGLang files the fork's patches change."""
     patches = sorted(str(p.resolve()) for p in Path(PATCHES_IN_IMAGE).glob("*.patch"))
@@ -112,13 +121,20 @@ def base_dists() -> dict[str, list[str]]:
     return _dists()
 
 
+@app.function(image=base_image, cpu=2, memory=4096, timeout=1200)
+def base_pycs() -> list[str]:
+    return _pycs()
+
+
 @app.function(image=deps_image, cpu=4, memory=8192, timeout=1800, volumes={"/out": volume})
-def deps_layer(base: dict[str, list[str]], name: str, sglang_src: str) -> dict:
+def deps_layer(base: dict[str, list[str]], base_compiled: list[str], name: str, sglang_src: str) -> dict:
     after = _dists()
     added = sorted(set(after) - set(base))
     removed = sorted(set(base) - set(after))
     patched, deleted = _patched_sglang(sglang_src)
-    files = sorted({p for d in added for p in after[d] if os.path.lexists(p)} | set(patched))
+    files = sorted(
+        {p for d in added for p in after[d] if os.path.lexists(p)} | set(patched) | (set(_pycs()) - set(base_compiled))
+    )
     keep = set(files)
     gone = sorted(({p for d in removed for p in base[d]} | set(deleted)) - keep)
     root = sglang_src.rstrip("/") + "/"
@@ -165,7 +181,7 @@ def src_layer(commit: str, path: Path):
 
 def build_deps_layer(name: str, dest: Path):
     with modal.enable_output(), app.run():
-        summary = deps_layer.remote(base_dists.remote(), name, stack.SGLANG_SRC)
+        summary = deps_layer.remote(base_dists.remote(), base_pycs.remote(), name, stack.SGLANG_SRC)
     print(f"deps layer: +{summary['added']} -{summary['removed']} "
           f"({summary['files']} files, {summary['whiteouts']} whiteouts)", flush=True)
     with dest.open("wb") as f:
