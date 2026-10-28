@@ -108,16 +108,14 @@ def _prepare_task(task_dir: Path, cpus: int, memory_mb: int) -> None:
     - public network in every phase. A task whose network policy changes during a trial (no network, opened for
       the harness install, the tunnel host for the agent) fails on the pinned Harbor's Modal sandboxes (ext-041);
       a public task never switches, and the replayed commands do not need the network to stay off."""
-    from harbor.models.task.config import NetworkMode, TaskConfig
+    from harbor.models.task.config import TaskConfig
 
     path = task_dir / "task.toml"
     config = TaskConfig.model_validate_toml(path.read_text())
     env = config.environment
     env.cpus = env.cpus if env.cpus is not None else cpus
     env.memory_mb = env.memory_mb if env.memory_mb is not None else memory_mb
-    env.network_mode, env.allowed_hosts = NetworkMode.PUBLIC, None
-    for phase in (config.agent, config.verifier):
-        phase.network_mode, phase.allowed_hosts = None, None
+    # THROWAWAY ext-041 probe, never merged: keep the task's own network policy
     path.write_text(config.model_dump_toml())
 
 
