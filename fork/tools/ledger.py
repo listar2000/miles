@@ -8,6 +8,7 @@ so the history is the record and nothing has to be kept in sync by hand.
 
     python fork/tools/ledger.py list              # table of fork commits since the upstream base
     python fork/tools/ledger.py check             # touch-point audit (exit 1 on any violation)
+    python fork/tools/ledger.py check --merge     # the same, refusing unfolded fixup! commits (merge desk)
     python fork/tools/ledger.py markdown          # the table for fork/README.md
     python fork/tools/ledger.py markers           # file-only check (no git history; used in the image,
                                                   # where it also finds each SGLang patch's markers in SGLang)
@@ -36,7 +37,11 @@ so the history is the record and nothing has to be kept in sync by hand.
      ``Releases: <id> <file>, ...``. A retired change's files and markers are no longer
      required (its commit stays in the history, listed as retired), nor a released
      id's marker in that file, nor a retiring or releasing commit's own marker in a
-     file where it only removed code (every line it added is a line of the upstream base).
+     file where it only removed code (every line it added is a line of the upstream base);
+  8. a ``fixup!`` (or ``squash!``/``amend!``) commit is review work on a PR branch: it counts
+     as part of the commit its subject names, as ``git rebase --autosquash`` will fold it. It
+     must name a commit of the series, and ``check --merge`` (the merge desk, after the
+     autosquash) refuses any that is left.
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
@@ -135,6 +140,7 @@ class Commit:
     subject: str
     trailers: dict[str, list[str]]
     files: list[str] = field(default_factory=list)
+    fixups: list[str] = field(default_factory=list)  # fixup! commits folded in (rule 8)
 
     @property
     def kind(self) -> str | None:
@@ -149,7 +155,11 @@ class Commit:
         return ", ".join(self.trailers.get(key, []))
 
 
+FIXUP = re.compile(r"(?:fixup|squash|amend)! (.*)")
+
+
 def commits(base: str) -> list[Commit]:
+    """The fork commits, with each ``fixup!`` commit folded into its target (rule 8)."""
     out = []
     sep = "\x1e"
     # every upstream release tag merged so far: a release's own commits sit on its release branch,
@@ -164,6 +174,19 @@ def commits(base: str) -> list[Commit]:
             key, _, value = line.partition(":")
             trailers.setdefault(key.strip(), []).append(value.strip())
         files = git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
+        fixup = FIXUP.fullmatch(subject)
+        while fixup and FIXUP.fullmatch(fixup.group(1)):  # "fixup! fixup! x" folds into x too
+            fixup = FIXUP.fullmatch(fixup.group(1))
+        if fixup:
+            # like --autosquash: the latest exact subject, else the latest subject it starts
+            name = fixup.group(1)
+            target = next((c for c in reversed(out) if c.subject == name), None) or next(
+                (c for c in reversed(out) if c.subject.startswith(name)), None
+            )
+            if target:
+                target.files = sorted({*target.files, *files})
+                target.fixups.append(sha[:10])
+                continue
         out.append(Commit(sha[:10], subject, trailers, files))
     return out
 
@@ -220,6 +243,7 @@ def cmd_list(base: str):
     gone = retired(series)
     for c in series:
         note = f"  (retired by {gone[c.fork_id]})" if c.fork_id in gone else ""
+        note += f"  (+{len(c.fixups)} fixup)" if c.fixups else ""
         print(f"{c.sha}  {c.kind or '???':5} {c.fork_id:10} {c.subject}{note}")
 
 
@@ -262,16 +286,23 @@ def vendored_problems() -> list[str]:
     return problems
 
 
-def cmd_check(base: str) -> int:
+def cmd_check(base: str, merge: bool = False) -> int:
     problems = vendored_problems()
     series = commits(base)
+    for c in series:
+        if c.fixups and merge:
+            problems.append(
+                f"{c.sha} {c.fork_id}: fixup commits {', '.join(c.fixups)} not folded; "
+                "run `git rebase -i --autosquash` before the merge"
+            )
     declared: dict[str, set[str]] = {}
     sglang: dict[str, set[str]] = {}  # fork id -> the SGLang files its commit declares
     gone = retired(series)
     upstream_ids = {c.fork_id for c in series if c.kind in UPSTREAM_KINDS}
     for c in series:
         if c.kind is None:
-            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer")
+            hint = "; a fixup! subject must name a commit of this series" if FIXUP.fullmatch(c.subject) else ""
+            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer{hint}")
             continue
         if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")) and (
             c.kind not in UPSTREAM_KINDS
@@ -362,8 +393,10 @@ def cmd_check(base: str) -> int:
         if unmarked:
             problems.append(f"{rel}: no added [fork {fid}] line in {unmarked}")
     counts = ", ".join(f"{sum(c.kind == k for c in series)} {k.lower()}" for k in KINDS)
+    folded = sum(len(c.fixups) for c in series)
     print(
-        f"base {base}: {len(series)} fork commits ({counts}{f', {len(set(gone) & upstream_ids)} retired' if gone else ''}), "
+        f"base {base}: {len(series)} fork commits ({counts}{f', {len(set(gone) & upstream_ids)} retired' if gone else ''}"
+        f"{f', {folded} fixup commits folded' if folded else ''}), "
         f"{len(declared)} upstream files touched: {', '.join(sorted(declared)) or 'none'}; "
         f"SGLang patches: {', '.join(sorted(patches)) or 'none'}"
     )
@@ -409,6 +442,9 @@ def sglang_marker_problems() -> list[str]:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["list", "check", "markdown", "markers"])
+    ap.add_argument(
+        "--merge", action="store_true", help="check: also refuse unfolded fixup! commits (merge desk, after autosquash)"
+    )
     ap.add_argument("--base", help="upstream commit or tag the branch last merged (default: UPSTREAM_BASE in "
                     "miles_ext/stack.py)")
     args = ap.parse_args()
@@ -421,7 +457,7 @@ def main():
     elif args.command == "markdown":
         cmd_markdown(base)
     else:
-        sys.exit(cmd_check(base))
+        sys.exit(cmd_check(base, args.merge))
 
 
 if __name__ == "__main__":

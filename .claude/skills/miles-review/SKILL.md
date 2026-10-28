@@ -25,8 +25,9 @@ the checks below are the only gate before a merge.
 It has two users:
 
 - **Authors** apply it while they work and run the full pass before asking for
-  a merge: fix what it finds, keep one commit per fork id, re-run every
-  check, and push their own topic branch.
+  a merge: fix what it finds, re-run every check, and push their own topic
+  branch. Fixes made during review go in as `fixup!` commits; the merge desk
+  folds them (`fork/README.md` "Landing").
 - **The independent reviewer** enforces it on every open PR. The reviewer
   reports only: never push to the PR branch and never comment on GitHub unless
   asked; the PR's owner applies fixes.
@@ -93,7 +94,9 @@ Each break is **blocking** unless marked otherwise.
 
 - **Fits the fork.** Ask "does training import or need this?" Data prep,
   taskset QA and one-off campaign scripts belong elsewhere, however well written.
-- **One topic, one commit per fork id.** Squash work-in-progress commits: the
+- **One topic, one commit per fork id.** Squash work-in-progress commits
+  (`fixup!` commits that name a commit of the PR are fine: they are folded at
+  merge, so judge the PR as if they were): the
   PR is one commit on top of `main` (it lands by fast-forward), whose subject
   is the PR title, `type(scope): what`, with `[fork fix-NNN]` / `[fork
   hook-NNN]` at the end for a fix or hook. The ledger alone may force more: a
@@ -295,7 +298,7 @@ Then remove the worktree: `git worktree remove "$SCRATCH/pr$N"`.
 Every required check ran on the head and on `$BASE`; every finding carries
 evidence and a concrete fix; every proposed test was proven green on the head
 and red on `$BASE`; and the PR's branch is untouched (reviewer) or holds
-one commit per fork id that passes every check (author).
+one commit per fork id, plus any `fixup!` commits, that passes every check (author).
 
 ## Supervised runs
 

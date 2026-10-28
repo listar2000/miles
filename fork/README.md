@@ -56,8 +56,10 @@ Every fork commit has exactly one trailer saying what it is.
 
 Rules for **fixes and hooks** (enforced by `ledger.py check`):
 
-- One commit per fix, as small as the bug allows. Prefer inserting lines over
+- One commit per fix on `main`, as small as the bug allows. Prefer inserting lines over
   rewriting upstream lines: an insertion survives most upstream edits around it.
+  During review, fix with `git commit --fixup=<commit>` instead of rewriting the
+  branch; the merge desk folds those commits (Landing).
 - Mark every touched spot with `[fork fix-NNN]` (or `hook-NNN`) in a comment,
   so `grep -rn "\[fork "` finds every place we changed.
 - Trailers: `Touches:` (the upstream files), `Evidence:` (the failure it fixes),
@@ -219,6 +221,16 @@ equivalent Dockerfile is `FROM` the base, `RUN` the install line in
 
 For publishing it, see Landing.
 
+**Docker Hub cleanup.** Test builds of unmerged branches go to
+`starlimobius/miles` under `pr-<topic>-<sha10>` tags (`build.py --release`),
+so tags pile up. A `pr-` tag older than 14 days that no recorded run used (the
+run monitor and the launch log name each run's image) is a deletion
+candidate. List candidates with tag, age, size and last-used run, and delete
+each one only after the user's OK. Never delete `main`, a `<sha10>` build of
+`main`, a `stable-*` tag, or the frozen `fork-v0.1.2-rN` tags. Most of each
+image's bytes are upstream layers shared with every other tag, so a deletion
+frees only that build's two small layers.
+
 ## Landing
 
 A change lands on `main` by fast-forward from its work branch, then the work
@@ -227,6 +239,34 @@ fix, an extension, the deps layer); a doc-only landing can skip the build,
 and `latest` then stays on the last build (which is why a run reads its
 commit from the image, not from git). A pull request for the work branch
 follows `.github/pull_request_template.md`.
+
+**Review and merge.** While a PR is in review its author adds `fixup!`
+commits (`git commit --fixup=<commit>`) rather than rewriting pushed commits,
+so each review round reads as a plain diff; `ledger.py check` counts a fixup
+as part of the commit it names. An author may force-push only their own topic
+branch, and only to rebase it onto `main`, restack it, or autosquash it;
+never `main`, a tag, or another author's branch. On the user's merge go
+naming the PRs, the merge desk (the one thread that pushes `main`) folds and
+lands them; it is the one exception, and may force-push a PR's topic branch
+only to autosquash and restack it for that merge. Make fixups with
+`git commit --fixup=<commit>`, which writes the subject form the ledger
+matches (`fixup! <sha>` subjects are not matched):
+
+```bash
+git fetch origin && git checkout <topic>          # for a stack: the top PR's branch
+GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash --update-refs origin/main   # folds fixups, restacks onto main
+python fork/tools/ledger.py check --merge         # must pass: no fixup left, one commit per fix or hook id
+git push --force-with-lease origin <topic> [<lower stack branches>]           # GitHub then sees each PR's head on main
+# then fast-forward main to the approved PR's head, as below
+```
+
+- A stack is restacked onto `main` before its bottom PR merges; `--update-refs`
+  moves every branch of the stack in the same rebase.
+- If the rebase stops on a conflict, abort it and hand the PR back to its
+  author: the merge desk does not resolve conflicts.
+- When nothing but fixups changed, the folded tree equals the reviewed head's
+  (`git diff --quiet <reviewed head> <topic>`); otherwise `main` moved, and the
+  ledger check on the folded branch is the gate.
 
 ```bash
 python fork/tools/ledger.py check                 # must pass, on the work branch

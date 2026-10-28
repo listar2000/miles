@@ -222,7 +222,9 @@ validate as in `fork/README.md` "Sync".
 
 ## Landing
 
-Follow `fork/README.md` "Landing". In short: `ledger.py check` on the work
+Follow `fork/README.md` "Landing". During review, add `git commit --fixup=<commit>`
+commits instead of rewriting the branch; the merge desk autosquashes them and runs
+`ledger.py check --merge` before it lands the PR. In short: `ledger.py check` on the work
 branch, fast-forward `main` to it, push `main`, delete the work branch, then
 `python fork/docker/build.py --main` (pushes `starlimobius/miles-mobius:<sha10>`
 and moves `:main`, which is `latest`) and the launcher's `--check-only` on the
