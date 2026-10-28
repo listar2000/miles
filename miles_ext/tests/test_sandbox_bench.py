@@ -333,6 +333,14 @@ def test_representative_prefers_the_shortest_prefix_among_similar_commands():
     assert [(r["trial"], r["commands"]) for r in rep] == [("rep-u__1__y", ["python c.py"])]
 
 
+def test_class_stats_of_a_rep_replay_count_only_the_picked_commands(tmp_path):
+    d = _trial(tmp_path / "m")
+    row = report.trial_row(d, {})
+    picked = report._measured(row, {"measure": [1]})
+    assert [c[0] for c in picked["commands"]] == ["fs-scan"] and picked["tools"] == row["tools"]
+    assert report._measured(row, None) is row and report._measured(row, {"commands": []}) is row
+
+
 def test_fidelity_lists_the_measured_commands(tmp_path):
     d = _trial(tmp_path / "m")
     row = report.trial_row(d, {})
