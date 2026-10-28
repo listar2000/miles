@@ -60,5 +60,18 @@ lasting the whole wall time.
   their locks and the hash threads share the GIL with the loop. A child process for the hashing
   would remove that (follow-up, not needed for an 8-task set).
 
+## Since 2026-10-28: one hash per node, not per process
+
+The memo is per process, so the prewarm in the rollout process never reached a trial process (ext-033,
+ext-042): every trial hashed its task again. `task_hash.warm` now keeps the values in a file cache,
+`$TMPDIR/miles-task-hash/<sha256 of the dir>.json`, keyed by the directory and its stat signature. An
+`flock` on the entry makes the first process compute and the rest wait and read it. Listing a dir for its
+signature is itself up to 35 CPU-s for a large TB4 task, so an entry listed in the last `FRESH_S` (300 s) is read
+without listing. A task dir edited in place mid-run is noticed up to 5 min late. CPU probe of 512 forked
+trials with prewarm: with every trial listing its dir, trials took up to 35 CPU-s and
+the last started at 53 s on 64 cores; with fresh entries 2 CPU-s at most and 28-30 s, the same as hashing off.
+Without prewarm the last start went from 151 s to 53 s on 32 cores.
+Check: `test_fresh_file_cache_avoids_rehashing_with_an_empty_memo` in `miles_ext/tests/test_task_hash.py`.
+
 ## Remove when
 Harbor computes these hashes off the event loop or caches them per task; upstream status: not filed.

@@ -4,11 +4,19 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from harbor.models.task.task import Task
 from harbor.publisher.packager import Packager
 
 from miles_ext.harbor import agent_function as af
 from miles_ext.harbor import task_hash
+
+
+@pytest.fixture(autouse=True)
+def _own_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(task_hash, "CACHE_DIR", tmp_path / "hash-cache")
+    monkeypatch.setattr(task_hash, "_memo", {})
 
 
 def _task(tmp_path, name="t"):
@@ -23,6 +31,7 @@ def _task(tmp_path, name="t"):
 
 
 def test_values_match_harbor_and_compute_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(task_hash, "FRESH_S", 0.0)  # the second warm lists the dir, finds it unchanged
     d = _task(tmp_path)
     expected = (task_hash._upstream_content_hash(d)[0], task_hash._upstream_checksum(Task(d)))
     calls = []
@@ -34,7 +43,20 @@ def test_values_match_harbor_and_compute_once(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_changed_task_is_hashed_again(tmp_path):
+def test_fresh_file_cache_avoids_rehashing_with_an_empty_memo(tmp_path, monkeypatch):
+    """A process whose memo is empty (a trial process) reads a fresh file-cache entry without hashing or listing."""
+    d = _task(tmp_path)
+    task_hash.warm(d)
+    expected = (Packager.compute_content_hash(d), Task(d).checksum)
+    monkeypatch.setattr(task_hash, "_memo", {})
+    monkeypatch.setattr(task_hash, "_upstream_content_hash", lambda p: pytest.fail("hashed again"))
+    monkeypatch.setattr(task_hash, "_signature", lambda p: pytest.fail("listed again"))
+    task_hash.warm(d)
+    assert (Packager.compute_content_hash(d), Task(d).checksum) == expected
+
+
+def test_changed_task_is_hashed_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(task_hash, "FRESH_S", 0.0)
     d = _task(tmp_path)
     task_hash.warm(d)
     before = Packager.compute_content_hash(d)[0]
