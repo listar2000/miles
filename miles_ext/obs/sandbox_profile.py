@@ -35,6 +35,7 @@ from typing import Any
 
 ENV = "MILES_EXT_SANDBOX_PROFILE"  # "1": profile this run's trials (set by recipe obs.sandbox_profile)
 PROBES_ENV = "MILES_EXT_SANDBOX_PROFILE_PROBES"  # N: time N no-op execs right after each sandbox starts
+NO_VERIFIER_ENV = "MILES_EXT_SANDBOX_PROFILE_NO_VERIFIER"  # "1": trials skip the task's verifier (benchmark only)
 IMPORT_PATH = "miles_ext.obs.sandbox_profile:ProfiledEnvironment"
 TRIAL_FILE = "sandbox_profile.jsonl"
 PROXY_FILE = "sandbox_profile/proxy.jsonl"  # under the run dir

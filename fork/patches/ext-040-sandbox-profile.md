@@ -26,8 +26,11 @@ that with real inference costs GPUs and mixes in model speed.
   SGLang engine behind Miles' session server (times the session server, which is model-side; much more setup).
 - Efficient by default: `analyze` breaks a past run's recorded command time down by command class and duration
   with no sandbox, and writes a short replay of a few distinct commands per class (median and p90 of their time;
-  timed-out commands are counted, not replayed). `main` defaults to 3 trials per synthetic workload at
-  concurrency 1, 16 at concurrency 16, 2 repeats, and every trace of the given extract at each concurrency.
+  timed-out commands are counted, not replayed). Each picked command replays after the commands that led up to
+  it in its trial, so the state it needs exists, preferring picks with a short prefix; the report lists each
+  picked command's recorded and replayed time and exit code. `main` defaults to 3 trials per synthetic workload
+  at concurrency 1, 16 at concurrency 16, 2 repeats, every trace of the given extract at each concurrency, and
+  no task verifier (`MILES_EXT_SANDBOX_PROFILE_NO_VERIFIER=1`, set only by the benchmark; `--verifier` keeps it).
 - Benchmark tasks run with public network (synthetic ones as written, replayed ones rewritten on copy), so no
   network policy switches during a trial: the pinned Harbor's Modal sandboxes fail such a switch (ext-041).
 - No data in the repo: traces are extracted to `<results>/sbx-bench/traces/`, results go to
