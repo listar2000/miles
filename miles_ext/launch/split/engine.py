@@ -5,6 +5,7 @@ import secrets
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -61,6 +62,29 @@ def commands(recipe: dict, run_id: str, env: dict) -> dict:
     raise RuntimeError(f"engine commands: Miles parse_args failed (exit {proc.returncode}):\n{tail}")
 
 
+def _start_engine(cmd: str, env: dict) -> subprocess.Popen:
+    """Start an engine and relay its output tagged with an identity the run monitor tells apart."""
+    proc = subprocess.Popen(
+        shlex.split(cmd),
+        env=env,
+        cwd=str(stack.MILES_SRC),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
+    )
+    threading.Thread(target=_relay_lines, args=(proc,), daemon=True).start()
+    return proc
+
+
+def _relay_lines(proc: subprocess.Popen):
+    tag = f"(SplitEngine pid={proc.pid}) "
+    for line in proc.stdout:
+        sys.stdout.write(tag + line)
+        sys.stdout.flush()
+
+
 def _healthy(port: int) -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as r:
@@ -96,7 +120,7 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, results_volume, cal
     try:
         for cmd in spec["commands"]:
             print(f"engine: {cmd}", flush=True)
-            procs.append(subprocess.Popen(shlex.split(cmd), env=engine_env, cwd=str(stack.MILES_SRC)))
+            procs.append(_start_engine(cmd, engine_env))
         _wait_healthy(ports, procs)
         agent = Agent(ports, gpus_per_engine=spec["gpus_per_engine"], results_volume=results_volume)
         agent.start(agent_port)
