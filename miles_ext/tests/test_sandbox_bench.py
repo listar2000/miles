@@ -289,10 +289,19 @@ def _rep_traces():
     ]
 
 
+def test_a_command_that_writes_a_script_and_runs_it_is_a_run():
+    assert W.classify("cat > /tmp/x.py <<'EOF'\nprint(1)\nEOF\npython /tmp/x.py") == "run"
+    assert W.classify("python repro.py > out.txt 2>&1") == "run"
+    assert W.classify("cat > x.py <<'EOF'\nx = 1\nEOF") == "write"
+    assert W.classify("cd /app && python -m pytest -q > log.txt") == "test"
+
+
 def test_command_breakdown_counts_time_by_class_and_bucket():
     b = traces.command_breakdown(_rep_traces())
     assert b["commands"] == 8 and b["untimed"] == 1
     assert b["by_class"]["test"]["timeouts"] == 1 and b["by_class"]["test"]["n"] == 2
+    assert [x["s"] for x in b["by_class"]["test"]["slowest"]] == [300.0, 12.0]
+    assert b["by_class"]["test"]["slowest"][0] == {"s": 300.0, "rc": 124, "cmd": "python -m pytest -q"}
     assert b["by_class"]["read"]["unique"] == 4  # cat a.py twice; grep in the working tree is a read
     assert abs(sum(c["share"] for c in b["by_class"].values()) - 1) < 1e-9
     assert b["by_bucket"]["timeout"]["n"] == 1 and b["by_bucket"]["<1 s"]["n"] == 4

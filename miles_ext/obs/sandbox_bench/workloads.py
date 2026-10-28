@@ -55,7 +55,7 @@ def _write(i: int) -> str:
         f"cat <<'SBX_EOF' > {REPO}/pkg/new_{i}.py\n{body}\nSBX_EOF",
         f"sed -i 's/x_{m} = /x_{m}_renamed = /' {REPO}/pkg/mod_{m}.py",
         f"cp {REPO}/pkg/mod_{m}.py /tmp/sbx/copy_{i}.py && echo copied",
-        f"python3 -c \"open('{REPO}/pkg/mod_{m}.py', 'a').write('\\n# edited {i}\\n')\"",
+        f"printf '\\n# edited {i}\\n' >> {REPO}/pkg/mod_{m}.py",
         f"rm -f /tmp/sbx/copy_{i - 2}.py && mkdir -p /tmp/sbx/out_{i} && touch /tmp/sbx/out_{i}/done",
     ][i % 5]
 
@@ -130,9 +130,10 @@ def write_task(root: Path, workload: str, cpus: int, memory_mb: int) -> str:
     return name
 
 
-_AT_COMMAND = r"(?:^|[;&|(`]|\$\(|\b(?:then|do|else|xargs|time|sudo|timeout\s+\S+|cd\s+\S+\s*&&))\s*"
+_AT_COMMAND = r"(?:^|[\n;&|(`]|\$\(|\b(?:then|do|else|xargs|time|sudo|timeout\s+\S+|cd\s+\S+\s*&&))\s*"
 # Command classes, first match wins. The order puts the more specific pattern first
-# (a pytest run that pipes to grep is a test; grep -R over / is a scan, not a read).
+# (a pytest run that pipes to grep is a test; grep -R over / is a scan, not a read; a command that writes a
+# script and runs it, or runs a script that redirects its output, is a run: the time is the run's).
 CLASSES = (
     ("submit", r"^\s*echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\s*$"),
     ("noop", r"^\s*(true|:)\s*$"),
@@ -154,12 +155,12 @@ CLASSES = (
         r"(\bgrep\b[^|;&]*\s-[A-Za-z]*[rR][A-Za-z]*\b[^|;&]*\s/(\s|$|\*)|\bfind\s+/(\s|$)|"
         r"\b(du|ls)\s+-[A-Za-z]*R?[A-Za-z]*\s+/(\s|$))",
     ),
+    ("run", _AT_COMMAND + r"(python3?|node|bash|sh|ruby|perl|java|go run|cargo run|\./\S+)\b"),
     (
         "write",
         r"(\bsed\s+-i|\bcat\s*>|<<\s*'?\w+'?\s*>|\btee\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\btouch\b|\bpatch\b|"
         r"git (apply|checkout|commit|add|stash|reset)|\bchmod\b|[^2&]>\s*[^&\s])",
     ),
-    ("run", _AT_COMMAND + r"(python3?|node|bash|sh|ruby|perl|java|go run|cargo run|\./\S+)\b"),
     (
         "read",
         _AT_COMMAND
