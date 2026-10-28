@@ -63,10 +63,7 @@ def test_task_dir_is_a_harbor_task(tmp_path):
 
     name = W.write_task(tmp_path, "read", cpus=2, memory_mb=4096)
     env = Task(tmp_path / name).config.environment
-    assert env.docker_image == W.IMAGE and env.cpus == 2 and env.network_mode.value == "no-network"
-    assert (
-        Task(tmp_path / W.write_task(tmp_path, "install", 2, 4096)).config.environment.network_mode.value == "public"
-    )
+    assert env.docker_image == W.IMAGE and env.cpus == 2 and env.network_mode.value == "public"
 
 
 def test_mini_swe_agent_reads_the_scripted_replies():
@@ -180,10 +177,15 @@ def test_fidelity_counts_a_replay_cut_short(tmp_path):
 def test_plan_runs_each_provider_in_its_own_sequence():
     from miles_ext.obs.sandbox_bench.app import plan_arms
 
-    arms = plan_arms("b", ["sail", "modal"], [1, 32], 2, ["noop", "trace"], 32, 8, "src", "zero", 2, 4096)
+    arms = plan_arms("b", ["sail", "modal"], [1, 32], 2, ["noop", "trace"], 32, 8, "src", "zero", 2, 4096, 5)
     assert [a["name"] for a in arms[:4]] == ["sail-c1-r0", "sail-c32-r0", "sail-c32-r1", "sail-c1-r1"]
     assert {a["trials"] for a in arms if a["concurrency"] == 1} == {8}
-    assert all(a["trace_trials"] is None for a in arms if a["concurrency"] == 32)
+    assert {a["trace_trials"] for a in arms} == {5}  # at every concurrency
+    assert {
+        a["trace_trials"] for a in plan_arms("b", ["sail"], [1, 32], 1, ["trace"], 4, 2, "s", "zero", 2, 4096)
+    } == {
+        None  # every trace
+    }
 
 
 def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypatch):
@@ -202,6 +204,10 @@ def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypa
         (src / name / "instruction.md").write_text("do it\n")
         (src / name / "environment" / "Dockerfile").write_text("FROM ubuntu:24.04\n")
         (src / name / "tests" / "test.sh").write_text("exit 0\n")
+    (src / "wal-1" / "task.toml").write_text(
+        'version = "1.0"\n[environment]\nnetwork_mode = "no-network"\n[agent]\nnetwork_mode = "allowlist"\n'
+        'allowed_hosts = ["example.com"]\n'
+    )
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir()
     old_style = [  # (trial name, the task_name the extract kept)
@@ -231,6 +237,9 @@ def test_trace_trials_are_set_up_from_the_tasks_volume_layout(tmp_path, monkeypa
     for s in specs:  # what the agent function resolves for each trial
         env = Task(hf._task_path(root, s["instance_id"])).config.environment
         assert (env.cpus, env.memory_mb) == (2, 4096)  # sizeless tasks take the arm's size
+        task = Task(hf._task_path(root, s["instance_id"])).config
+        assert env.network_mode.value == "public" and task.agent.explicit_phase_policy() is None
+        assert task.verifier.explicit_phase_policy() is None  # no policy switch during the trial
 
 
 def test_a_trace_without_its_task_fails_before_any_trial(tmp_path, monkeypatch):
@@ -259,3 +268,44 @@ def test_extract_names_the_task_dir(tmp_path):
         task_path="/datasets/tb4t-20261016/tasks/bp105-security-email-auth-policy-r01",
     )
     assert traces.trial_trace(d)["instance_id"] == "bp105-security-email-auth-policy-r01"
+
+
+def _rep_traces():
+    return [
+        {
+            "trial": "a__1__x",
+            "instance_id": "a",
+            "commands": ["cat a.py", "cat b.py", "cat a.py", "python -m pytest -q", "sed -i 's/x/y/' a.py"],
+            "cmd_s": [0.1, 0.3, 0.2, 300.0, 0.5],
+            "rc": [0, 0, 0, 124, 0],
+        },
+        {
+            "trial": "b__1__y",
+            "instance_id": "b",
+            "commands": ["python -m pytest -q tests/test_x.py", "grep -rn foo .", "cat c.py"],
+            "cmd_s": [12.0, 2.0, None],
+            "rc": [1, 0, None],
+        },
+    ]
+
+
+def test_command_breakdown_counts_time_by_class_and_bucket():
+    b = traces.command_breakdown(_rep_traces())
+    assert b["commands"] == 8 and b["untimed"] == 1
+    assert b["by_class"]["test"]["timeouts"] == 1 and b["by_class"]["test"]["n"] == 2
+    assert b["by_class"]["read"]["unique"] == 4  # cat a.py twice; grep in the working tree is a read
+    assert abs(sum(c["share"] for c in b["by_class"].values()) - 1) < 1e-9
+    assert b["by_bucket"]["timeout"]["n"] == 1 and b["by_bucket"]["<1 s"]["n"] == 4
+
+
+def test_representative_picks_distinct_untimed_out_commands_per_class_grouped_by_task():
+    rep = traces.representative(_rep_traces(), lambda t: "dir-" + t["instance_id"])
+    commands = [c for r in rep for c in r["commands"]]
+    assert len(commands) == len(set(commands))
+    assert "python -m pytest -q" not in commands  # timed out: counted, not replayed
+    assert "python -m pytest -q tests/test_x.py" in commands
+    assert {r["instance_id"] for r in rep} == {"dir-a", "dir-b"} and all(
+        r["trial"] == "rep-" + r["instance_id"] for r in rep
+    )
+    for r in rep:
+        assert len(r["commands"]) == len(r["cmd_s"]) == len(r["rc"]) == len(r["think_s"])

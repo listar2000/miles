@@ -119,8 +119,8 @@ def write_task(root: Path, workload: str, cpus: int, memory_mb: int) -> str:
     (d / "task.toml").write_text(
         'version = "1.0"\n\n[verifier]\ntimeout_sec = 120.0\n\n[agent]\ntimeout_sec = 3600.0\n\n'
         f'[environment]\ndocker_image = "{IMAGE}"\ncpus = {cpus}\nmemory_mb = {memory_mb}\n'
-        # install reaches PyPI; the others never use the network
-        f'network_mode = "{"public" if workload == "install" else "no-network"}"\n'
+        # public, as replayed tasks are (app._prepare_task): no network policy switch during the trial
+        'network_mode = "public"\n'
     )
     (d / "instruction.md").write_text(f"Sandbox benchmark workload {workload}: run the commands you are given.\n")
     (d / "tests" / "test.sh").write_text(

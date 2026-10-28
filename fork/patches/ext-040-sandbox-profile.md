@@ -24,6 +24,12 @@ that with real inference costs GPUs and mixes in model speed.
   behind the real `session_proxy` and `modal.forward` tunnel. Workloads: six synthetic scripts on one image pinned
   by digest (noop, read, write, test, fs-scan, install) and replays of a past run's commands. Rejected: a fake
   SGLang engine behind Miles' session server (times the session server, which is model-side; much more setup).
+- Efficient by default: `analyze` breaks a past run's recorded command time down by command class and duration
+  with no sandbox, and writes a short replay of a few distinct commands per class (median and p90 of their time;
+  timed-out commands are counted, not replayed). `main` defaults to 3 trials per synthetic workload at
+  concurrency 1, 16 at concurrency 16, 2 repeats, and every trace of the given extract at each concurrency.
+- Benchmark tasks run with public network (synthetic ones as written, replayed ones rewritten on copy), so no
+  network policy switches during a trial: the pinned Harbor's Modal sandboxes fail such a switch (ext-041).
 - No data in the repo: traces are extracted to `<results>/sbx-bench/traces/`, results go to
   `<results>/sbx-bench/<bench id>/`, synthetic task dirs and the test repo are generated at run time.
 
