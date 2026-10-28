@@ -271,7 +271,7 @@ def run_arm(arm: dict, recipe: dict) -> dict:
             "HARBOR_TRIALS_DIR": str(arm_dir / "trials"),
             "MILES_EXT_HARNESS": R.HARNESS_SANDBOX,
             sandbox_profile.PROBES_ENV: str(PROBES),
-            sandbox_profile.NO_VERIFIER_ENV: "0" if arm["verifier"] else "1",
+            sandbox_profile.NO_VERIFIER_ENV: "1",  # the bench times sandbox work; a task's verifier is its own
         }
     )
     token = uuid.uuid4().hex
@@ -452,14 +452,12 @@ def main(
     trials_at_1: int = 3,
     traces: str = "",
     trace_trials: int = 0,
-    verifier: bool = False,
     think: str = "zero",
     cpus: int = 2,
     memory_mb: int = 4096,
     run_id: str = "",
 ):
-    """``run_id`` (monitor/launch.sh appends it) is the bench id when ``--bench-id`` is not given. Trials skip the
-    task's verifier unless ``--verifier``: the bench times sandbox work, and a task's verifier is the task's own."""
+    """``run_id`` (monitor/launch.sh appends it) is the bench id when ``--bench-id`` is not given."""
     bench_id = bench_id or run_id
     if not bench_id:
         raise SystemExit("give --bench-id (or --run-id)")
@@ -491,7 +489,7 @@ def main(
         trace_trials,
     )
     for arm in arms:
-        arm["tasks_src"], arm["verifier"] = tasks_src, verifier
+        arm["tasks_src"] = tasks_src
     by_provider: dict[str, list[dict]] = {}
     for arm in arms:
         by_provider.setdefault(arm["provider"], []).append(arm)
