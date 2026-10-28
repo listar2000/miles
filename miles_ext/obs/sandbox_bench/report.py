@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from miles_ext.obs.sandbox_bench.traces import TRAJECTORY
+from miles_ext.obs.sandbox_bench.traces import TRAJECTORY, tool_exec_s
 from miles_ext.obs.sandbox_bench.workloads import classify
 from miles_ext.obs.sandbox_profile import TRIAL_FILE
 
@@ -77,21 +77,15 @@ def trial_row(trial_dir: Path, proxy_by_session: dict[str, list[float]]) -> dict
     except (OSError, ValueError):
         messages = []
     waits, commands = [], []  # commands: (class, seconds, return code)
-    pending = []
+    pending, since = [], None
     for m in messages:
         extra = m.get("extra") if isinstance(m.get("extra"), dict) else {}
         if m.get("role") == "assistant" and extra.get("harbor_llm_wait_msec") is not None:
             waits.append(extra["harbor_llm_wait_msec"] / 1000)
-            pending = [a.get("command", "") for a in extra.get("actions") or []]
-        elif m.get("role") == "tool" and extra.get("harbor_tool_exec_msec") is not None:
-            commands.append(
-                (
-                    classify(pending[0]) if pending else "other",
-                    extra["harbor_tool_exec_msec"] / 1000,
-                    extra.get("returncode"),
-                )
-            )
-            pending = []
+            pending, since = [a.get("command", "") for a in extra.get("actions") or []], extra.get("timestamp")
+        elif m.get("role") == "tool" and pending and (secs := tool_exec_s(extra, since)) is not None:
+            commands.append((classify(pending[0]), secs, extra.get("returncode")))
+            pending, since = [], None
     proxied = [
         dt for path, dts in proxy_by_session.items() if session and path.startswith(session + "/") for dt in dts
     ]

@@ -309,3 +309,33 @@ def test_representative_picks_distinct_untimed_out_commands_per_class_grouped_by
     )
     for r in rep:
         assert len(r["commands"]) == len(r["cmd_s"]) == len(r["rc"]) == len(r["think_s"])
+
+
+def test_command_time_comes_from_timestamps_when_the_step_timing_field_is_missing(tmp_path):
+    """a6's trajectories: assistant messages carry timestamp and harbor_llm_wait_msec; tool messages carry only
+    raw_output, returncode, timestamp and exception_info (no harbor_tool_exec_msec)."""
+    d = _trial(tmp_path / "a6", task="mobius-labs/software-009", steps=())
+    t0 = 1_761_000_000.0
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "task"}]
+    for i, (wait, cmd, run, rc) in enumerate([(4.0, "ls", 0.9, 0), (30.0, "python -m pytest", 300.1, 124)]):
+        t0 += wait
+        messages.append(
+            {
+                "role": "assistant",
+                "extra": {"timestamp": t0, "harbor_llm_wait_msec": wait * 1000, "actions": [{"command": cmd}]},
+            }
+        )
+        t0 += run
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": f"c{i}",
+                "extra": {"raw_output": "", "returncode": rc, "timestamp": t0, "exception_info": None},
+            }
+        )
+    (d / traces.TRAJECTORY).write_text(json.dumps({"messages": messages}))
+    t = traces.trial_trace(d)
+    assert t["cmd_s"] == [0.9, 300.1] and t["think_s"] == [4.0, 30.0] and t["rc"] == [0, 124]
+    assert traces.command_breakdown([t])["by_bucket"]["timeout"]["n"] == 1
+    row = report.trial_row(d, {})
+    assert [round(s, 3) for _, s, _ in row["commands"]] == [0.9, 300.1] and row["model_wait"] == 34.0
