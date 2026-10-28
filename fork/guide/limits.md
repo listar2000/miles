@@ -33,9 +33,12 @@ a recipe.
 
 ## Rollout and sandboxes
 
-- Harnesses: mini-swe-agent inside the sandbox, mini-swe-agent on the host, and
-  single-turn (`HARNESSES` in `recipe.py`). Harbor installs the harness in each
-  trial's sandbox. Task images stay the benchmark's own.
+- Harnesses: mini-swe-agent inside the sandbox, mini-swe-agent on the host,
+  Terminus-2 inside the sandbox, and single-turn (`HARNESSES` in `recipe.py`).
+  Harbor installs the harness in each trial's sandbox. Task images stay the
+  benchmark's own.
+- Context compaction (`agent.compact_at_tokens`) is Terminus-2 and Megatron only, and moves the
+  run to session server v2 ([ext-045](../patches/ext-045-terminus-sandbox.md)).
 - Sandboxes are Modal or Sail. Each has its own capacity, and a provider that is
   slow to start shows up as setup timeouts ([running.md](running.md)).
 

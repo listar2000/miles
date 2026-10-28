@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-045 | Ext | `taskset.harness: terminus-2-sandbox`: Harbor's Terminus-2 runs inside the task sandbox (the image's Harbor copied in, commands as local processes); `agent.compact_at_tokens` compacts at an absolute token count and trains on session server v2 | active; remove when Harbor ships an in-sandbox Terminus-2 | [ext-045-terminus-sandbox.md](ext-045-terminus-sandbox.md) |
 | ext-042 | Ext | Each Harbor trial is a child forked from one server that imported the Harbor stack once (Miles' subproc contract), instead of a fresh interpreter per trial; 512 trial starts 312 s -> 42 s in a CPU probe | active; remove when upstream forks agent calls from a preloaded server | [ext-042-trial-forkserver.md](ext-042-trial-forkserver.md) |
 | ext-041 | Ext | Harbor's Modal sandboxes run no-network tasks: a sandbox whose policy changes during the trial is created with a filter Modal can change, then narrowed to no network before use | active; remove when upstream Harbor creates it so | [ext-041-modal-no-network.md](ext-041-modal-no-network.md) |
 | fix-063 | Fix | A fresh unmerged-LoRA run starts rollout 0 when its engines are ready, on the zero adapter, instead of after the trainer's first weight sync (6-25 min of idle engines) | active; remove when upstream starts rollout before the first sync | [fix-063-rollout-at-engine-ready.md](fix-063-rollout-at-engine-ready.md) |
