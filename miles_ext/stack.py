@@ -37,11 +37,10 @@ MINI_SWE_AGENT_VERSION = "2.4.6"
 # exactly: the vendored file imports SDK internals (sail._core_client, sail.image)
 SAIL_SDK_VERSION = "0.13.0"
 
-# The deps layer: one install line for fork/docker/build.py and the launcher's
-# build-from-commit image. uv: the Harbor branch has a uv-workspace
-# dependency; --python: the image's interpreter is the /opt/sglang venv, not /usr
+# The deps layer, for fork/docker/build.py and the launcher's build-from-commit image: uv for the Harbor
+# branch's workspace dependency, the image's Python (/opt/sglang), and precompiled bytecode
 DEPS_INSTALL = (
-    'uv pip install --python "$(command -v python)" '
+    'uv pip install --compile-bytecode --python "$(command -v python)" '
     f'"harbor[modal] @ git+{HARBOR_REPO}@{HARBOR_COMMIT}" '
     f'"mini-swe-agent=={MINI_SWE_AGENT_VERSION}" "sail=={SAIL_SDK_VERSION}"'
 )
