@@ -113,6 +113,7 @@ def extract(trials_dir: Path, n: int, seed: int = 0) -> list[dict]:
 
 
 TIMEOUT_S = 295.0  # a recorded command this long hit the harness's 300 s command timeout
+_EXAMPLES, _EXAMPLE_CHARS = 5, 300  # the slowest commands kept per class, and how much of each
 BUCKETS = ((1.0, "<1 s"), (10.0, "1-10 s"), (60.0, "10-60 s"), (TIMEOUT_S, "60-295 s"), (float("inf"), "timeout"))
 
 
@@ -126,17 +127,24 @@ def _q(xs: list[float], q: float) -> float | None:
 
 def command_breakdown(traces: list[dict]) -> dict[str, Any]:
     """Where the recorded command time went: per command class and per duration bucket (no sandbox needed)."""
-    timed = [(classify(c), s) for t in traces for c, s in zip(t["commands"], t["cmd_s"], strict=True) if s is not None]
-    total = sum(s for _, s in timed) or 1.0
+    timed = [
+        (classify(c), s, c, rc)
+        for t in traces
+        for c, s, rc in zip(t["commands"], t["cmd_s"], t["rc"], strict=True)
+        if s is not None
+    ]
+    total = sum(x[1] for x in timed) or 1.0
     unique: dict[str, set[str]] = {}
     for t in traces:
         for c in t["commands"]:
             unique.setdefault(classify(c), set()).add(" ".join(c.split()))
     by_class: dict[str, list[float]] = {}
     by_bucket: dict[str, list[float]] = {label: [] for _, label in BUCKETS}
-    for cls, s in timed:
+    slowest: dict[str, list[tuple]] = {}
+    for cls, s, c, rc in timed:
         by_class.setdefault(cls, []).append(s)
         by_bucket[_bucket(s)].append(s)
+        slowest.setdefault(cls, []).append((s, rc, c))
     return {
         "trials": len(traces),
         "commands": sum(len(t["commands"]) for t in traces),
@@ -152,6 +160,10 @@ def command_breakdown(traces: list[dict]) -> dict[str, Any]:
                 "p90": _q(xs, 0.9),
                 "max": max(xs),
                 "timeouts": sum(s >= TIMEOUT_S for s in xs),
+                "slowest": [
+                    {"s": s, "rc": rc, "cmd": c[:_EXAMPLE_CHARS]}
+                    for s, rc, c in sorted(slowest[cls], key=lambda x: -x[0])[:_EXAMPLES]
+                ],
             }
             for cls, xs in sorted(by_class.items(), key=lambda kv: -sum(kv[1]))
         },
