@@ -95,6 +95,25 @@ def test_zero_advantage_preserves_finite_importance_weight(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["none", "tis", "mis"])
+def test_masked_counts_tokens_mis_drops(mode: str) -> None:  # [fork fix-064]
+    # ratios 0.4, 1, 6 and 0.4 on a zero-advantage token: MIS [0.5, 5] drops the first and third
+    ratios = torch.tensor([0.4, 1.0, 6.0, 0.4])
+    _, metrics = score_centering_loss(
+        ScoreCenteringInputs(
+            train_log_probs=torch.full((4,), -1.0),
+            train_head_log_probs=torch.full((4, 1), -1.0),
+            rollout_log_probs=-1.0 - ratios.log(),
+            rollout_head_log_probs=torch.full((4, 1), -1.0),
+            head_mask=torch.ones(4, 1, dtype=torch.bool),
+            advantages=torch.tensor([1.0, 1.0, -1.0, 0.0]),
+            mode=mode,
+        ),
+    )
+    expected = [1.0, 0.0, 1.0, 0.0] if mode == "mis" else [0.0] * 4
+    torch.testing.assert_close(metrics.masked, torch.tensor(expected))
+
+
+@pytest.mark.parametrize("mode", ["none", "tis", "mis"])
 @pytest.mark.parametrize("bad_side", ["train", "rollout"])
 def test_zero_advantage_ignores_nan_head_candidate(mode: str, bad_side: str) -> None:
     train_head = torch.tensor([[float("nan") if bad_side == "train" else -1.0, -1.5]])
@@ -332,6 +351,7 @@ def test_tiny_tails_and_padding_are_finite_and_detached(mode: str) -> None:
         "sc_rollout_head_mass": metrics.rollout_head_mass,
         "sc_tail_ratio": metrics.tail_ratio,
         "sc_importance_weight": metrics.importance_weight,
+        "sc_masked": metrics.masked,  # [fork fix-064]
     }
     assert list(logged) == list(expected)
     assert all(logged[key] is value and not value.requires_grad for key, value in expected.items())

@@ -55,6 +55,7 @@ class ScoreCenteringMetrics:
     rollout_head_mass: torch.Tensor
     tail_ratio: torch.Tensor
     importance_weight: torch.Tensor
+    masked: torch.Tensor  # [fork fix-064] 1 where MIS drops an active token
 
     def as_log_dict(self) -> dict[str, torch.Tensor]:
         """Map existing log names to the tensors without copying their storage."""
@@ -92,4 +93,5 @@ def score_centering_loss(inputs: ScoreCenteringInputs) -> tuple[torch.Tensor, Sc
         rollout_head_mass=q_mass,
         tail_ratio=rho,
         importance_weight=weight,
+        masked=((weight == 0) & active).to(weight.dtype),  # [fork fix-064]
     )
