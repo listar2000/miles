@@ -40,7 +40,6 @@ Harbor installs the harness in each trial's sandbox; ``HARBOR_AGENT_SETUP_TIMEOU
 
 import asyncio
 import functools
-import importlib
 import json
 import logging
 import os
@@ -53,7 +52,7 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import context_exit, task_hash, upstream
+from miles_ext.harbor import context_exit, task_hash, trial_procs, upstream
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes import recipe as R
 
@@ -200,6 +199,15 @@ def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwarg
     return config
 
 
+def _trial_modules() -> list[str]:
+    """What a trial imports before its first sandbox call: the trial forkserver's preload (ext-042)."""
+    modules = ["miles.rollout.agentic.agent_function", __name__, "harbor.trial.single_step", "harbor.trial.multi_step"]
+    for path in (_IMPORT_PATHS.get(harness_for({})), os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()):
+        if path:
+            modules.append(path.partition(":")[0])
+    return modules
+
+
 async def run(
     base_url: str,
     prompt: Any,
@@ -207,7 +215,31 @@ async def run(
     metadata: dict[str, Any] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
-    """Run one Harbor trial for the sample; return its verdict as metadata (same contract as upstream's run)."""
+    """Run one Harbor trial for the sample in a process of its own; return its verdict as metadata."""
+    if trial_procs.in_agent_process():
+        return await run_trial(base_url, prompt, request_kwargs, metadata, **kwargs)
+    from miles.dashboard.hooks import push_sandbox_reports
+
+    return await trial_procs.call(
+        run_trial,
+        preload=_trial_modules(),
+        on_child_reports=push_sandbox_reports,
+        base_url=base_url,
+        prompt=prompt,
+        request_kwargs=request_kwargs,
+        metadata=metadata,
+        **kwargs,
+    )
+
+
+async def run_trial(
+    base_url: str,
+    prompt: Any,
+    request_kwargs: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """``run``'s trial, in the calling process."""
     from harbor.trial.trial import Trial
 
     metadata = metadata or {}
@@ -219,7 +251,7 @@ async def run(
     config = build_trial_config(metadata, openai_session_url(base_url), request_kwargs or {})
 
     try:
-        if config.task.path:  # Harbor hashes the task dir on this loop, twice per trial (task_hash.py)
+        if config.task.path:  # off this loop, once per task per node (task_hash.py)
             await asyncio.to_thread(task_hash.warm, config.task.path)
         trial = await Trial.create(config)
         if sandbox_profile.enabled():
@@ -244,8 +276,7 @@ async def run(
 
 
 def prepare(args, data_source) -> None:
-    """Rollout-setup hook (hook-005): start a daemon thread that imports what the first ``Trial.create`` imports,
-    then runs ``task_hash.prewarm`` over the prompt set's task dirs in hand-out order."""
+    """Rollout-setup hook (hook-005): start the trial forkserver and prewarm task hashes in a daemon thread."""
     dataset = getattr(data_source, "dataset", None)
     tasks_dir = os.getenv("HARBOR_TASKS_DIR")
     if dataset is None or not tasks_dir:
@@ -257,17 +288,13 @@ def prepare(args, data_source) -> None:
             dirs.append(hf._task_path(Path(tasks_dir), instance_id))
         except (ValueError, FileNotFoundError) as e:
             logger.warning(f"task_hash prewarm skips {instance_id!r}: {e}")
-    modules = ["harbor.trial.single_step", "harbor.trial.multi_step"]
-    for path in (_IMPORT_PATHS.get(harness_for({})), os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()):
-        if path:
-            modules.append(path.partition(":")[0])
+    modules = _trial_modules()
 
     def _run():
-        for name in modules:
-            try:
-                importlib.import_module(name)
-            except Exception as e:
-                logger.warning(f"prepare: importing {name} failed, the first trial imports it: {e!r}")
+        try:
+            trial_procs.start(modules)
+        except Exception as e:
+            logger.warning(f"prepare: starting the trial forkserver failed, the first trial starts it: {e!r}")
         task_hash.prewarm(dirs)
 
     threading.Thread(target=_run, name="harbor-prepare", daemon=True).start()

@@ -59,7 +59,7 @@ def test_run_hashes_in_a_thread_before_the_trial(tmp_path, monkeypatch):
     monkeypatch.setattr("harbor.trial.trial.Trial", _Trial)
     monkeypatch.setattr(af, "build_trial_config", lambda *a: SimpleNamespace(task=SimpleNamespace(path=d)))
     monkeypatch.setattr(af.hf, "_ensure_provider_key", lambda: None)
-    asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
+    asyncio.run(af.run_trial("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
     assert seen and len(threads) == 2 and threading.main_thread() not in threads
 
 
@@ -77,6 +77,7 @@ def test_prepare_prewarms_the_prompt_set_in_its_own_thread(tmp_path, monkeypatch
     monkeypatch.setenv("HARBOR_TASKS_DIR", str(tmp_path))
     monkeypatch.delenv("HARBOR_ENV_IMPORT_PATH", raising=False)
     got = []
+    monkeypatch.setattr(af.trial_procs, "start", lambda modules: got.append(("start", modules[1])))
     monkeypatch.setattr(
         af.task_hash, "prewarm", lambda dirs: got.append(([d.name for d in dirs], threading.current_thread().name))
     )
@@ -85,4 +86,5 @@ def test_prepare_prewarms_the_prompt_set_in_its_own_thread(tmp_path, monkeypatch
     for t in threading.enumerate():
         if t.name == "harbor-prepare":
             t.join(30)
-    assert got == [(["b", "a", "b"], "harbor-prepare")]  # hand-out order; the missing task is skipped
+    # the trial forkserver first, then the hashes in hand-out order; the missing task is skipped
+    assert got == [("start", af.__name__), (["b", "a", "b"], "harbor-prepare")]
