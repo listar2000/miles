@@ -95,3 +95,86 @@ def sample(traces: list[dict], n: int, seed: int = 0) -> list[dict]:
 def extract(trials_dir: Path, n: int, seed: int = 0) -> list[dict]:
     traces = [t for d in sorted(trials_dir.iterdir()) if d.is_dir() and (t := trial_trace(d))]
     return sample(traces, n, seed)
+
+
+TIMEOUT_S = 295.0  # a recorded command this long hit the harness's 300 s command timeout
+BUCKETS = ((1.0, "<1 s"), (10.0, "1-10 s"), (60.0, "10-60 s"), (TIMEOUT_S, "60-295 s"), (float("inf"), "timeout"))
+
+
+def _bucket(s: float) -> str:
+    return next(label for top, label in BUCKETS if s < top)
+
+
+def _q(xs: list[float], q: float) -> float | None:
+    return sorted(xs)[min(len(xs) - 1, int(q * len(xs)))] if xs else None
+
+
+def command_breakdown(traces: list[dict]) -> dict[str, Any]:
+    """Where the recorded command time went: per command class and per duration bucket (no sandbox needed)."""
+    timed = [(classify(c), s) for t in traces for c, s in zip(t["commands"], t["cmd_s"], strict=True) if s is not None]
+    total = sum(s for _, s in timed) or 1.0
+    unique: dict[str, set[str]] = {}
+    for t in traces:
+        for c in t["commands"]:
+            unique.setdefault(classify(c), set()).add(" ".join(c.split()))
+    by_class: dict[str, list[float]] = {}
+    by_bucket: dict[str, list[float]] = {label: [] for _, label in BUCKETS}
+    for cls, s in timed:
+        by_class.setdefault(cls, []).append(s)
+        by_bucket[_bucket(s)].append(s)
+    return {
+        "trials": len(traces),
+        "commands": sum(len(t["commands"]) for t in traces),
+        "untimed": sum(len(t["commands"]) for t in traces) - len(timed),
+        "total_s": total,
+        "by_class": {
+            cls: {
+                "n": len(xs),
+                "unique": len(unique.get(cls, ())),
+                "total_s": sum(xs),
+                "share": sum(xs) / total,
+                "p50": _q(xs, 0.5),
+                "p90": _q(xs, 0.9),
+                "max": max(xs),
+                "timeouts": sum(s >= TIMEOUT_S for s in xs),
+            }
+            for cls, xs in sorted(by_class.items(), key=lambda kv: -sum(kv[1]))
+        },
+        "by_bucket": {
+            label: {"n": len(xs), "total_s": sum(xs), "share": sum(xs) / total} for label, xs in by_bucket.items()
+        },
+    }
+
+
+def representative(traces: list[dict], dir_of, quantiles=(0.5, 0.9)) -> list[dict]:
+    """A few distinct commands per class, at the given quantiles of their recorded time, as replayable traces.
+
+    Commands that timed out are left out (the breakdown counts them; a replay would only wait out the timeout).
+    Each command runs on a fresh sandbox of the task it came from, grouped one sandbox per task; ``dir_of(trace)``
+    is the trace's task dir. A command replayed without the steps before it may exit differently: the report's
+    fidelity check shows how often."""
+    seen: dict[str, tuple[str, float, Any, dict]] = {}  # normalized command -> (class, seconds, rc, trace)
+    for t in traces:
+        for c, s, rc in zip(t["commands"], t["cmd_s"], t["rc"], strict=True):
+            cls, key = classify(c), " ".join(c.split())
+            if s is None or s >= TIMEOUT_S or cls in ("submit", "noop") or key in seen:
+                continue
+            seen[key] = (cls, s, rc, t)
+    by_class: dict[str, list[tuple[float, str, Any, dict]]] = {}
+    for key, (cls, s, rc, t) in seen.items():
+        by_class.setdefault(cls, []).append((s, key, rc, t))
+    by_task: dict[str, dict] = {}
+    for _, xs in sorted(by_class.items()):
+        xs.sort(key=lambda x: x[0])
+        for i in sorted({min(len(xs) - 1, int(q * len(xs))) for q in quantiles}):
+            s, command, rc, t = xs[i]
+            task = dir_of(t)
+            rep = by_task.setdefault(
+                task,
+                {"trial": f"rep-{task}", "instance_id": task, "commands": [], "think_s": [], "cmd_s": [], "rc": []},
+            )
+            rep["commands"].append(command)
+            rep["think_s"].append(0.0)
+            rep["cmd_s"].append(s)
+            rep["rc"].append(rc)
+    return list(by_task.values())

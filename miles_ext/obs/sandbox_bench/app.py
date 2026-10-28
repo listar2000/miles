@@ -12,14 +12,18 @@ From a fork checkout, with Modal credentials (the image is built from a pushed f
     export MILES_FORK_COMMIT=<pushed commit> MILES_DOTENV_DIR=<dir with the .env the launcher uses>
     # once per source run: the commands of N of its trials (traces.py)
     modal run -m miles_ext.obs.sandbox_bench.app::extract --source-run overfit-1020-a6 --n 64
-    # the arms; the trace workload needs the source run's tasks: MILES_BENCH_TASKS_DIR=<its taskset.tasks_dir>,
+    # the trace workload needs the source run's tasks: MILES_BENCH_TASKS_DIR=<its taskset.tasks_dir>,
     # or MILES_BENCH_TASKS_VOLUME=<the volume> when its recipe sets taskset.tasks_volume
-    MILES_BENCH_TASKS_DIR=<task dirs> modal run -m miles_ext.obs.sandbox_bench.app::main --bench-id sbxbench-1027-a1 \\
-        --recipe <the source run's recipe yaml> --providers sail,modal --concurrency 1,32 --repeats 2 \\
-        --workloads noop,read,write,test,fs-scan,install,trace --traces overfit-1020-a6
+    # no sandbox: where the recorded command time went, by command class and duration, and extract
+    # overfit-1020-a6-rep (a few distinct commands per class at the median and p90 of their time)
+    MILES_BENCH_TASKS_VOLUME=<volume> modal run -m miles_ext.obs.sandbox_bench.app::analyze \\
+        --recipe <the source run's recipe yaml> --traces overfit-1020-a6
+    # the arms (defaults: concurrency 1 and 16, 3 / 16 trials per synthetic workload, 2 repeats, every trace)
+    MILES_BENCH_TASKS_VOLUME=<volume> modal run -m miles_ext.obs.sandbox_bench.app::main --bench-id sbxbench-1028-a1 \\
+        --recipe <the source run's recipe yaml> --providers sail,modal --traces overfit-1020-a6-rep
     # main first resolves every trace to its task (no sandbox); the same check alone, with the same env:
-    modal run -m miles_ext.obs.sandbox_bench.app::check --recipe <the recipe yaml> --traces overfit-1020-a6
-    modal run -m miles_ext.obs.sandbox_bench.app::report --bench-id sbxbench-1027-a1
+    modal run -m miles_ext.obs.sandbox_bench.app::check --recipe <the recipe yaml> --traces overfit-1020-a6-rep
+    modal run -m miles_ext.obs.sandbox_bench.app::report --bench-id sbxbench-1028-a1
 
 Providers run in parallel (separate infrastructure); one provider's arms run one after another, so arms never
 share a sandbox app. Sandboxes live in the app ``<sandbox.app_prefix><bench id>-<provider>``; every arm ends by
@@ -96,20 +100,24 @@ def _wait_for_port(port: int, timeout: float = 60) -> None:
             time.sleep(0.5)
 
 
-def _fill_resources(task_dir: Path, cpus: int, memory_mb: int) -> bool:
-    """Give a copied task the arm's size where its task.toml names none (Harbor's Modal "limit" policy needs one);
-    the same on both providers, so they stay comparable. True when the task.toml was changed."""
-    from harbor.models.task.config import TaskConfig
+def _prepare_task(task_dir: Path, cpus: int, memory_mb: int) -> None:
+    """Make a copied task benchmark-ready, the same on both providers so they stay comparable:
+
+    - the arm's size where its task.toml names none (Harbor's Modal "limit" policy refuses a sizeless task);
+    - public network in every phase. A task whose network policy changes during a trial (no network, opened for
+      the harness install, the tunnel host for the agent) fails on the pinned Harbor's Modal sandboxes (ext-041);
+      a public task never switches, and the replayed commands do not need the network to stay off."""
+    from harbor.models.task.config import NetworkMode, TaskConfig
 
     path = task_dir / "task.toml"
     config = TaskConfig.model_validate_toml(path.read_text())
     env = config.environment
-    if env.cpus is not None and env.memory_mb is not None:
-        return False
     env.cpus = env.cpus if env.cpus is not None else cpus
     env.memory_mb = env.memory_mb if env.memory_mb is not None else memory_mb
+    env.network_mode, env.allowed_hosts = NetworkMode.PUBLIC, None
+    for phase in (config.agent, config.verifier):
+        phase.network_mode, phase.allowed_hosts = None, None
     path.write_text(config.model_dump_toml())
-    return True
 
 
 def _trace_tasks(traces: str, tasks_src: str, n: int | None = None) -> list[tuple[dict, str]]:
@@ -144,10 +152,7 @@ def _trial_specs(arm: dict, tasks_root: Path) -> list[dict]:
             for t, instance_id in _trace_tasks(arm["traces"], arm["tasks_src"], arm["trace_trials"]):
                 if not (tasks_root / instance_id).exists():
                     shutil.copytree(Path(arm["tasks_src"]) / instance_id, tasks_root / instance_id)
-                    if _fill_resources(tasks_root / instance_id, cpus, memory_mb):
-                        print(
-                            f"[{arm['name']}] {instance_id}: no size in task.toml, using {cpus} CPU / {memory_mb} MB"
-                        )
+                    _prepare_task(tasks_root / instance_id, cpus, memory_mb)
                 specs.append(
                     {
                         "workload": workload,
@@ -323,6 +328,21 @@ def check_traces(traces: str, tasks_src: str) -> list[dict]:
     return [{"trial": t["trial"], "task_dir": d} for t, d in _trace_tasks(traces, tasks_src)]
 
 
+@app.function(image=image, cpu=1, memory=4096, timeout=600, volumes=arm_volumes)
+def analyze_traces(traces: str, tasks_src: str) -> dict:
+    """The recorded command time of extract ``traces`` by class and duration (``<traces>-breakdown.json``), and a
+    replay of a few representative commands per class (extract ``<traces>-rep``)."""
+    picked = [json.loads(line) for line in (TRACES_DIR / f"{traces}.jsonl").read_text().splitlines()]
+    dirs = {d.name for d in Path(tasks_src).iterdir() if d.is_dir()}
+    breakdown = traces_lib.command_breakdown(picked)
+    rep = traces_lib.representative(picked, lambda t: traces_lib.resolve_task_dir(t, dirs))
+    (TRACES_DIR / f"{traces}-breakdown.json").write_text(json.dumps(breakdown, indent=1))
+    (TRACES_DIR / f"{traces}-rep.jsonl").write_text("".join(json.dumps(t) + "\n" for t in rep))
+    results_volume.commit()
+    breakdown["rep"] = {"traces": len(rep), "commands": sum(len(t["commands"]) for t in rep)}
+    return breakdown
+
+
 @app.function(image=image, cpu=2, memory=8192, timeout=HOURS, volumes={str(R.RESULTS): results_volume})
 def build_report(bench_id: str) -> str:
     bench = BENCH_DIR / bench_id
@@ -361,8 +381,12 @@ def plan_arms(
     think: str,
     cpus: int,
     memory_mb: int,
+    trace_trials: int = 0,
 ) -> list[dict]:
-    """Every arm, each provider's in the order they run (concurrency order flips each repeat)."""
+    """Every arm, each provider's in the order they run (concurrency order flips each repeat).
+
+    ``trials`` per synthetic workload (``trials_at_1`` at concurrency 1); ``trace_trials`` replays at every
+    concurrency (0: every trace of the extract)."""
     arms = []
     for provider in providers:
         for rep in range(repeats):
@@ -377,7 +401,7 @@ def plan_arms(
                         "repeat": rep,
                         "workloads": workloads,
                         "trials": n,
-                        "trace_trials": None if conc > 1 else n,
+                        "trace_trials": trace_trials or None,
                         "traces": traces,
                         "think": think,
                         "cpus": cpus,
@@ -408,16 +432,24 @@ def check(recipe: str, traces: str, run_id: str = ""):
 
 
 @app.local_entrypoint()
+def analyze(recipe: str, traces: str, run_id: str = ""):
+    """Break extract ``traces`` down by command class and duration, and write ``<traces>-rep`` for a short replay
+    (``main --workloads trace --traces <traces>-rep --concurrency 1``). ``run_id``: accepted for monitor/launch.sh."""
+    print(json.dumps(analyze_traces.remote(traces, _tasks_src(R.load(recipe))), indent=1))
+
+
+@app.local_entrypoint()
 def main(
     recipe: str,
     bench_id: str = "",
     providers: str = "sail,modal",
-    concurrency: str = "1,32",
+    concurrency: str = "1,16",
     repeats: int = 2,
     workloads: str = "noop,read,write,test,fs-scan,install,trace",
-    trials: int = 32,
-    trials_at_1: int = 8,
+    trials: int = 16,
+    trials_at_1: int = 3,
     traces: str = "",
+    trace_trials: int = 0,
     think: str = "zero",
     cpus: int = 2,
     memory_mb: int = 4096,
@@ -452,6 +484,7 @@ def main(
         think,
         cpus,
         memory_mb,
+        trace_trials,
     )
     for arm in arms:
         arm["tasks_src"] = tasks_src
