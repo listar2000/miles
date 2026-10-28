@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-063 | Fix | A fresh unmerged-LoRA run starts rollout 0 when its engines are ready, on the zero adapter, instead of after the trainer's first weight sync (6-25 min of idle engines) | active; remove when upstream starts rollout before the first sync | [fix-063-rollout-at-engine-ready.md](fix-063-rollout-at-engine-ready.md) |
 | fix-062 | Fix (SGLang) | R3's routed-experts host cache is plain host memory instead of pinned: pinning ~30 GB per TP rank cost 68-78 s of every R3 engine start | active; remove when SGLang stops pinning it | [fix-062-r3-host-cache-unpinned.md](fix-062-r3-host-cache-unpinned.md) |
 | fix-061 | Fix (SGLang) | One FlashInfer autotune cache file per TP group, written by TP rank 0, so two engines sharing a cache dir stop mixing per-rank files and retuning for ~2 min | active; remove when SGLang keeps one file per tuning group | [fix-061-flashinfer-autotune-shared-cache.md](fix-061-flashinfer-autotune-shared-cache.md) |
 | ext-040 | Ext | `obs.sandbox_profile`: timing spans for each trial's sandbox calls and the session proxy (off by default, no change when off), and a CPU-only benchmark of Sail and Modal sandboxes with a scripted model on the production agent path | active | [ext-040-sandbox-profile.md](ext-040-sandbox-profile.md) |
