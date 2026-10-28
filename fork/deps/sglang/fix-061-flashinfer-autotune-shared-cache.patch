@@ -1,0 +1,79 @@
+diff --git a/python/sglang/srt/model_executor/runner/flashinfer_autotune.py b/python/sglang/srt/model_executor/runner/flashinfer_autotune.py
+index c8d2f35519..d5132828c0 100644
+--- a/python/sglang/srt/model_executor/runner/flashinfer_autotune.py
++++ b/python/sglang/srt/model_executor/runner/flashinfer_autotune.py
+@@ -173,11 +173,14 @@ def flashinfer_autotune_cache_path(model_runner: ModelRunner) -> Path:
+         / cache_key
+     )
+     cache_dir.mkdir(parents=True, exist_ok=True)
+-    rank_key = f"rank_tp{get_parallel().tp_rank}_pp{get_parallel().pp_rank}_dp{get_parallel().dp_rank or 0}"
++    # [fork fix-061] the TP ranks reduce their timings (_autotune_tactic_sync_group) and tune the same
++    # tactics: one file per TP group, loaded by every rank and written only by TP rank 0
++    rank_key = f"rank_tpall_pp{get_parallel().pp_rank}_dp{get_parallel().dp_rank or 0}"
+     if (
+         get_exec().moe.moe_runner_backend == "flashinfer_megamoe"
+         and not mr.is_draft_worker
+     ):
++        rank_key = f"rank_tp{get_parallel().tp_rank}_pp{get_parallel().pp_rank}_dp{get_parallel().dp_rank or 0}"  # [fork fix-061]
+         from sglang.srt.platforms import current_platform
+ 
+         # Ordinary FlashInfer tactics use best-effort merging, but MegaMoE's
+@@ -261,6 +264,20 @@ def _drop_diverged_autotune_cache(
+     cache_path.unlink(missing_ok=True)
+ 
+ 
++def _snapshot_autotune_cache(cache_path: Path) -> Path:  # [fork fix-061]
++    """Snapshot the cache so the digest check and the load read the same bytes."""
++    snapshot = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex}.read")
++    try:
++        snapshot.write_bytes(cache_path.read_bytes())
++    except FileNotFoundError:
++        pass
++    return snapshot
++
++
++def _writes_autotune_cache(autotune_cache: Path, cache_path: Path) -> bool:  # [fork fix-061]
++    return not cache_path.stem.startswith("rank_tpall") or get_parallel().tp_rank == 0
++
++
+ @contextlib.contextmanager
+ def flashinfer_autotune_context(model_runner: ModelRunner, *, run_lm_head: bool):
+     # The gate below decides on the same inputs load_configs does.
+@@ -272,8 +289,9 @@ def flashinfer_autotune_context(model_runner: ModelRunner, *, run_lm_head: bool)
+     reuse_cache = envs.SGLANG_FLASHINFER_AUTOTUNE_CACHE.get()
+     if reuse_cache:
+         autotune_cache = cache_path
++        cache_snapshot = _snapshot_autotune_cache(cache_path)  # [fork fix-061]
+         if sync_group is not None:
+-            _drop_diverged_autotune_cache(cache_path, sync_group, _collect_metadata())
++            _drop_diverged_autotune_cache(cache_snapshot, sync_group, _collect_metadata())  # [fork fix-061]
+         logger.info("Running FlashInfer autotune with cache: %s", autotune_cache)
+     else:
+         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+@@ -301,8 +319,10 @@ def flashinfer_autotune_context(model_runner: ModelRunner, *, run_lm_head: bool)
+         # autotune(cache=...) clears all file-loaded tactics on entry, which would drop
+         # the target's tactics when the draft worker loads; load and save them by hand.
+         tuner = AutoTuner.get()
+-        if reuse_cache and autotune_cache.is_file():
+-            tuner.load_configs(str(autotune_cache))
++        if reuse_cache and cache_snapshot.is_file():  # [fork fix-061]
++            tuner.load_configs(str(cache_snapshot))
++        if reuse_cache:
++            cache_snapshot.unlink(missing_ok=True)  # [fork fix-061]
+         mega_context = empty_context()
+         if (
+             get_exec().moe.moe_runner_backend == "flashinfer_megamoe"
+@@ -335,8 +355,11 @@ def flashinfer_autotune_context(model_runner: ModelRunner, *, run_lm_head: bool)
+             autotune_dummy_run_mode(run_lm_head=run_lm_head),
+         ):
+             yield
+-        if reuse_cache:
+-            tuner.save_configs(str(autotune_cache))
++        if reuse_cache and _writes_autotune_cache(autotune_cache, cache_path):  # [fork fix-061]
++            # replace, never rewrite in place: another engine sharing the dir may be reading it
++            tmp = autotune_cache.with_name(f".{autotune_cache.name}.{uuid.uuid4().hex}.tmp")
++            tuner.save_configs(str(tmp))
++            tmp.replace(autotune_cache)
+     torch.cuda.current_stream().wait_stream(mr.forward_stream)
+     logger.info("FlashInfer autotune completed.")
+ 
