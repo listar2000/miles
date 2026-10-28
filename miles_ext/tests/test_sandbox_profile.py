@@ -11,6 +11,7 @@ from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
 from miles_ext.harbor import agent_function as af
+from miles_ext.harbor import modal_env
 from miles_ext.harbor.session_proxy import make_app
 from miles_ext.obs import sandbox_profile as sp
 from miles_ext.recipes import recipe as R
@@ -26,7 +27,7 @@ def test_off_leaves_the_environment_config_alone(monkeypatch):
     monkeypatch.setenv("HARBOR_ENV_TYPE", "modal")
     monkeypatch.setenv("HARBOR_ENV_KWARGS", '{"app_name": "miles-mobius-x"}')
     config = af._environment_config()
-    assert config.type.value == "modal" and config.import_path is None
+    assert config.type is None and config.import_path == modal_env.IMPORT_PATH
 
 
 def test_on_wraps_the_same_provider_and_keeps_every_field(monkeypatch):
@@ -40,7 +41,7 @@ def test_on_wraps_the_same_provider_and_keeps_every_field(monkeypatch):
     wrapped = af._environment_config()
     assert wrapped.import_path == sp.IMPORT_PATH and wrapped.type is None
     assert wrapped.model_dump(exclude={"type", "import_path"}) == plain.model_dump(exclude={"type", "import_path"})
-    assert sp.inner_import_path() == "harbor.environments.modal:ModalEnvironment"
+    assert sp.inner_import_path() == modal_env.IMPORT_PATH
 
 
 def test_import_path_provider_is_the_inner_class(monkeypatch):
