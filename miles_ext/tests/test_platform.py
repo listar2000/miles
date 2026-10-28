@@ -507,9 +507,12 @@ def test_async_bounds_follow_miles():
 def test_v1_session_server_keeps_one_radix_cache(name, pause):
     # Miles' namespaced radix cache (its default for fully async in_place) asserts
     # --use-session-server v2; the recipes run v1, so parse_args failed without the opt-out
-    argv = _argv(_recipe(name, **{"async": {"pause_generation": pause}}))
+    recipe = _recipe(name, **{"async": {"pause_generation": pause}})
+    argv = _argv(recipe)
     after = argv[argv.index("--use-session-server") + 1]
-    assert after.startswith("--") and "--no-namespaced-radix-cache" in argv
+    # a compacting recipe runs v2 (ext-045) and keeps the one shared cache too
+    assert after == "v2" if R.compacts(recipe) else after.startswith("--")
+    assert "--no-namespaced-radix-cache" in argv
 
 
 def test_field_errors_report_every_field():

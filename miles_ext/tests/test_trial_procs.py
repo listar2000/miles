@@ -79,4 +79,9 @@ def test_harbor_harnesses_run_inline_and_single_turn_in_subprocesses():
         recipe = R.from_dict({"name": "t", "model": {"preset": "qwen3.5-9b"}, "taskset": {"harness": harness}})
         argv = R.miles_args(recipe, "t-1", resume=False)
         modes[harness] = argv[argv.index("--custom-agent-function-mode") + 1]
-    assert modes == {R.HARNESS_SANDBOX: "inline", R.HARNESS_HOST: "inline", R.HARNESS_SINGLE_TURN: "subproc"}
+    assert modes == {
+        R.HARNESS_SANDBOX: "inline",
+        R.HARNESS_HOST: "inline",
+        R.HARNESS_TERMINUS_SANDBOX: "inline",
+        R.HARNESS_SINGLE_TURN: "subproc",
+    }

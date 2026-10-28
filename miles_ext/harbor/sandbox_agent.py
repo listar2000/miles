@@ -44,10 +44,9 @@ _RUN_FROM_FILE = (
 )
 
 
-class SandboxMiniSweAgent(stock.MiniSweAgent):
-    @staticmethod
-    def name() -> str:
-        return "mini-swe-agent-sandbox"
+class PublicSetup:
+    """Mixin for an in-sandbox harness: Harbor's agent setup runs with public network, then the task's policy
+    is restored (module docstring). Also used by ``terminus_sandbox.SandboxTerminus2``."""
 
     async def setup(self, environment: BaseEnvironment) -> None:
         baseline = environment.network_policy
@@ -59,6 +58,12 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
         finally:
             # failure to restore must abort the trial, never start a solver online
             await environment.set_network_policy(baseline)
+
+
+class SandboxMiniSweAgent(PublicSetup, stock.MiniSweAgent):
+    @staticmethod
+    def name() -> str:
+        return "mini-swe-agent-sandbox"
 
     async def install(self, environment: BaseEnvironment) -> None:
         probe = await environment.exec(command=_UV_PATH + "command -v mini-swe-agent")

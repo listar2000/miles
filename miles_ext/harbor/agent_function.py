@@ -4,8 +4,8 @@ One Harbor trial per rollout sample, built on Miles' in-process Harbor agent
 function (``examples/experimental/harbor/harbor_agent_function.py``), which the
 fork imports from the source tree instead of vendoring a copy: an upstream sync
 brings its new version along, and an API change fails loudly here. This module
-adds two mini-swe-agent harnesses and owns the trial config; the upstream file
-is not edited.
+adds three in-fork harnesses and owns the trial config; the upstream file is
+not edited.
 
 The harness comes from ``MILES_EXT_HARNESS`` (set by the launcher from the
 recipe), falling back to the row's ``metadata.agent_name``:
@@ -22,6 +22,12 @@ mini-swe-agent-sandbox
 mini-swe-agent-host
     The mini-swe-agent loop runs in this process and executes each command in
     the sandbox (``host_agent.HostMiniSweAgent``); no tunnel needed.
+terminus-2-sandbox
+    Harbor's Terminus-2 runs inside the task sandbox
+    (``terminus_sandbox.SandboxTerminus2``, ext-045) with upstream's terminus-2
+    kwargs, reaching the model through the tunnel as mini-swe-agent-sandbox
+    does. ``MILES_EXT_COMPACT_AT_TOKENS`` (recipe ``agent.compact_at_tokens``)
+    turns on its summarization at that many context tokens.
 
 Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
 
@@ -60,12 +66,14 @@ hf = upstream.harbor_agent_function()
 
 logger = logging.getLogger(__name__)
 
-SANDBOX_HARNESS, HOST_HARNESS = R.HARNESS_SANDBOX, R.HARNESS_HOST
+SANDBOX_HARNESS, HOST_HARNESS, TERMINUS_SANDBOX_HARNESS = R.HARNESS_SANDBOX, R.HARNESS_HOST, R.HARNESS_TERMINUS_SANDBOX
 # Harbor resolves agents it does not know by import path
 _IMPORT_PATHS = {
     SANDBOX_HARNESS: "miles_ext.harbor.sandbox_agent:SandboxMiniSweAgent",
     HOST_HARNESS: "miles_ext.harbor.host_agent:HostMiniSweAgent",
+    TERMINUS_SANDBOX_HARNESS: "miles_ext.harbor.terminus_sandbox:SandboxTerminus2",
 }
+COMPACT_ENV = "MILES_EXT_COMPACT_AT_TOKENS"
 
 
 @functools.cache
@@ -124,8 +132,23 @@ def _host_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> d
     }
 
 
+def _terminus_sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
+    """SandboxTerminus2's kwargs: upstream's terminus-2 kwargs (summarization and linear history from its
+    HARBOR_TERMINUS_2_* env vars) with the model-call timeout the mini-swe-agent harnesses use."""
+    terminus = hf.HARNESS_BINDINGS["terminus-2"].kwargs(
+        session_url, api_key, _model_call_kwargs(sampling_params), model, max_seq_len
+    )
+    compact_at = os.getenv(COMPACT_ENV)
+    return {"terminus": terminus, "compact_at_tokens": int(compact_at) if compact_at else None}
+
+
 hf.HARNESS_BINDINGS[SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_sandbox_kwargs, env=hf._mini_swe_agent_env)
 hf.HARNESS_BINDINGS[HOST_HARNESS] = hf.HarnessBinding(kwargs=_host_kwargs, env=lambda url, key: {})
+hf.HARNESS_BINDINGS[TERMINUS_SANDBOX_HARNESS] = hf.HarnessBinding(
+    kwargs=_terminus_sandbox_kwargs, env=hf.HARNESS_BINDINGS["terminus-2"].env
+)
+# harnesses that run inside the sandbox and reach the model through the session tunnel
+_IN_SANDBOX = (SANDBOX_HARNESS, TERMINUS_SANDBOX_HARNESS)
 
 _upstream_environment_config = hf._environment_config
 # what upstream's _environment_config reads that an import-path provider does not honor here
@@ -166,7 +189,7 @@ _SESSION_URL = re.compile(r"^http://[^/:]+:(\d+)(/.*)$")
 def public_session_url(session_url: str) -> str:
     public = os.environ.get("MILES_SESSION_PUBLIC_URL")
     if not public:
-        raise RuntimeError(f"{SANDBOX_HARNESS} needs the session tunnel (MILES_SESSION_PUBLIC_URL)")
+        raise RuntimeError(f"{'/'.join(_IN_SANDBOX)} need the session tunnel (MILES_SESSION_PUBLIC_URL)")
     match = _SESSION_URL.match(session_url)
     if not match:
         raise RuntimeError(f"unexpected session URL {session_url!r}")
@@ -180,11 +203,12 @@ def harness_for(metadata: dict[str, Any]) -> str:
 
 def build_trial_config(metadata: dict[str, Any], session_url: str, request_kwargs: dict[str, Any]):
     harness = harness_for(metadata)
-    if harness == SANDBOX_HARNESS:
+    if harness in _IN_SANDBOX:
         session_url = public_session_url(session_url)
     config = hf.build_trial_config({**metadata, "agent_name": harness}, session_url, request_kwargs)
-    if harness == SANDBOX_HARNESS:
+    if harness in _IN_SANDBOX:
         config.agent.extra_allowed_hosts = [*config.agent.extra_allowed_hosts, urlsplit(session_url).hostname]
+    if harness == SANDBOX_HARNESS:
         # ContextExitAgent's window (context_exit.py)
         if max_seq_len := config.agent.kwargs.get("max_seq_len"):
             config.agent.env = {**config.agent.env, context_exit.ENV_LIMIT: str(max_seq_len)}
