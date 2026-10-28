@@ -30,7 +30,7 @@ that with real inference costs GPUs and mixes in model speed.
   it in its trial, so the state it needs exists, preferring picks with a short prefix; the report lists each
   picked command's recorded and replayed time and exit code. `main` defaults to 3 trials per synthetic workload
   at concurrency 1, 16 at concurrency 16, 2 repeats, every trace of the given extract at each concurrency, and
-  no task verifier (`MILES_EXT_SANDBOX_PROFILE_NO_VERIFIER=1`, set only by the benchmark; `--verifier` keeps it).
+  no task verifier (`MILES_EXT_SANDBOX_PROFILE_NO_VERIFIER=1`, set only by the benchmark's arms).
 - Benchmark tasks run with public network (synthetic ones as written, replayed ones rewritten on copy), so no
   network policy switches during a trial: the pinned Harbor's Modal sandboxes fail such a switch (ext-041).
 - No data in the repo: traces are extracted to `<results>/sbx-bench/traces/`, results go to
