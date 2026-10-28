@@ -43,3 +43,9 @@ Upstream Miles monitors its rollout loop itself, and its recipes default to subp
 ## Since 2026-10-27
 
 `agent.function_mode` is gone: no recipe ran `inline`, so every run passes `--custom-agent-function-mode subproc`.
+
+## Since 2026-10-28
+
+Harbor trials still get a process each, but forked from a preloaded server (ext-042), not through Miles'
+subproc mode: Miles runs the agent function `inline` and `agent_function.run` forks the trial. Single-turn
+recipes keep `subproc`.

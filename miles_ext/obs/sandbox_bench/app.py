@@ -3,7 +3,7 @@
 Each arm is one CPU Modal function, the host, standing where the trainer's rollout stands: the scripted model
 (``model_server``) listens on the first session-server port, the real ``session_proxy`` forwards to it with
 ``--profile-log``, and ``modal.forward`` publishes the proxy as production does. Trials go through
-``miles_ext.harbor.agent_function.run`` in Miles' agent-function child processes (``recipe.AGENT_FUNCTION_MODE``),
+``miles_ext.harbor.agent_function.run`` in the recipe's agent-function mode (``recipe.AGENT_FUNCTION_MODES``),
 with the recipe's Harbor settings and ``obs.sandbox_profile`` on. Everything a run writes goes to
 ``<results volume>/sbx-bench/``: never to the repo.
 
@@ -203,7 +203,7 @@ async def _run_trials(arm: dict, recipe: dict, specs: list[dict], arm_dir: Path)
             try:
                 out = await call_agent_function(
                     agent_function.run,
-                    mode=R.AGENT_FUNCTION_MODE,
+                    mode=R.AGENT_FUNCTION_MODES[R.HARNESS_SANDBOX],
                     base_url=f"http://127.0.0.1:{R.SESSION_PORT}/sessions/{spec['key']}",
                     prompt="",
                     request_kwargs={},

@@ -29,7 +29,7 @@ def test_exit_status_reaches_agent_metadata(tmp_path):
 
 
 def _run(monkeypatch, tmp_path, agent_status):
-    """af.run on a stand-in trial the verifier scored 1.0 and whose agent ended with agent_status."""
+    """af.run_trial on a stand-in trial the verifier scored 1.0 and whose agent ended with agent_status."""
 
     class _Trial:
         paths = SimpleNamespace(trial_dir=tmp_path)
@@ -54,7 +54,7 @@ def _run(monkeypatch, tmp_path, agent_status):
             "agent_metrics": {"mswea_exit_status": agent_status},
         },
     )
-    return asyncio.run(af.run("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
+    return asyncio.run(af.run_trial("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
 
 
 def test_context_exhausted_overrides_submitted(monkeypatch, tmp_path):

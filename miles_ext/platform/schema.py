@@ -37,7 +37,7 @@ RESERVED_FLAGS = {
     "--prompt-data": "taskset",
     "--custom-agent-function-path": "taskset.harness",
     "--custom-generate-function-path": "taskset.harness",
-    "--custom-agent-function-mode": "the recipe (each trial in its own process, ext-033)",
+    "--custom-agent-function-mode": "the recipe (each trial in its own process, ext-033 and ext-042)",
     "--session-server-port": "platform (session servers)",
     "--use-session-server": "platform (session servers)",
     # named knobs (r6): reserved even when the recipe leaves the flag out
