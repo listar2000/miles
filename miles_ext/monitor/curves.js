@@ -224,7 +224,8 @@
                     GPU: "W&B system metrics of the run: the GPUs of the node W&B runs on (on a training run, trainer GPUs only; engines aren't covered)",
                     Trials: "the monitor's own scans of the trial dirs" };
   // the charts each group shows before "show more": what answers "is it learning, is it fast"
-  const KEY = { Training: ["train.raw_reward", "train.raw_reward_unfiltered", "train.response_len", "train.truncated", "train.logprob_diff", "train.grad_norm", "train.step_time", "train.wait_ratio"],
+  const KEY = { Training: ["train.raw_reward", "train.raw_reward_unfiltered", "train.response_len", "train.truncated", "train.logprob_diff", "train.grad_norm", "train.step_time", "train.wait_ratio",
+                            "train.mis_mask_low", "train.mis_mask_high", "train.sc_masked", "train.sc_weight"],
                 Engine: ["engine.gen_tps", "engine.running_req", "engine.queue_req", "engine.kv_usage"], GPU: ["gpu.util", "gpu.power", "gpu.mem_alloc", "gpu.temp_max"] };
   const st = { zooms: {}, data: null, runId: null, wb: [], custom: {}, steps: [], all: new Set(),
                xmode: localStorage_get("mon.xmode") || "time", closed: new Set(JSON.parse(localStorage_get("mon.cgroups") || '["Trials"]')),

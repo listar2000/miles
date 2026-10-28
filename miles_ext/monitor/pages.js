@@ -142,9 +142,10 @@
     return undefined;
   }
   const cmpState = { mode: null };
-  const STEP_METRICS = [["raw_reward", "Reward per step", "r"], ["raw_reward_unfiltered", "Reward before group filter", "r"], ["response_len", "Response length, mean", "tok"],
+  const STEP_METRICS = [["raw_reward", "Reward per step", "r"], ["raw_reward_unfiltered", "Reward of groups finished this step (not the trained batch)", "r"], ["response_len", "Response length, mean", "tok"],
     ["truncated", "Truncated samples", "frac"], ["zero_std_all_zero", "Groups with all-zero reward", "frac"], ["zero_std_all_one", "Groups with all-one reward", "frac"],
-    ["grad_norm", "Grad norm", ""], ["logprob_diff", "Train vs rollout log-prob gap", ""], ["staleness", "Weight staleness", ""], ["step_time", "Step time", "s"], ["update_weights_time", "Weight sync time", "s"]];
+    ["grad_norm", "Grad norm", ""], ["logprob_diff", "Train vs rollout log-prob gap", ""],
+    ["mis_mask_low", "MIS masked, ratio below band", "frac"], ["mis_mask_high", "MIS masked, ratio above band", "frac"], ["sc_masked", "MIS masked (score centering)", "frac"], ["sc_weight", "MIS mean token weight (score centering)", ""], ["staleness", "Weight staleness", ""], ["step_time", "Step time", "s"], ["update_weights_time", "Weight sync time", "s"]];
   const SERIES_METRICS = [["engine.gen_tps", "Output tokens/s (decode)", "tok/s"], ["engine.running_req", "Running requests", ""], ["engine.queue_req", "Queued requests", ""],
     ["engine.kv_usage", "KV cache usage (full attention)", "frac"], ["engine.prefix_hit", "Prefix cache hit rate", "frac"], ["gpu.util", "GPU utilization, mean over nodes", "%"],
     ["gpu.power", "GPU power, mean over nodes", "W"], ["gpu.mem_alloc", "GPU memory allocated, mean over nodes", "%"], ["trials.in_flight", "Trials in flight", ""], ["trials.mean_reward", "Mean reward of finished trials", "r"]];

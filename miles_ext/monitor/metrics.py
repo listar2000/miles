@@ -39,7 +39,7 @@ CATALOG = {
     # training runs: Miles' own per-step log lines ("rollout N: {...}", "step N: {...}", "perf N: {...}"), at the
     # time the step's line was logged
     "train.raw_reward": ("Training", "Reward per step (rollout/raw_reward)", ""),
-    "train.raw_reward_unfiltered": ("Training", "Reward before group filter", ""),
+    "train.raw_reward_unfiltered": ("Training", "Reward of groups finished this step (not the trained batch)", ""),
     "train.zero_std_all_zero": ("Training", "Groups with all-zero reward", "frac"),
     "train.zero_std_all_one": ("Training", "Groups with all-one reward", "frac"),
     "train.truncated": ("Training", "Truncated samples", "frac"),
@@ -49,6 +49,11 @@ CATALOG = {
     "train.ppo_kl": ("Training", "PPO KL", ""),
     "train.logprob_diff": ("Training", "Train vs rollout log-prob gap (abs)", ""),
     "train.tis_clipfrac": ("Training", "TIS clip fraction", "frac"),
+    "train.mis_mask_low": ("Training", "MIS masked tokens, ratio below band", "frac"),
+    "train.mis_mask_high": ("Training", "MIS masked tokens, ratio above band", "frac"),
+    "train.sc_masked": ("Training", "MIS masked tokens (score centering)", "frac"),
+    "train.sc_weight": ("Training", "MIS mean token weight (score centering)", ""),
+    "train.sc_correction": ("Training", "Score-centering correction, mean", ""),
     "train.step_time": ("Training", "Step time", "s"),
     "train.update_weights_time": ("Training", "Weight sync time", "s"),
     "train.wait_ratio": ("Training", "Trainer waiting on rollout", "frac"),

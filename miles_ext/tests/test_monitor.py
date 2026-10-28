@@ -93,3 +93,17 @@ def test_server_serves_a_registered_run(monkeypatch, tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_log_tail_reads_mis_metrics(monkeypatch, tmp_path):
+    """A score-centering run's MIS metrics reach the run's step table."""
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import server
+
+    log = tmp_path / "launch.log"
+    values = {"train/sc_masked": 0.0004, "train/sc_importance_weight": 0.9993}
+    log.write_text(f"[2026-10-28 10:56:20.880 actor_cell00000_rank00000] log_utils.py:555 - step 2: {values}\n")
+    tail = server.LogTail("ap-1", "toy-1", str(log), engine=False)
+    tail.poll()
+    (step,) = tail.train_summary()["steps"]
+    assert (step["sc_masked"], step["sc_weight"]) == (0.0004, 0.9993)
