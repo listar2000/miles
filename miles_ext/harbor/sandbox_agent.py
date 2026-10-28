@@ -18,6 +18,7 @@ is set up unchanged.
 import asyncio
 import base64
 import json
+import shlex
 from pathlib import Path
 
 from harbor.agents.installed import mini_swe_agent as stock
@@ -34,6 +35,13 @@ INSTALL_ATTEMPTS = 4
 INSTALL_BACKOFF_SECS = 15  # waits 15, 30, 45 s between attempts
 
 _UV_PATH = 'if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; else export PATH="$HOME/.local/bin:$PATH"; fi; '
+TASK_FILE = "/tmp/mswea-task.md"
+# mini-swe-agent's entry point, reading --task from TASK_FILE so the task text is not in its argv
+_RUN_FROM_FILE = (
+    '"$(uv tool dir)/mini-swe-agent/bin/python" -c "import sys; '
+    f"sys.argv = ['mini-swe-agent', *sys.argv[1:], '--task', open('{TASK_FILE}').read()]; "
+    'from minisweagent.run.mini import app; app()"'
+)
 
 
 class SandboxMiniSweAgent(stock.MiniSweAgent):
@@ -94,6 +102,25 @@ class SandboxMiniSweAgent(stock.MiniSweAgent):
                     raise
                 self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
                 await asyncio.sleep(INSTALL_BACKOFF_SECS * attempt)
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        # Harbor's run renders the prompt template before building the command; the needle below must match
+        self._task_text = self.render_instruction(instruction)
+        return await super().run(instruction, environment, context)
+
+    async def exec_as_agent(self, environment: BaseEnvironment, command: str, **kwargs):
+        # Stock Harbor passes the task as --task=<text>, so it sits in mini-swe-agent's argv: an agent
+        # command like `pkill -f /reference/program` then matches and kills the agent itself. The
+        # task goes to a file instead.
+        task = getattr(self, "_task_text", None)
+        needle = f"mini-swe-agent --yolo --model={self.model_name} --task={shlex.quote(task)} " if task else None
+        if needle and needle in command:
+            task_b64 = base64.b64encode(task.encode()).decode()
+            await super().exec_as_agent(environment, command=f"echo {task_b64} | base64 -d > {TASK_FILE}")
+            command = command.replace(needle, f"{_RUN_FROM_FILE} --yolo --model={self.model_name} ")
+        elif "mini-swe-agent --yolo" in command:
+            self.logger.warning("mini-swe-agent command not recognised; the task stays in its argv (see ext-009 page)")
+        return await super().exec_as_agent(environment, command=command, **kwargs)
 
     def build_cli_flags(self) -> str:
         return " ".join(f for f in (super().build_cli_flags(), f"--agent-class={context_exit.AGENT_CLASS}") if f)
