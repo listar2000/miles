@@ -40,6 +40,18 @@ def resolve_task_dir(trace: dict, dirs: set[str]) -> str:
     return found[0]
 
 
+def tool_exec_s(extra: dict, since: float | None) -> float | None:
+    """A step's command time from its first tool message: Harbor's step-timing field when the patch applied,
+    else the tool message's timestamp minus the model reply's (``since``). mini-swe-agent stamps the reply when
+    the model call returns and the tool message after the step's commands ran, so the difference is command time
+    plus a few milliseconds of bookkeeping, never model wait."""
+    if (ms := extra.get("harbor_tool_exec_msec")) is not None:
+        return ms / 1000
+    if since is not None and (ts := extra.get("timestamp")) is not None:
+        return max(0.0, ts - since)
+    return None
+
+
 def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
     """One trial's replay record, or None when it has no result or trajectory."""
     try:
@@ -48,17 +60,20 @@ def trial_trace(trial_dir: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     commands, think_s, cmd_s, rc = [], [], [], []
+    since = None  # the step's model reply time, until its first tool message
     for m in messages:
         extra = m.get("extra") if isinstance(m.get("extra"), dict) else {}
         if m.get("role") == "assistant":
+            since = extra.get("timestamp")
             for action in extra.get("actions") or []:
                 commands.append(action.get("command", ""))
                 think_s.append(round((extra.get("harbor_llm_wait_msec") or 0) / 1000, 3))
                 cmd_s.append(None)
                 rc.append(None)
         elif m.get("role") == "tool" and commands and cmd_s[-1] is None:
-            if (ms := extra.get("harbor_tool_exec_msec")) is not None:
-                cmd_s[-1] = round(ms / 1000, 3)
+            if (secs := tool_exec_s(extra, since)) is not None:
+                cmd_s[-1] = round(secs, 3)
+            since = None
             rc[-1] = extra.get("returncode")
     while commands and classify(commands[-1]) == "submit":  # the scripted model adds its own
         for xs in (commands, think_s, cmd_s, rc):
