@@ -209,6 +209,15 @@ def fidelity(rows: list[dict], trials: list[dict], traces: dict[str, dict]) -> d
     }
 
 
+def _measured(row: dict, trace: dict | None) -> dict:
+    """``row`` with only a -rep replay's picked commands in its command list (its prefix is setup, not a sample);
+    the trial's time pieces are unchanged."""
+    if not trace or "measure" not in trace:
+        return row
+    replayed = [c for c in row["commands"] if c[0] != "submit"]
+    return {**row, "commands": [replayed[p] for p in trace["measure"] if p < len(replayed)]}
+
+
 def arm_report(arm_dir: Path, traces: dict[str, dict] | None = None) -> dict[str, Any]:
     manifest = json.loads((arm_dir / MANIFEST).read_text())
     proxy_by_session: dict[str, list[float]] = defaultdict(list)
@@ -217,14 +226,18 @@ def arm_report(arm_dir: Path, traces: dict[str, dict] | None = None) -> dict[str
             proxy_by_session[line["path"]].append(line["dt"])
     by_workload: dict[str, list[dict]] = defaultdict(list)
     trials_by_workload: dict[str, list[dict]] = defaultdict(list)
+    measured_only: dict[str, list[dict]] = defaultdict(list)  # rows whose class stats keep the picked commands only
     for t in manifest["trials"]:
         trials_by_workload[t["workload"]].append(t)
         if t.get("trial_dir") and (row := trial_row(Path(t["trial_dir"]), proxy_by_session)):
             by_workload[t["workload"]].append(row)
+            measured_only[t["workload"]].append(_measured(row, (traces or {}).get(t.get("trace") or "")))
     out = {"arm": manifest["arm"], "workloads": {}}
     for workload in sorted(trials_by_workload):
         rows = by_workload.get(workload, [])
-        out["workloads"][workload] = summarize(rows, no_result=len(trials_by_workload[workload]) - len(rows))
+        out["workloads"][workload] = summarize(
+            measured_only[workload], no_result=len(trials_by_workload[workload]) - len(rows)
+        )
         if traces is not None and any(t.get("trace") for t in trials_by_workload[workload]):
             out["workloads"][workload]["fidelity"] = fidelity(rows, trials_by_workload[workload], traces)
     return out
