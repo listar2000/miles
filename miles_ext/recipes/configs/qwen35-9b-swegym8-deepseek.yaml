@@ -1,0 +1,32 @@
+# qwen35-9b-swegym8-sandbox with DeepSeek's own agent (dsh) inside the task sandboxes instead
+# of mini-swe-agent (ext-046), compacting at 24k of the 32k context: the smoke run for the
+# deepseek-sandbox harness. Same tasks, cluster and algorithm as the terminus recipe, so the
+# two compare by harness; the Megatron trainer (TP2 DP2), which compaction needs.
+name: q35-9b-swegym8-dsh
+model:
+  preset: qwen3.5-9b
+  backend: megatron
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 4
+parallel:
+  tp: 2
+taskset:
+  tasks_dir: $MILES_DATA/swegym-lite-sandbox
+  prompts: $MILES_DATA/prompts/train8_sandbox.jsonl
+  harness: deepseek-sandbox
+agent:
+  timeout: 1800
+  compact_at_tokens: 24576  # + max_response_len 4096 <= max_seq_len 32768
+algorithm:
+  mode: fully_async
+  num_rollout: 20
+  rollout_batch_size: 8
+  n_samples: 8
+  lr: 1.0e-6
+checkpoint:
+  save_interval: 10
+tracking:
+  wandb_project: miles-fork-validation
+  wandb_entity: mobiuslab

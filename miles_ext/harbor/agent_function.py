@@ -4,7 +4,7 @@ One Harbor trial per rollout sample, built on Miles' in-process Harbor agent
 function (``examples/experimental/harbor/harbor_agent_function.py``), which the
 fork imports from the source tree instead of vendoring a copy: an upstream sync
 brings its new version along, and an API change fails loudly here. This module
-adds three in-fork harnesses and owns the trial config; the upstream file is
+adds four in-fork harnesses and owns the trial config; the upstream file is
 not edited.
 
 The harness comes from ``MILES_EXT_HARNESS`` (set by the launcher from the
@@ -28,6 +28,11 @@ terminus-2-sandbox
     kwargs, reaching the model through the tunnel as mini-swe-agent-sandbox
     does. ``MILES_EXT_COMPACT_AT_TOKENS`` (recipe ``agent.compact_at_tokens``)
     turns on its summarization at that many context tokens.
+deepseek-sandbox
+    DeepSeek's own agent, the pinned DeepSeek Harness CLI, runs inside the task
+    sandbox (``deepseek_sandbox.SandboxDeepSeek``, ext-046) and calls the
+    session server's Anthropic Messages route through the tunnel.
+    ``MILES_EXT_COMPACT_AT_TOKENS`` turns on its compaction as for terminus.
 
 Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
 
@@ -67,11 +72,13 @@ hf = upstream.harbor_agent_function()
 logger = logging.getLogger(__name__)
 
 SANDBOX_HARNESS, HOST_HARNESS, TERMINUS_SANDBOX_HARNESS = R.HARNESS_SANDBOX, R.HARNESS_HOST, R.HARNESS_TERMINUS_SANDBOX
+DEEPSEEK_SANDBOX_HARNESS = R.HARNESS_DEEPSEEK_SANDBOX
 # Harbor resolves agents it does not know by import path
 _IMPORT_PATHS = {
     SANDBOX_HARNESS: "miles_ext.harbor.sandbox_agent:SandboxMiniSweAgent",
     HOST_HARNESS: "miles_ext.harbor.host_agent:HostMiniSweAgent",
     TERMINUS_SANDBOX_HARNESS: "miles_ext.harbor.terminus_sandbox:SandboxTerminus2",
+    DEEPSEEK_SANDBOX_HARNESS: "miles_ext.harbor.deepseek_sandbox:SandboxDeepSeek",
 }
 COMPACT_ENV = "MILES_EXT_COMPACT_AT_TOKENS"
 
@@ -132,14 +139,28 @@ def _host_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> d
     }
 
 
+def _compact_at() -> int | None:
+    compact_at = os.getenv(COMPACT_ENV)
+    return int(compact_at) if compact_at else None
+
+
 def _terminus_sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
     """SandboxTerminus2's kwargs: upstream's terminus-2 kwargs (summarization and linear history from its
     HARBOR_TERMINUS_2_* env vars) with the model-call timeout the mini-swe-agent harnesses use."""
     terminus = hf.HARNESS_BINDINGS["terminus-2"].kwargs(
         session_url, api_key, _model_call_kwargs(sampling_params), model, max_seq_len
     )
-    compact_at = os.getenv(COMPACT_ENV)
-    return {"terminus": terminus, "compact_at_tokens": int(compact_at) if compact_at else None}
+    return {"terminus": terminus, "compact_at_tokens": _compact_at()}
+
+
+def _deepseek_sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
+    """SandboxDeepSeek's kwargs; its window and reply cap come from the ``model_info`` upstream adds."""
+    return {"compact_at_tokens": _compact_at()}
+
+
+def _deepseek_env(session_url: str, api_key: str) -> dict[str, str]:
+    # dsh appends /v1/messages to its base URL, and the Anthropic route hangs off the session root (as claude-code)
+    return {"DEEPSEEK_BASE_URL": session_url.removesuffix("/v1"), "DEEPSEEK_API_KEY": api_key}
 
 
 hf.HARNESS_BINDINGS[SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_sandbox_kwargs, env=hf._mini_swe_agent_env)
@@ -147,8 +168,9 @@ hf.HARNESS_BINDINGS[HOST_HARNESS] = hf.HarnessBinding(kwargs=_host_kwargs, env=l
 hf.HARNESS_BINDINGS[TERMINUS_SANDBOX_HARNESS] = hf.HarnessBinding(
     kwargs=_terminus_sandbox_kwargs, env=hf.HARNESS_BINDINGS["terminus-2"].env
 )
+hf.HARNESS_BINDINGS[DEEPSEEK_SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_deepseek_sandbox_kwargs, env=_deepseek_env)
 # harnesses that run inside the sandbox and reach the model through the session tunnel
-_IN_SANDBOX = (SANDBOX_HARNESS, TERMINUS_SANDBOX_HARNESS)
+_IN_SANDBOX = R.IN_SANDBOX_HARNESSES
 
 _upstream_environment_config = hf._environment_config
 # what upstream's _environment_config reads that an import-path provider does not honor here
