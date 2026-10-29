@@ -33,9 +33,13 @@ DeepSeek harness modeled on prime-rl's `verifiers/v1/harnesses/deepseek`
   Unset, dsh's automatic compaction is off (`auto: false`): its default trigger is 80% of the
   window, and v1 rejects the rewritten history. dsh counts with Miles' reported usage where
   the request matches, else a heuristic. Validation adds: above the 16% of `W - O` it keeps verbatim.
-- **Exit status**: from the last `turn_end` in the events: a reply cut at `max_tokens` (dsh ends
-  the run, nothing is re-sent) raises `SingleTurnMaxSeqLenExceededError`, a context overflow
-  `MaxSeqLenExceededError` (both SequenceLengthLimitExceeded), anything else AgentError.
+- **Exit status**: from the last `turn_end` in the events. A full context window (the server cut the
+  last reply short of `max_tokens` to the room left, or refused the request) ends the run like
+  mini-swe-agent's ContextExhausted: no exception, so the verifier grades the workspace, and the
+  agent function keeps `ContextExhausted` and applies `agent.context_exhausted_scores_zero` (first
+  E2E: 2 of 3 ProgramBench trials filled 262k in 8-10 min). A reply that hits `max_tokens` itself
+  (dsh ends the run, nothing is re-sent) raises `SingleTurnMaxSeqLenExceededError`
+  (SequenceLengthLimitExceeded); anything else is AgentError.
   dsh has no step cap; `agent.max_steps` does not apply, `agent.timeout` does.
 
 ## How it is applied
