@@ -1,11 +1,9 @@
 """`taskset.harness: deepseek-sandbox`: DeepSeek's own agent (dsh) inside the task sandbox (ext-046, see its patch page)."""
 
 import asyncio
-import hashlib
 import json
 import shlex
 import tempfile
-from pathlib import Path
 from typing import Any
 
 from harbor.agents.installed.base import BaseInstalledAgent, NonZeroAgentExitCodeError
@@ -18,15 +16,12 @@ from miles_ext.harbor import context_exit, sandbox_agent
 from miles_ext.recipes.recipe import DEEPSEEK_RETAIN_RATIO
 
 NAME = "deepseek-sandbox"
-# dsh's whole dependency tree, pinned: `npm ci` installs the lockfile (regenerate it on a dsh bump)
-NPM = Path(__file__).with_name("dsh")
-NPM_FILES = ("package.json", "package-lock.json")
-LOCK_HASH = hashlib.sha256((NPM / "package-lock.json").read_bytes()).hexdigest()[:12]
+DSH_VERSION = "0.2.1-rc.3"  # the release verifiers' DeepSeek harness pins
 PROFILE = "sdk-minimal"
 NODE_MIN = (22, 19)  # dsh's engines floor
 DIR = "$HOME/.miles-deepseek"  # the agent user's: nvm and npm install as that user, as Harbor's claude-code does
 BIN = f"{DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
-FILES = "/tmp/miles-deepseek"  # uploads: the npm files, then per run the patch, compat shim and task
+FILES = "/tmp/miles-deepseek"  # patch, compat shim and task, uploaded per run
 EVENTS = (EnvironmentPaths.agent_dir / "deepseek-sandbox.jsonl").as_posix()  # dsh --json events
 STDERR = (EnvironmentPaths.agent_dir / "deepseek-sandbox.stderr.txt").as_posix()
 AGENT_EXIT_STATUS = "agent_exit_status"  # agent metadata key the agent function reads
@@ -92,9 +87,11 @@ AGENT_INSTALL = (
     "set -euo pipefail; "
     + _LOAD_NVM
     + f"if ! {_NODE_OK}; then {nvm_node_install_snippet(NODE_MIN[0])}; fi; "
-    + f'if [ ! -f "{DIR}/.ready-{LOCK_HASH}" ]; then mkdir -p "{DIR}" && cp {" ".join(f"{FILES}/{n}" for n in NPM_FILES)} "{DIR}/" && '
+    # the marker names the version, so another pin installs afresh
+    + f'if [ ! -f "{DIR}/.ready-{DSH_VERSION}" ]; then '
     # --ignore-scripts: no native builds (task images have no compilers); the sdk-minimal tree needs none
-    + f'npm ci --prefix "{DIR}" --no-audit --no-fund --ignore-scripts >/dev/null && touch "{DIR}/.ready-{LOCK_HASH}"; fi; '
+    + f'npm install --prefix "{DIR}" --no-audit --no-fund --ignore-scripts "@deepseek-ai/dsh@{DSH_VERSION}" >/dev/null'
+    + f' && touch "{DIR}/.ready-{DSH_VERSION}"; fi; '
     + f'node "{BIN}" --version'
 )
 
@@ -206,9 +203,6 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         return NAME
 
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.exec_as_root(environment, command=f"mkdir -p {FILES}")
-        for name in NPM_FILES:
-            await self._upload(environment, name, (NPM / name).read_text())
         # safe to repeat: each step skips what is already in place (as SandboxMiniSweAgent's install retries)
         for attempt in range(1, sandbox_agent.INSTALL_ATTEMPTS + 1):
             try:

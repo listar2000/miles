@@ -174,12 +174,9 @@ def test_a_full_window_ends_the_run_for_the_verifier(tmp_path):
     assert context.metadata[ds.AGENT_EXIT_STATUS] == context_exit.EXIT_STATUS  # no raise: the verifier runs
 
 
-def test_install_runs_npm_ci_of_the_pinned_lockfile(tmp_path):
+def test_install_pins_dsh_and_keys_its_marker_by_version(tmp_path):
     sandbox = _Sandbox("")
     asyncio.run(_agent(tmp_path).install(sandbox))
-    assert sandbox.uploads[f"{ds.FILES}/package-lock.json"] == (ds.NPM / "package-lock.json").read_text()
-    lock = json.loads(sandbox.uploads[f"{ds.FILES}/package-lock.json"])
-    assert lock["packages"]["node_modules/@deepseek-ai/dsh"]["version"] == "0.2.1-rc.3"
-    script = next(c for c in sandbox.commands if "npm ci" in c)
-    # a different lockfile installs afresh instead of reusing what an earlier install left
-    assert f".ready-{ds.LOCK_HASH}" in script and "npm install" not in script
+    script = next(c for c in sandbox.commands if "npm install" in c)
+    # another pin installs afresh instead of reusing what an earlier install left
+    assert f"@deepseek-ai/dsh@{ds.DSH_VERSION}" in script and f".ready-{ds.DSH_VERSION}" in script
