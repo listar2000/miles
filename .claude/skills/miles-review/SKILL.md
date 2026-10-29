@@ -29,8 +29,8 @@ It has two users:
   branch. Fixes made during review go in as `fixup!` commits; the merge desk
   folds them (`fork/README.md` "Landing").
 - **The independent reviewer** enforces it on every open PR. The reviewer
-  reports only: never push to the PR branch and never comment on GitHub unless
-  asked; the PR's owner applies fixes.
+  reports only: never push to the PR branch; its report reaches the PR as one
+  comment posted by `review.py --post`; the PR's owner applies fixes.
 
 The independent reviewer is a fresh agent (Claude, Codex or another) started by
 `review.py`, which runs Setup and the Ledger, Lint and Extension-tests checks
@@ -210,7 +210,8 @@ green on the head and red on `$BASE` the same way before you report it.
   after), Contract (or "No caller-facing changes."), Side-effects (upstream
   files touched with their markers; delete the section if it would say "none"),
   Done, Verification with the exact commands and counts. "Stacked on #N." is
-  the first line when it applies.
+  the first line when it applies. On a stacked PR, a title ending "[tag k/n]"
+  that the commit subject lacks is the stack's convention, not a finding.
 - Outcome opens with a plain-language result a non-specialist gets at a
   glance (bold line or small before/after table), technical detail below. A
   term a newcomer would not know gets a short "Terms:" line. No run ids
@@ -308,8 +309,16 @@ shape and the same checks, whichever agent does it:
 ```bash
 python .claude/skills/miles-review/review.py <N> --python <venv>/bin/python \
     [--agent codex] [--board <file of id reservations>] [--prior <earlier review.md>] [--out <dir>] \
-    [--deep --context <repo path>... --evidence <file or dir>...]
+    [--checks-on modal] [--post] \
+    [--deep --context <repo path>... --evidence <file, dir or modal://volume/path>...]
 ```
+
+`fixup!`/`amend!` commits are folded onto the base first, as the merge desk
+will, so commits and checks are judged as they will land (the report header
+says so). `--checks-on modal` runs the PR's own code (ledger, pre-commit,
+tests, test proofs) in a CPU Modal sandbox on the trainer image instead of on
+this machine. `--post` posts the report as a PR comment under a marker
+(`<!-- miles-review head=<sha> mode=<normal|deep> verdict=<v> -->`).
 
 `--deep` adds section 5. `--context` inlines more files at the head (the code
 the change calls or feeds, such as the loss or the weight sync); `--evidence`
@@ -375,7 +384,35 @@ without a blocking `ledger` finding; attribution lines without an `attribution`
 finding; and a new test that passes on the base without a `test` finding
 naming it.
 
-**The thread that runs it** reads only the printed lines and the report's top,
+**The review daemon** (`review_daemon.py`, kept alive by `supervisor.sh` on
+the reviewer box) polls GitHub and runs `review.py --checks-on modal --post`
+by itself, one review at a time, on PRs by the allowed users (`--allow`) from
+branches of this repository:
+
+| When | Mode |
+| --- | --- |
+| a ready PR has a head with no review (after `--settle` seconds, so quick pushes coalesce) | deep if labelled `deep-review` or the diff touches `miles/`, `miles_plugins/` or `train_async.py`, else normal |
+| a `/review` or `/review deep` comment after the last review, drafts too | as asked (or deep by the rule above) |
+
+The last review comment is the `--prior`. For a deep review the PR body can
+name more inputs on lines of their own: `Review context: <paths or globs>` and
+`Evidence: <modal://volume/path>...` (our volumes only). A review the PR's
+next head overtakes is stopped; a head that fails twice gets a short error
+comment, and `/review` retries it. The daemon fast-forwards its checkout to
+`main` before each pass, so reviews always use main's protocol. `review_daemon.py --status`
+prints its heartbeat, the review in progress, the queue and recent results.
+
+**`/merge`** from an allowed user lands a ready PR on `main` the way the merge
+desk does (fork/README.md "Landing"), when the latest review is at the current
+head, says "ready", and is deep if the PR needs a deep review: it folds the
+fixups onto `main` and refuses leftover fixups or a conflicting rebase. When
+`main` has not moved past the reviewed head's base, the folded tree must equal
+that head. It runs `ledger.py check` in the sandbox, pushes `main` and the folded
+branch in one atomic push, and deletes the branch once GitHub marks the PR
+merged. It answers with a comment either way. Stacked PRs (base not `main`)
+and upstream tags stay with the merge desk.
+
+**The thread that runs it** by hand reads only the printed lines and the report's top,
 posts the report as the review with the verdict first, says so when the
 protocol check failed, and never re-reviews or adds findings: a disagreement
 goes to the PR owner as a question citing the finding.

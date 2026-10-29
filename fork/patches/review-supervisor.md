@@ -41,6 +41,19 @@ whether the numbers hold (like-for-like baseline, same work, noise, what the tim
 and what the change can break (RL correctness, numerics, memory, R3, LoRA sync), reading
 the code passed with `--context` and the logs passed with `--evidence`.
 
+**Automatic reviews.** `review_daemon.py` runs on a private, always-on Sail box
+(`mdev-review`) with its own Codex login, and starts `review.py --checks-on modal --post`
+itself when a ready PR gets a new head or its owner comments `/review [deep]` (trigger
+table in SKILL.md). Polling GitHub, rather than a webhook, needs no public endpoint and
+no secret in the repository; the review comments' markers are the only state that
+matters. The PR's own code runs in a CPU Modal sandbox on the trainer image, never on the
+box that holds the Codex and GitHub logins, which also tests it in the image.
+`/merge` lands a single ready PR the merge desk's way (fold, same-code check, ledger,
+atomic push of `main` and the branch), so landing needs no Claude thread either; stacks
+and tags stay with the desk.
+Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT
+logins are not for public-repository CI; an API key costs about $1.20 per review).
+
 ## Remove when
 
 Never as such; replace the adapter when the reviewing agent changes.

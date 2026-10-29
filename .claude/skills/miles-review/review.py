@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -40,6 +42,10 @@ CONTEXT_FILES = (
 )
 MAX_PROMPT_CHARS = 900_000  # Codex rejects prompts over 1,048,576 characters
 TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*\.py$)")
+FIXUP = re.compile(r"^(fixup|amend|squash)! ", re.M)
+MARKER = "<!-- miles-review head={head} mode={mode} verdict={verdict} -->"
+CHECK_IMAGE = "docker.io/starlimobius/miles-mobius:main"
+EVIDENCE_VOLUMES = re.compile(r"(miles|mdev|rl)-[\w.-]+")  # ours; never another team's volume
 
 
 def codex(args, out):
@@ -70,10 +76,11 @@ DEFAULT_MODELS = {"codex": "gpt-6-astra"}
 VERDICT_FOR = {"blocking": "blocked", "should-fix": "ready after the should-fixes", None: "ready"}
 
 
-def sh(cmd, cwd=None, timeout=None, check=True, input=None):
+def sh(cmd, cwd=None, timeout=None, check=True, input=None, env=None):
     p = subprocess.run(
         cmd,
         cwd=cwd,
+        env={**os.environ, **env} if env else None,
         timeout=timeout,
         text=True,
         capture_output=True,
@@ -89,6 +96,68 @@ def sh(cmd, cwd=None, timeout=None, check=True, input=None):
 def tail(p, n=25):
     lines = (p.stdout + p.stderr).strip().splitlines()
     return "\n".join(lines[-n:])
+
+
+class LocalRunner:
+    """Runs the PR's own code (ledger, pre-commit, tests) in the review checkout on this machine."""
+
+    def __init__(self, tree, python):
+        self.tree, self.python, self.precommit = tree, python, ["uvx", "pre-commit"]
+
+    def run(self, cmd, timeout=None, check=False):
+        return sh(cmd, cwd=self.tree, timeout=timeout, check=check)
+
+    def close(self):
+        pass
+
+
+class ModalRunner:
+    """Runs PR checks in a CPU Modal sandbox, away from this machine's credentials."""
+
+    def __init__(self, tree, revs, work):
+        import modal
+
+        bundle = work / "pr.bundle"
+        for i, rev in enumerate(revs):
+            sh(["git", "update-ref", f"refs/review/rev{i}", rev], cwd=tree)
+        sh(
+            [
+                "git",
+                "bundle",
+                "create",
+                "-q",
+                str(bundle),
+                *(f"refs/review/rev{i}" for i in range(len(revs))),
+                "--tags",
+            ],
+            cwd=tree,
+        )
+        image = modal.Image.from_registry(CHECK_IMAGE).add_local_file(bundle, "/tmp/pr.bundle")
+        app = modal.App.lookup("miles-review-checks", create_if_missing=True)
+        self.sb = modal.Sandbox.create("sleep", "infinity", image=image, app=app, cpu=4, memory=8192, timeout=3600)
+        self.tree, self.python, self.precommit = "/root/pr", "python", ["python", "-m", "pre_commit"]
+        self._exec(
+            f"git init -q {self.tree} && git -C {self.tree} fetch -q /tmp/pr.bundle 'refs/review/*:refs/review/*' 'refs/tags/*:refs/tags/*' && git -C {self.tree} checkout -q {revs[0]}",
+            600,
+            True,
+        )
+        self._exec("pip install -q pre-commit", 600, True)
+
+    def _exec(self, script, timeout, check):
+        p = self.sb.exec(
+            "bash", "-c", f"cd {self.tree} 2>/dev/null; export PYTHONPATH={self.tree}; {script}", timeout=timeout
+        )
+        p.wait()
+        out = subprocess.CompletedProcess(script, p.returncode, p.stdout.read(), p.stderr.read())
+        if check and out.returncode:
+            sys.exit(f"sandbox command failed ({out.returncode}): {script}\n{out.stdout[-2000:]}{out.stderr[-2000:]}")
+        return out
+
+    def run(self, cmd, timeout=None, check=False):
+        return self._exec(" ".join(shlex.quote(c) for c in cmd), timeout or 1800, check)
+
+    def close(self):
+        self.sb.terminate()
 
 
 def prepare(args, work):
@@ -137,29 +206,54 @@ def prepare(args, work):
         sh(["git", "fetch", "-q", str(args.repo), f"refs/review/pr{n}:refs/review/pr{n}"], cwd=tree)
         base_ref = f"refs/review/pr{n}"
     base = sh(["git", "merge-base", base_ref, "HEAD"], cwd=tree).stdout.strip()
-    return meta, head, base, tree
+    meta["folded"] = fold_fixups(tree, base)
+    return meta, sh(["git", "rev-parse", "HEAD"], cwd=tree).stdout.strip(), base, tree
 
 
-def run_checks(tree, rev, files, python):
-    sh(["git", "checkout", "-q", rev], cwd=tree)
+def fold_fixups(tree, base):
+    """Fold fixup!/amend! commits as the merge desk will, so commits and checks are judged as they land."""
+    if not FIXUP.search(sh(["git", "log", "--format=%s", f"{base}..HEAD"], cwd=tree).stdout):
+        return None
+    p = sh(
+        [
+            "git",
+            "-c",
+            "user.name=miles-review",
+            "-c",
+            "user.email=review@localhost",
+            "rebase",
+            "-q",
+            "-i",
+            "--autosquash",
+            base,
+        ],
+        cwd=tree,
+        check=False,
+        env={"GIT_SEQUENCE_EDITOR": ":"},
+    )
+    if p.returncode:
+        sh(["git", "rebase", "--abort"], cwd=tree, check=False)
+        return "fixups do not fold cleanly; reviewed unfolded"
+    return f"fixups folded onto {base[:8]} as {sh(['git', 'rev-parse', 'HEAD'], cwd=tree).stdout.strip()[:8]}"
+
+
+def run_checks(runner, rev, files):
+    runner.run(["git", "checkout", "-q", rev], check=True)
     out = {}
-    out["ledger"] = tail(sh([python, "fork/tools/ledger.py", "check"], cwd=tree, check=False), 5)
-    present = [f for f in files if (tree / f).exists()]
-    if present:
-        p = sh(["uvx", "pre-commit", "run", "--files", *present], cwd=tree, timeout=1800, check=False)
-        kept = [line for line in tail(p, 400).splitlines() if not line.endswith(("Passed", "Skipped"))]
+    out["ledger"] = tail(runner.run([runner.python, "fork/tools/ledger.py", "check"]), 5)
+    listed = runner.run(["git", "ls-tree", "-r", "--name-only", rev, "--", *files]).stdout.split() if files else []
+    if listed:
+        p = runner.run([*runner.precommit, "run", "--files", *listed], timeout=1800)
+        kept = [
+            ln for ln in tail(p, 400).splitlines() if not ln.endswith(("Passed", "Skipped")) and not ln.startswith("[")
+        ]
         out["precommit"] = "\n".join(kept + [f"exit {p.returncode}" + ("" if p.returncode else ": all hooks passed")])
-        sh(["git", "checkout", "-q", "--", "."], cwd=tree)
+        runner.run(["git", "checkout", "-q", "--", "."])
     else:
         out["precommit"] = "(no changed files at this revision)"
-    p = sh(
-        [python, "-m", "pytest", "miles_ext/tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors"],
-        cwd=tree,
-        timeout=1800,
-        check=False,
-    )
-    out["pytest"] = tail(p, 15)
-    sh(["git", "clean", "-fdq"], cwd=tree)
+    pytest = [runner.python, "-m", "pytest", "miles_ext/tests", "-q", "-p", "no:cacheprovider"]
+    out["pytest"] = tail(runner.run([*pytest, "--continue-on-collection-errors"], timeout=1800), 15)
+    runner.run(["git", "clean", "-fdq"])
     return out
 
 
@@ -233,27 +327,27 @@ def new_tests(diff):
     return nodes
 
 
-def pytest_node(tree, node, python):
+def pytest_node(runner, node):
     t0 = time.time()
-    p = sh([python, "-m", "pytest", node, "-q", "-p", "no:cacheprovider"], cwd=tree, timeout=600, check=False)
+    p = runner.run([runner.python, "-m", "pytest", node, "-q", "-p", "no:cacheprovider"], timeout=600)
     result = {0: "pass", 1: "fail"}.get(p.returncode, "error")
     return result, round(time.time() - t0, 1), tail(p, 3)
 
 
-def prove_tests(tree, base, files, nodes, python):
+def prove_tests(runner, base, files, nodes):
     """Run each new test on the head, then with the base's version of every changed production file."""
-    proofs = {node: {"head": pytest_node(tree, node, python)} for node in nodes}
+    proofs = {node: {"head": pytest_node(runner, node)} for node in nodes}
     for f in files:
         if TEST_FILE.search(f):
             continue
-        if sh(["git", "cat-file", "-e", f"{base}:{f}"], cwd=tree, check=False).returncode == 0:
-            sh(["git", "checkout", "-q", base, "--", f], cwd=tree)
-        elif (tree / f).exists():
-            (tree / f).unlink()
+        if runner.run(["git", "cat-file", "-e", f"{base}:{f}"]).returncode == 0:
+            runner.run(["git", "checkout", "-q", base, "--", f], check=True)
+        else:
+            runner.run(["rm", "-f", f])
     for node in nodes:
-        proofs[node]["base"] = pytest_node(tree, node, python)
-    sh(["git", "reset", "-q", "--hard"], cwd=tree)
-    sh(["git", "clean", "-fdq"], cwd=tree)
+        proofs[node]["base"] = pytest_node(runner, node)
+    runner.run(["git", "reset", "-q", "--hard"])
+    runner.run(["git", "clean", "-fdq"])
     return proofs
 
 
@@ -265,36 +359,42 @@ def build_bundle(args, work, meta, head, base, tree):
     files = git("diff", "--name-only", base, head).split()
     commits = git("log", "--format=%h %s%n%b%n%(trailers:only)---", f"{base}..{head}")
     (bundle / "pr.json").write_text(json.dumps(meta, indent=2))
-    (bundle / "commits.txt").write_text(commits)
+    (bundle / "commits.txt").write_text((f"({meta['folded']})\n" if meta["folded"] else "") + commits)
     (bundle / "diff.patch").write_text(diff)
     (bundle / "diffstat.txt").write_text(git("diff", "--stat", base, head))
     (bundle / "files.txt").write_text("\n".join(files) + "\n")
-    (bundle / "ledger_list.txt").write_text(sh([args.python, "fork/tools/ledger.py", "list"], cwd=tree).stdout)
-    sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
-    taken = sh(
-        [
-            "git",
-            "log",
-            "--remotes=origin",
-            "--format=%D %(trailers:key=Fork-Fix,key=Fork-Hook,key=Fork-Ext,valueonly,separator=%x20)",
-        ],
-        cwd=args.repo,
-    ).stdout
-    ids = sorted({i for i in re.findall(r"\b(?:fix|hook|ext)-\d{3}\b", taken)})
-    (bundle / "ids_on_branches.txt").write_text(
-        "ids in commits on any branch of origin, merged or not:\n" + " ".join(ids)
-    )
-    if args.board:
-        reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
-        (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
-    checks = {"head": run_checks(tree, head, files, args.python), "base": run_checks(tree, base, files, args.python)}
-    sh(["git", "checkout", "-q", head], cwd=tree)
-    for name in ("ledger", "precommit", "pytest"):
-        (bundle / f"{name}.txt").write_text(
-            f"== head {head[:8]}\n{checks['head'][name]}\n\n== base {base[:8]}\n{checks['base'][name]}\n"
+    runner = ModalRunner(tree, (head, base), work) if args.checks_on == "modal" else LocalRunner(tree, args.python)
+    try:  # a stopped review (SIGTERM) still ends its sandbox
+        (bundle / "ledger_list.txt").write_text(
+            runner.run([runner.python, "fork/tools/ledger.py", "list"], check=True).stdout
         )
-    nodes = new_tests(diff)
-    proofs = prove_tests(tree, base, files, nodes, args.python)
+        sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
+        taken = sh(
+            [
+                "git",
+                "log",
+                "--remotes=origin",
+                "--format=%D %(trailers:key=Fork-Fix,key=Fork-Hook,key=Fork-Ext,valueonly,separator=%x20)",
+            ],
+            cwd=args.repo,
+        ).stdout
+        ids = sorted({i for i in re.findall(r"\b(?:fix|hook|ext)-\d{3}\b", taken)})
+        (bundle / "ids_on_branches.txt").write_text(
+            "ids in commits on any branch of origin, merged or not:\n" + " ".join(ids)
+        )
+        if args.board:
+            reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
+            (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
+        checks = {"head": run_checks(runner, head, files), "base": run_checks(runner, base, files)}
+        runner.run(["git", "checkout", "-q", head], check=True)
+        for name in ("ledger", "precommit", "pytest"):
+            (bundle / f"{name}.txt").write_text(
+                f"== head {head[:8]}\n{checks['head'][name]}\n\n== base {base[:8]}\n{checks['base'][name]}\n"
+            )
+        nodes = new_tests(diff)
+        proofs = prove_tests(runner, base, files, nodes)
+    finally:
+        runner.close()
     (bundle / "test_proofs.txt").write_text(
         "\n".join(
             f"{n}: head {p['head'][0]} ({p['head'][1]} s), base {p['base'][0]} ({p['base'][1]} s)\n"
@@ -340,7 +440,8 @@ def build_prompt(args, tree, head, base, bundle, files):
 
 def context_files(args, tree, files):
     """The --context paths at the head (globs allowed), minus the changed files already inlined."""
-    found = sorted({str(p.relative_to(tree)) for g in args.context for p in tree.glob(g) if p.is_file()} - set(files))
+    inside = lambda p: p.is_file() and p.resolve().is_relative_to(tree.resolve())  # noqa: E731  no ../ or symlinks out
+    found = sorted({str(p.relative_to(tree)) for g in args.context for p in tree.glob(g) if inside(p)} - set(files))
     missing = [g for g in args.context if not any(tree.glob(g))]
     if missing:
         sys.exit(f"--context matches nothing at the head: {', '.join(missing)}")
@@ -365,6 +466,34 @@ def evidence(args):
                 text = f"{text[:half]}\n[... {len(text) - 2 * half} characters cut ...]\n{text[-half:]}"
             out.append((str(p.relative_to(top)), text))
     return out
+
+
+def fetch_evidence(items, work):
+    """Local copies of ``modal://<volume>/<path>`` evidence (our volumes only); local paths pass through."""
+    out = []
+    for item in items:
+        if not item.startswith("modal://"):
+            out.append(item)
+            continue
+        volume, _, path = item.removeprefix("modal://").partition("/")
+        if not EVIDENCE_VOLUMES.fullmatch(volume) or path.startswith("/") or ".." in path.split("/"):
+            sys.exit(f"evidence {item}: only paths on our miles-/mdev-/rl- volumes")
+        dest = work / "evidence" / volume / path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        sh(["modal", "volume", "get", "--force", volume, path, str(dest)], timeout=600)
+        out.append(str(dest))
+    return out
+
+
+def post(meta, report, verdict, deep):
+    """The review as a PR comment, under the marker the review daemon reads back."""
+    marker = MARKER.format(
+        head=meta["headRefOid"], mode="deep" if deep else "normal", verdict=verdict.replace(" ", "-")
+    )
+    body = f"{marker}\n**Independent review (Codex, run by the review daemon)**\n\n{report.read_text()}"
+    body_file = report.with_suffix(".comment.md")
+    body_file.write_text(body)
+    sh(["gh", "pr", "comment", str(meta["number"]), "-R", REPO_SLUG, "--body-file", str(body_file)])
 
 
 def run_agent(args, work, prompt, tag):
@@ -420,13 +549,15 @@ def validate(r, ctx, tree):
     return bad
 
 
-def render(r, meta, head, base, run_info, violations, proofs, checks):
+def render(r, meta, base, run_info, violations, proofs, checks):
+    folded = f" ({meta['folded']})" if meta["folded"] else ""
     lines = [
         f"{r['verdict'].capitalize()}.",
         "",
         f"# PR #{meta['number']} review: {meta['title']}",
         "",
-        f"Head `{head[:10]}`, base `{base[:10]}`. Reviewer: {run_info['agent']} `{run_info['model']}` "
+        f"Head `{meta['headRefOid'][:10]}`{folded}, base `{base[:10]}`. "
+        f"Reviewer: {run_info['agent']} `{run_info['model']}` "
         f"(effort {run_info['effort']}{', deep review' if run_info.get('deep') else ''}), "
         f"protocol `{run_info['protocol']}`, {run_info['seconds']} s, "
         f"{run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out tokens, "
@@ -484,6 +615,7 @@ def render(r, meta, head, base, run_info, violations, proofs, checks):
 
 
 def main():
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("stopped"))  # finally blocks then end the sandbox
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pr", type=int)
     ap.add_argument(
@@ -504,7 +636,14 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the checkout after the review")
     ap.add_argument("--deep", action="store_true", help="also review the change itself (SKILL.md section 5)")
     ap.add_argument("--context", nargs="+", default=[], help="deep: more repo paths or globs to inline at the head")
-    ap.add_argument("--evidence", nargs="+", default=[], help="deep: local logs or result files behind the claims")
+    ap.add_argument(
+        "--evidence",
+        nargs="+",
+        default=[],
+        help="deep: logs or result files behind the claims (local or modal://vol/path)",
+    )
+    ap.add_argument("--checks-on", choices=("local", "modal"), default="local", help="where the PR's own code runs")
+    ap.add_argument("--post", action="store_true", help="post the report as a PR comment")
     args = ap.parse_args()
     args.model = args.model or DEFAULT_MODELS[args.agent]
     args.out = args.out.resolve()
@@ -513,6 +652,7 @@ def main():
     stamp = time.strftime("%m%d-%H%M")
     work = args.out / f"pr{args.pr}-{stamp}"
     work.mkdir(parents=True, exist_ok=True)
+    args.evidence = fetch_evidence(args.evidence, work)
     meta, head, base, tree = prepare(args, work)
     bundle, ctx = build_bundle(args, work, meta, head, base, tree)
     if args.bundle_only:
@@ -548,8 +688,10 @@ def main():
         print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
     run_info.update(usage, attempt=attempt)
     report = work / "review.md"
-    report.write_text(render(result, meta, head, base, run_info, violations, ctx["proofs"], ctx["checks"]))
+    report.write_text(render(result, meta, base, run_info, violations, ctx["proofs"], ctx["checks"]))
     (work / "review.json").write_text(json.dumps({"run": run_info, "violations": violations, **result}, indent=2))
+    if args.post:
+        post(meta, report, "protocol failed" if violations else result["verdict"], args.deep)  # /merge needs "ready"
     if not args.keep:
         shutil.rmtree(tree)
     counts = {s: sum(f["severity"] == s for f in result["findings"]) for s in SEVERITY_ORDER}
