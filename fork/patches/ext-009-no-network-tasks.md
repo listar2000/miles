@@ -43,7 +43,7 @@ Rejected: allowlisting install hosts (PyPI, astral.sh, apt mirrors) in the envir
 baseline, which would also leave them open to the agent and a shared verifier.
 
 ## How it is applied
-`miles_ext/harbor/sandbox_agent.py`, `miles_ext/harbor/agent_function.py`; tests in
+`miles_ext/harnesses/mini_swe_agent/sandbox.py`, `miles_ext/harbor/agent_function.py`; tests in
 `miles_ext/tests/test_no_network_tasks.py`. Needs a provider with
 `dynamic_network_policy` and hostname allowlists (Sail has both, ext-003). The host harness
 (`mini-swe-agent-host`) needs neither and is unchanged.

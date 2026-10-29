@@ -1,4 +1,4 @@
-"""Sail sandboxes for Harbor trials: ``miles_ext.harbor.sail:SailEnvironment``.
+"""Sail sandboxes for Harbor trials: ``miles_ext.sandboxes.sail:SailEnvironment``.
 
 ``harbor_sail.py`` is Harbor's own Sail provider (``src/harbor/environments/sail.py``
 on Harbor main), vendored byte-identical: the Harbor branch this release pins
@@ -30,16 +30,16 @@ Credentials: the Sail SDK reads ``SAIL_API_KEY`` from the worker's environment.
 import asyncio
 from typing import override
 
-from sail import App, AutoSleep, ImageDefinition, Sailbox
+from sail import AutoSleep, ImageDefinition
 
-from miles_ext.harbor.image_refs import digest_only
-from miles_ext.harbor.sail import harbor_sail as upstream
+from miles_ext.sandboxes.image_refs import digest_only
+from miles_ext.sandboxes.sail import harbor_sail as upstream
 
 # the override calls the SDK through the vendored module's names (the same
 # objects), so Harbor's unit tests, which patch harbor_sail.Sailbox, cover it
 
 TYPE = "sail"
-IMPORT_PATH = "miles_ext.harbor.sail:SailEnvironment"
+IMPORT_PATH = "miles_ext.sandboxes.sail:SailEnvironment"
 
 
 class SailEnvironment(upstream.SailEnvironment):

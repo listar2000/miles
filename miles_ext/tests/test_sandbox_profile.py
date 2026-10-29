@@ -11,10 +11,10 @@ from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
 from miles_ext.harbor import agent_function as af
-from miles_ext.harbor import modal_env
 from miles_ext.harbor.session_proxy import make_app
 from miles_ext.obs import sandbox_profile as sp
 from miles_ext.recipes import recipe as R
+from miles_ext.sandboxes import modal_env
 
 
 def _lines(path):

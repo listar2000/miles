@@ -1,6 +1,6 @@
 """Overrides of vendored methods stay tied to the method they replace.
 
-``miles_ext.harbor.sail.SailEnvironment._create_sailbox`` copies the vendored
+``miles_ext.sandboxes.sail.SailEnvironment._create_sailbox`` copies the vendored
 ``harbor_sail.SailEnvironment._create_sailbox`` with one change. ``ledger.py``
 checks the vendored file's blob; this checks the method itself, so a re-vendor
 that changes it fails here until the override is re-checked and the hash below
@@ -20,7 +20,7 @@ ROOT = Path(inspect.getfile(R)).parents[2]
 
 # (vendored file, class, method) -> sha256 of the method's source the override was written against
 OVERRIDDEN = {
-    ("miles_ext/harbor/sail/harbor_sail.py", "SailEnvironment", "_create_sailbox"):
+    ("miles_ext/sandboxes/sail/harbor_sail.py", "SailEnvironment", "_create_sailbox"):
         "3b68d48d13f8cac479b31908da95460d670cb6762f479a7ba31121176af58f84",
 }
 

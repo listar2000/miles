@@ -13,8 +13,8 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.task.config import NetworkMode, NetworkPolicy
 
 from miles_ext.harbor import agent_function as af
-from miles_ext.harbor import sandbox_agent
-from miles_ext.harbor.sandbox_agent import SandboxMiniSweAgent
+from miles_ext.harnesses import common
+from miles_ext.harnesses.mini_swe_agent.sandbox import SandboxMiniSweAgent
 
 NO_NETWORK = NetworkPolicy(network_mode=NetworkMode.NO_NETWORK)
 PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)
@@ -111,7 +111,7 @@ def _install(monkeypatch, tmp_path, failures):
 
     monkeypatch.setattr(stock.MiniSweAgent, "install", flaky_install)
     monkeypatch.setattr(SandboxMiniSweAgent, "exec_as_agent", noop_exec)
-    monkeypatch.setattr(sandbox_agent, "INSTALL_BACKOFF_SECS", 0)
+    monkeypatch.setattr(common, "INSTALL_BACKOFF_SECS", 0)
     asyncio.run(SandboxMiniSweAgent(logs_dir=tmp_path, model_name="openai/m").install(_NotInstalled()))
     return len(calls)
 
@@ -122,4 +122,4 @@ def test_install_retries_a_dropped_download(monkeypatch, tmp_path):
 
 def test_install_gives_up_after_the_last_attempt(monkeypatch, tmp_path):
     with pytest.raises(NonZeroAgentExitCodeError):
-        _install(monkeypatch, tmp_path, failures=sandbox_agent.INSTALL_ATTEMPTS)
+        _install(monkeypatch, tmp_path, failures=common.INSTALL_ATTEMPTS)

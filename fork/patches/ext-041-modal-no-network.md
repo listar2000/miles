@@ -11,7 +11,7 @@ to add a filter later. Sail switches policies at run time, so Sail runs never hi
 switch.
 
 ## Decision
-- `miles_ext/harbor/modal_env.py:ModalEnvironment` subclasses Harbor's Modal provider and overrides only
+- `miles_ext/sandboxes/modal_env.py:ModalEnvironment` subclasses Harbor's Modal provider and overrides only
   `_create_sandbox`. A no-network sandbox with a policy change ahead is created with the allow-all filter (`*`,
   which Modal can change later) and narrowed to no network before the call returns. Only the keep-alive
   entrypoint runs in between. If narrowing fails, the sandbox is terminated. Every other sandbox is created
@@ -22,7 +22,7 @@ switch.
   benchmark, because training on Modal would still fail on them.
 
 ## How it is applied
-- New `miles_ext/harbor/modal_env.py`; `agent_function._provider_config` swaps it in, and
+- New `miles_ext/sandboxes/modal_env.py`; `agent_function._provider_config` swaps it in, and
   `platform/validate.py` reports it (an import-path provider such as Sail is reported by its path, not `None`).
   ext-040's `sandbox_profile.inner_import_path` names it for `modal`, so a profiled run wraps the same class.
 - Check: `python -m pytest miles_ext/tests/test_modal_env.py miles_ext/tests/test_sandbox_profile.py`.

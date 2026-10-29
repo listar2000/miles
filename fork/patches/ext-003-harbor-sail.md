@@ -62,8 +62,8 @@ Two smaller decisions:
 
 | File | Role |
 | --- | --- |
-| `miles_ext/harbor/sail/harbor_sail.py` | Harbor's `src/harbor/environments/sail.py` @ `e2f6db74`, byte-identical (blob `750e9006`, entry in `fork/vendored.json`) |
-| `miles_ext/harbor/sail/__init__.py` | `SailEnvironment(harbor_sail.SailEnvironment)`: `type()` returns `"sail"`, the caps (an override of `_create_sailbox` that adds only `**caps` to the create call) (exit cleanup moved to `miles_ext/platform/teardown.py`, `SailSandboxes`, in r3) |
+| `miles_ext/sandboxes/sail/harbor_sail.py` | Harbor's `src/harbor/environments/sail.py` @ `e2f6db74`, byte-identical (blob `750e9006`, entry in `fork/vendored.json`) |
+| `miles_ext/sandboxes/sail/__init__.py` | `SailEnvironment(harbor_sail.SailEnvironment)`: `type()` returns `"sail"`, the caps (an override of `_create_sailbox` that adds only `**caps` to the create call) (exit cleanup moved to `miles_ext/platform/teardown.py`, `SailSandboxes`, in r3) |
 | `miles_ext/harbor/agent_function.py`, `upstream.py` | the `HARBOR_ENV_IMPORT_PATH` environment config |
 | `miles_ext/recipes/recipe.py` | `sandbox.provider` is `modal` or `sail`. For Sail it sets `HARBOR_ENV_IMPORT_PATH` and kwargs `{app_name, max_lifetime_secs, idle_secs}`, and sends no resource policy (Sail sizes are fixed and billed by observed usage; a `limit` policy would fail every trial) |
 | `miles_ext/launch/modal_app.py` | at exit, terminates every Sailbox in the run's app `miles-mobius-<run_id>` (`miles-fork-sbx-<run_id>` before ext-005's rename), sleeping ones included; the dry check runs the provider's preflight and resource-policy validation |
@@ -83,8 +83,8 @@ MILES_RECIPE=miles_ext/recipes/configs/qwen35-9b-swegym8-sail.yaml \
 
 To rerun Harbor's tests against the subclass, take Harbor's
 `tests/unit/environments/test_sail.py` at the vendored commit and point its
-imports at `miles_ext.harbor.sail.harbor_sail` (module) and
-`miles_ext.harbor.sail.SailEnvironment` (class). They need Harbor at
+imports at `miles_ext.sandboxes.sail.harbor_sail` (module) and
+`miles_ext.sandboxes.sail.SailEnvironment` (class). They need Harbor at
 `HARBOR_COMMIT`, `sail==0.13.0`, pytest-asyncio, and Harbor's `temp_dir`
 fixture.
 

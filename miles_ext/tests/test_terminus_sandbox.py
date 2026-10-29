@@ -7,14 +7,16 @@ import asyncio
 import io
 import json
 import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
 from miles_ext.harbor import agent_function as af
-from miles_ext.harbor import terminus_runner, terminus_sandbox
-from miles_ext.harbor.terminus_sandbox import SandboxTerminus2
+from miles_ext.harnesses.terminus import runner as terminus_runner
+from miles_ext.harnesses.terminus import sandbox as terminus_sandbox
+from miles_ext.harnesses.terminus.sandbox import SandboxTerminus2
 from miles_ext.recipes import recipe as R
 
 SESSION = "http://10.0.0.1:30000/sessions/s/v1"
@@ -131,7 +133,7 @@ def test_agent_phase_allows_the_session_tunnel_host(monkeypatch):
     monkeypatch.setenv("MILES_SESSION_PUBLIC_URL", PUBLIC)
     config = af.build_trial_config({"instance_id": "x"}, SESSION, {})
     assert config.agent.extra_allowed_hosts == ["abc123.r9.modal.host"]
-    assert config.agent.import_path == "miles_ext.harbor.terminus_sandbox:SandboxTerminus2"
+    assert config.agent.import_path == "miles_ext.harnesses.terminus.sandbox:SandboxTerminus2"
     assert config.agent.env == {}  # mini-swe-agent's ContextExitAgent window is not set
 
 
@@ -140,7 +142,7 @@ def test_bundle_carries_harbor_with_its_metadata_and_the_runner():
         names = tar.getnames()
     assert "harbor/agents/terminus_2/terminus_2.py" in names
     assert any(n.endswith(".dist-info/METADATA") for n in names)
-    assert "terminus_runner.py" in names
+    assert Path(terminus_sandbox.RUNNER).name in names
 
 
 class _Sandbox:

@@ -12,7 +12,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 
-from miles_ext.harbor import context_exit, sandbox_agent
+from miles_ext.harnesses import common
+from miles_ext.harnesses.mini_swe_agent import context_exit
 from miles_ext.recipes.recipe import DEEPSEEK_RETAIN_RATIO
 
 NAME = "deepseek-sandbox"
@@ -181,7 +182,7 @@ def outcome(events: str, reply_cap: int) -> str | Exception | None:
     return NonZeroAgentExitCodeError(f"dsh turn ended {reason.get('kind')}: {error.get('message', '')}"[:4000])
 
 
-class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
+class SandboxDeepSeek(common.PublicSetup, BaseInstalledAgent):
     def __init__(
         self,
         *args,
@@ -203,16 +204,16 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         return NAME
 
     async def install(self, environment: BaseEnvironment) -> None:
-        # safe to repeat: each step skips what is already in place (as SandboxMiniSweAgent's install retries)
-        for attempt in range(1, sandbox_agent.INSTALL_ATTEMPTS + 1):
+        # safe to repeat: each step skips what is already in place (as mini-swe-agent's install retries)
+        for attempt in range(1, common.INSTALL_ATTEMPTS + 1):
             try:
                 await self.exec_as_root(environment, command=ROOT_INSTALL, env={"DEBIAN_FRONTEND": "noninteractive"})
                 return await self.exec_as_agent(environment, command=AGENT_INSTALL)
             except NonZeroAgentExitCodeError as e:
-                if attempt == sandbox_agent.INSTALL_ATTEMPTS:
+                if attempt == common.INSTALL_ATTEMPTS:
                     raise
                 self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
-                await asyncio.sleep(sandbox_agent.INSTALL_BACKOFF_SECS * attempt)
+                await asyncio.sleep(common.INSTALL_BACKOFF_SECS * attempt)
 
     async def _upload(self, environment: BaseEnvironment, name: str, text: str) -> str:
         with tempfile.NamedTemporaryFile("w") as f:

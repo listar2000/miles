@@ -13,11 +13,11 @@ DeepSeek-V4.1 ProgramBench eval did). Terminus-2's own trigger is relative ("few
 (compact at e.g. 128k) and room to spare.
 
 ## Decision
-- **`taskset.harness: terminus-2-sandbox`** (`miles_ext/harbor/terminus_sandbox.py`). Like
+- **`taskset.harness: terminus-2-sandbox`** (`miles_ext/harnesses/terminus/sandbox.py`). Like
   mini-swe-agent-sandbox, the whole agent runs in the sandbox and only model calls leave it, through the
   session tunnel and the agent-phase allowlist (ext-009). Setup runs with public network
-  (`sandbox_agent.PublicSetup`, shared with mini-swe-agent-sandbox), so it works on no-network tasks.
-- **The unchanged `Terminus2` class runs there.** `terminus_runner.py` gives it `LocalEnvironment`, which
+  (`harnesses.common.PublicSetup`, shared with mini-swe-agent-sandbox), so it works on no-network tasks.
+- **The unchanged `Terminus2` class runs there.** `harnesses/terminus/runner.py` gives it `LocalEnvironment`, which
   runs its commands as local processes. The rollout image's own Harbor (`harbor` package and dist-info)
   is copied in as a tarball, so both sides run the same commit, and a uv venv at `/opt/miles-terminus` gets
   the image's Python minor version and Terminus-2's import-time dependencies pinned to the image's versions
@@ -45,8 +45,8 @@ DeepSeek-V4.1 ProgramBench eval did). Terminus-2's own trigger is relative ("few
   trainer asserts at `rollout.py`'s micro-batch check on the first step (smoke run smoke-t2-pr119-2).
 
 ## How it is applied
-`miles_ext/harbor/terminus_sandbox.py`, `terminus_runner.py`, `agent_function.py` (binding, tunnel),
-`sandbox_agent.py` (`PublicSetup`), `miles_ext/recipes/recipe.py` (harness, key, env, v2 flag); recipe
+`miles_ext/harnesses/terminus/sandbox.py`, `runner.py`, `agent_function.py` (binding, tunnel),
+`miles_ext/harnesses/common.py` (`PublicSetup`), `miles_ext/recipes/recipe.py` (harness, key, env, v2 flag); recipe
 `qwen35-9b-swegym8-terminus.yaml` and its golden; tests in `miles_ext/tests/test_terminus_sandbox.py`.
 Verify with that recipe's smoke run: trials reach `Submitted`, `terminus-2-sandbox.result.json` is in
 each trial's agent dir, and with compaction W&B shows `rollout/num_training_samples` above

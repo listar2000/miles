@@ -9,8 +9,8 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
 from miles_ext.harbor import agent_function as af
-from miles_ext.harbor import context_exit
-from miles_ext.harbor import deepseek_sandbox as ds
+from miles_ext.harnesses.deepseek import sandbox as ds
+from miles_ext.harnesses.mini_swe_agent import context_exit
 from miles_ext.recipes import recipe as R
 
 SESSION = "http://10.0.0.1:30000/sessions/s/v1"
@@ -94,7 +94,7 @@ def test_agent_phase_allows_the_session_tunnel_host(monkeypatch):
     monkeypatch.setenv("MILES_SESSION_PUBLIC_URL", PUBLIC)
     config = af.build_trial_config({"instance_id": "x"}, SESSION, {})
     assert config.agent.extra_allowed_hosts == ["abc123.r9.modal.host"]
-    assert config.agent.import_path == "miles_ext.harbor.deepseek_sandbox:SandboxDeepSeek"
+    assert config.agent.import_path == "miles_ext.harnesses.deepseek.sandbox:SandboxDeepSeek"
 
 
 def _events(*events):

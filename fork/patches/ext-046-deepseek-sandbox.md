@@ -8,13 +8,13 @@ reference for a DeepSeek harness is prime-rl's `verifiers/v1/harnesses/deepseek`
 (`PrimeIntellect-ai/verifiers@60290d43`), which runs dsh in the sandbox.
 
 ## Decision
-- **`taskset.harness: deepseek-sandbox`** (`miles_ext/harbor/deepseek_sandbox.py`) runs the pinned
+- **`taskset.harness: deepseek-sandbox`** (`miles_ext/harnesses/deepseek/sandbox.py`) runs the pinned
   DeepSeek Harness CLI, `@deepseek-ai/dsh@0.2.1-rc.3` (the release verifiers pins), unchanged.
   Like the other harnesses, only its own version is pinned; its npm dependencies resolve at install.
   - Rejected: a checked-in lockfile (exact installs, but ~10k lines to regenerate on every bump, and
     no other harness here or in verifiers locks its dependencies).
   Like the other in-sandbox harnesses, only model calls leave the sandbox (session tunnel,
-  ext-009) and setup gets public network (`sandbox_agent.PublicSetup`).
+  ext-009) and setup gets public network (`harnesses.common.PublicSetup`).
 - **The same composition as verifiers**: dsh's `sdk-minimal` profile (persistent bash, a
   working-directory tool, JSONL session, `compaction-basic`), with its SDK front door and
   DeepSeek's telemetry rows disabled. Verifiers puts its ACP bridge in the front door's place;
@@ -48,7 +48,7 @@ reference for a DeepSeek harness is prime-rl's `verifiers/v1/harnesses/deepseek`
   dsh has no step cap; `agent.max_steps` does not apply, `agent.timeout` does.
 
 ## How it is applied
-`miles_ext/harbor/deepseek_sandbox.py`, `agent_function.py` (binding: `DEEPSEEK_BASE_URL` = the
+`miles_ext/harnesses/deepseek/sandbox.py`, `agent_function.py` (binding: `DEEPSEEK_BASE_URL` = the
 session root, dsh appends `/v1/messages`), `miles_ext/recipes/recipe.py` (harness,
 `COMPACTING_HARNESSES`, validation); recipe `qwen35-9b-swegym8-deepseek.yaml` and its golden;
 tests in `miles_ext/tests/test_deepseek_sandbox.py`. Install: curl as root, then Node 22 from

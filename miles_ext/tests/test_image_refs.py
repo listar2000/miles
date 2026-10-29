@@ -5,7 +5,7 @@
 
 import pytest
 
-from miles_ext.harbor.image_refs import digest_only
+from miles_ext.sandboxes.image_refs import digest_only
 
 DIGEST = "sha256:" + "f" * 64
 TAGGED = f"harborframework/terminal-bench:freight-dispatch-shift-environment-b8a25b24cf23c8d7@{DIGEST}"

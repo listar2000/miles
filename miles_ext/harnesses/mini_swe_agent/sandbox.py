@@ -8,9 +8,9 @@ agent class (context_exit.py) to the agent's environment and runs mini-swe-agent
 with it, and records mini-swe-agent's exit status in the agent metadata.
 
 The pinned Harbor runs agent setup under the task's own network policy, so on a
-no-network task the install cannot reach PyPI or astral.sh. ``setup`` opens
-public network for the install only and restores the task's policy before the
-agent runs, as the platform's evals do (mobius-platform
+no-network task the install cannot reach PyPI or astral.sh. ``setup``
+(``harnesses.common.PublicSetup``) opens public network for the install only
+and restores the task's policy before the agent runs, as the platform's evals do (mobius-platform
 programs/harbor-eval/patches/harness/setup.py). A task that is already public
 is set up unchanged.
 """
@@ -25,14 +25,9 @@ from harbor.agents.installed import mini_swe_agent as stock
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.task.config import NetworkMode, NetworkPolicy
 
-from miles_ext.harbor import context_exit
-
-_PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)
-
-INSTALL_ATTEMPTS = 4
-INSTALL_BACKOFF_SECS = 15  # waits 15, 30, 45 s between attempts
+from miles_ext.harnesses import common
+from miles_ext.harnesses.mini_swe_agent import context_exit
 
 _UV_PATH = 'if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; else export PATH="$HOME/.local/bin:$PATH"; fi; '
 TASK_FILE = "/tmp/mswea-task.md"
@@ -44,23 +39,7 @@ _RUN_FROM_FILE = (
 )
 
 
-class PublicSetup:
-    """Mixin for an in-sandbox harness: Harbor's agent setup runs with public network, then the task's policy
-    is restored (module docstring). Also used by ``terminus_sandbox.SandboxTerminus2``."""
-
-    async def setup(self, environment: BaseEnvironment) -> None:
-        baseline = environment.network_policy
-        if baseline == _PUBLIC:
-            return await super().setup(environment)
-        await environment.set_network_policy(_PUBLIC)
-        try:
-            await super().setup(environment)
-        finally:
-            # failure to restore must abort the trial, never start a solver online
-            await environment.set_network_policy(baseline)
-
-
-class SandboxMiniSweAgent(PublicSetup, stock.MiniSweAgent):
+class SandboxMiniSweAgent(common.PublicSetup, stock.MiniSweAgent):
     @staticmethod
     def name() -> str:
         return "mini-swe-agent-sandbox"
@@ -99,14 +78,14 @@ class SandboxMiniSweAgent(PublicSetup, stock.MiniSweAgent):
 
     async def _install_with_retries(self, environment: BaseEnvironment) -> None:
         # safe to repeat: each stock install step skips what is already in place
-        for attempt in range(1, INSTALL_ATTEMPTS + 1):
+        for attempt in range(1, common.INSTALL_ATTEMPTS + 1):
             try:
                 return await super().install(environment)
             except NonZeroAgentExitCodeError as e:
-                if attempt == INSTALL_ATTEMPTS:
+                if attempt == common.INSTALL_ATTEMPTS:
                     raise
                 self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
-                await asyncio.sleep(INSTALL_BACKOFF_SECS * attempt)
+                await asyncio.sleep(common.INSTALL_BACKOFF_SECS * attempt)
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         # Harbor's run renders the prompt template before building the command; the needle below must match

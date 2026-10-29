@@ -59,7 +59,7 @@ AGENT_FUNCTION_MODES = {
 # miles_ext (the pinned Harbor predates it), loaded by import path
 SANDBOX_PROVIDERS = ("modal", "sail")
 BACKENDS = ("fsdp", "megatron")
-SAIL_IMPORT_PATH = "miles_ext.harbor.sail:SailEnvironment"
+SAIL_IMPORT_PATH = "miles_ext.sandboxes.sail:SailEnvironment"
 
 GPUS_PER_NODE = 8
 SESSION_PORT, SESSION_WORKERS = 30000, 32  # session servers listen on 30000..30031

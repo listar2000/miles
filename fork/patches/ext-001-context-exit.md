@@ -7,7 +7,7 @@ such turns (usually 0 tokens) it exits `RepeatedFormatError`. In dsv41-tb4-overf
 in -3), with reward ~0.04, and Miles saw them as ordinary `Submitted` samples.
 
 ## Decision
-A mini-swe-agent agent class, `miles_ext/harbor/context_exit.py:ContextExitAgent` (a subclass of `InteractiveAgent`, the
+A mini-swe-agent agent class, `miles_ext/harnesses/mini_swe_agent/context_exit.py:ContextExitAgent` (a subclass of `InteractiveAgent`, the
 class `mini` uses by default), selected with mini-swe-agent's own `--agent-class` option. The alternatives lost:
 - Rewriting mini-swe-agent's `default.py` at install time, as Harbor's own output-cap and step-timing patches do. That
   edits installed dependency code, which fork/README.md keeps out of this repo.

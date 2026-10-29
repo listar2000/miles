@@ -17,7 +17,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 
-from miles_ext.harbor import sandbox_agent, terminus_runner
+from miles_ext.harnesses import common
+from miles_ext.harnesses.terminus import runner as terminus_runner
 
 NAME = "terminus-2-sandbox"
 PREFIX = "/opt/miles-terminus"
@@ -101,7 +102,7 @@ def raised(kind: str, message: str) -> Exception:
     return cls(message)
 
 
-class SandboxTerminus2(sandbox_agent.PublicSetup, BaseInstalledAgent):
+class SandboxTerminus2(common.PublicSetup, BaseInstalledAgent):
     SUPPORTS_ATIF = True
 
     def __init__(
@@ -134,15 +135,15 @@ class SandboxTerminus2(sandbox_agent.PublicSetup, BaseInstalledAgent):
             f.write(bundle())
             f.flush()
             await environment.upload_file(f.name, BUNDLE)
-        # safe to repeat: each step skips what is already in place (as SandboxMiniSweAgent's install retries)
-        for attempt in range(1, sandbox_agent.INSTALL_ATTEMPTS + 1):
+        # safe to repeat: each step skips what is already in place (as mini-swe-agent's install retries)
+        for attempt in range(1, common.INSTALL_ATTEMPTS + 1):
             try:
                 return await self.exec_as_root(environment, command=install_script())
             except NonZeroAgentExitCodeError as e:
-                if attempt == sandbox_agent.INSTALL_ATTEMPTS:
+                if attempt == common.INSTALL_ATTEMPTS:
                     raise
                 self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
-                await asyncio.sleep(sandbox_agent.INSTALL_BACKOFF_SECS * attempt)
+                await asyncio.sleep(common.INSTALL_BACKOFF_SECS * attempt)
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         config = {

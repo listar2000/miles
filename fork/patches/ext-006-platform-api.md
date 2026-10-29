@@ -35,7 +35,7 @@ adversarial review (https://claude.ai/artifact/RVodMdDTRvXQ9z3mSNAtud).
   `App.lookup` in the target's environment, never created; Sail `App.list`
   filtered by equality, never minted. Sail has no environment or project in its
   SDK; the org of `SAIL_API_KEY` is the scope. The launcher's exit cleanup uses
-  the same adapters (the Sail helper moved here from `miles_ext/harbor/sail`).
+  the same adapters (the Sail helper moved here from `miles_ext/sandboxes/sail`).
   The SDK has no public app stop; teardown does what `modal app stop` does.
 - **R7 secret** (`secrets.py`): created by the caller from the credential pool,
   only `WANDB_API_KEY`, `HF_TOKEN`, `SAIL_API_KEY`; Sail runs require the Sail

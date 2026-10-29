@@ -119,7 +119,7 @@ evidence is a GPU run on the patched image beside the same run without it.
 
 When the code you need exists upstream only at a newer version:
 
-1. Copy the file byte for byte into `miles_ext/` (e.g. `miles_ext/harbor/<name>/`).
+1. Copy the file byte for byte into `miles_ext/` (e.g. `miles_ext/sandboxes/<name>/`).
 2. Add an entry to `fork/vendored.json`: source repo, commit, upstream path,
    git blob (`git hash-object <file>`), the fork id, `remove_when`.
 3. Put every adaptation in a subclass or wrapper next to it. Never edit the

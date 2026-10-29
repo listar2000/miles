@@ -6,7 +6,7 @@ import pytest
 from harbor.environments.modal import ModalEnvironment as Upstream
 from harbor.models.task.config import NetworkMode, NetworkPolicy
 
-from miles_ext.harbor import modal_env
+from miles_ext.sandboxes import modal_env
 
 NONE = NetworkPolicy(network_mode=NetworkMode.NO_NETWORK)
 PUBLIC = NetworkPolicy(network_mode=NetworkMode.PUBLIC)

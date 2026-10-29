@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-_SRC = Path(__file__).resolve().parents[1] / "harbor" / "context_exit.py"
+_SRC = Path(__file__).resolve().parents[1] / "harnesses" / "mini_swe_agent" / "context_exit.py"
 
 
 class InterruptAgentFlow(Exception):

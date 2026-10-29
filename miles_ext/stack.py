@@ -33,7 +33,7 @@ SGLANG_COMMIT = "3a938213c1"
 HARBOR_REPO = "https://github.com/harbor-framework/harbor"
 HARBOR_COMMIT = "917b3c1be7cf6553a7a9fe25de8adb6f8e639287"
 MINI_SWE_AGENT_VERSION = "2.4.6"
-# Sail SDK for the vendored Sail provider (miles_ext/harbor/sail), pinned
+# Sail SDK for the vendored Sail provider (miles_ext/sandboxes/sail), pinned
 # exactly: the vendored file imports SDK internals (sail._core_client, sail.image)
 SAIL_SDK_VERSION = "0.13.0"
 

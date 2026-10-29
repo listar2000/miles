@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from harbor.models.agent.context import AgentContext
 
 from miles_ext.harbor import agent_function as af
-from miles_ext.harbor import context_exit
-from miles_ext.harbor.sandbox_agent import SandboxMiniSweAgent
+from miles_ext.harnesses.mini_swe_agent import context_exit
+from miles_ext.harnesses.mini_swe_agent.sandbox import SandboxMiniSweAgent
 
 
 def _agent(tmp_path):

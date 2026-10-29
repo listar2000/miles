@@ -1,7 +1,7 @@
 """Harbor's Terminus-2 run inside the task sandbox, against local processes (ext-045, see its patch page).
 
-    python terminus_runner.py setup          # as root: install tmux with Terminus-2's own installer
-    python terminus_runner.py run CONFIG     # as the agent: one Terminus-2 run; writes CONFIG["result_path"]
+    python runner.py setup          # as root: install tmux with Terminus-2's own installer
+    python runner.py run CONFIG     # as the agent: one Terminus-2 run; writes CONFIG["result_path"]
 """
 
 import asyncio

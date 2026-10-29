@@ -25,11 +25,11 @@ image. Code reaches the image in one way only: as a commit of this repo
 | --- | --- | --- |
 | A different algorithm setting (estimator, clipping, loss, KL, staleness, filters) | recipe `algorithm.*` fields | nothing new |
 | A new loss | Miles' `--loss-type custom_loss` with `--custom-loss-function-path`. `algorithm.loss` allows only `policy_loss` and `score_centering` today, so this also needs a new recipe field (an Ext change to `recipe.py`) | `miles_ext/<area>/` |
-| A new agent harness | a new `taskset.harness` value in `HARNESSES` (`miles_ext/recipes/recipe.py`) and the agent function it maps to (today: mini-swe-agent in the sandbox or on the host, Terminus-2 and DeepSeek's dsh in the sandbox, and `single-turn`) | `miles_ext/harbor/` or a new `miles_ext/<harness>/` |
+| A new agent harness | a new `taskset.harness` value in `HARNESSES` (`miles_ext/recipes/recipe.py`) and the agent function it maps to (today: mini-swe-agent in the sandbox or on the host, Terminus-2 and DeepSeek's dsh in the sandbox, and `single-turn`) | a new `miles_ext/harnesses/<harness>/` (its Harbor agent class, pins and assets; `harnesses/common.py` has the in-sandbox setup) |
 | A new reward for agent tasks | the task's own Harbor verifier (its tests). `miles_ext/harbor/reward.py` just passes Harbor's verdict on | the task set (yours) |
 | A new single-turn task type | a verifier in `VERIFIERS` (`miles_ext/tasks/single_turn.py`) | `miles_ext/tasks/` |
 | A new task set | Harbor task dirs plus a prompt file | your project; `taskset.tasks_volume` to keep it on a Modal volume |
-| A new sandbox provider | Harbor environment through `import_path` | `miles_ext/harbor/`; see `docs/developer/adding-a-sandbox-provider.md` |
+| A new sandbox provider | Harbor environment through `import_path` | `miles_ext/sandboxes/`; see `docs/developer/adding-a-sandbox-provider.md` |
 | A new model | a preset in `miles_ext/recipes/presets.py` | maintainers: open an issue first |
 
 Miles' own extension points and their signatures are documented upstream in

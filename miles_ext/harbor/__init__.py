@@ -1,1 +1,1 @@
-"""Harbor-backed agentic rollouts: agent function, harnesses, reward, session proxy."""
+"""Harbor as the trial runner: agent function, trial processes, task hashes, reward, session proxy."""

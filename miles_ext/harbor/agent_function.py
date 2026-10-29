@@ -12,7 +12,7 @@ recipe), falling back to the row's ``metadata.agent_name``:
 
 mini-swe-agent-sandbox
     Harbor's stock mini-swe-agent runs *inside* the task sandbox
-    (``sandbox_agent.SandboxMiniSweAgent``; task images have it preinstalled).
+    (``harnesses.mini_swe_agent.sandbox.SandboxMiniSweAgent``; task images have it preinstalled).
     Its model calls reach the session server through the launcher's Modal
     tunnel: ``MILES_SESSION_PUBLIC_URL`` is ``<tunnel-url>/<token>`` and each
     session URL ``http://<head-ip>:<port>/...`` becomes ``<public>/<port>/...``
@@ -21,16 +21,16 @@ mini-swe-agent-sandbox
     agent gets no other network; Harbor ignores the entry on a public task.
 mini-swe-agent-host
     The mini-swe-agent loop runs in this process and executes each command in
-    the sandbox (``host_agent.HostMiniSweAgent``); no tunnel needed.
+    the sandbox (``harnesses.mini_swe_agent.host.HostMiniSweAgent``); no tunnel needed.
 terminus-2-sandbox
     Harbor's Terminus-2 runs inside the task sandbox
-    (``terminus_sandbox.SandboxTerminus2``, ext-045) with upstream's terminus-2
+    (``harnesses.terminus.sandbox.SandboxTerminus2``, ext-045) with upstream's terminus-2
     kwargs, reaching the model through the tunnel as mini-swe-agent-sandbox
     does. ``MILES_EXT_COMPACT_AT_TOKENS`` (recipe ``agent.compact_at_tokens``)
     turns on its summarization at that many context tokens.
 deepseek-sandbox
     DeepSeek's own agent, the pinned DeepSeek Harness CLI, runs inside the task
-    sandbox (``deepseek_sandbox.SandboxDeepSeek``, ext-046) and calls the
+    sandbox (``harnesses.deepseek.sandbox.SandboxDeepSeek``, ext-046) and calls the
     session server's Anthropic Messages route through the tunnel.
     ``MILES_EXT_COMPACT_AT_TOKENS`` turns on its compaction as for terminus.
 
@@ -39,7 +39,7 @@ Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
 Sandbox provider: ``HARBOR_ENV_TYPE`` (a Harbor ``EnvironmentType``, read by
 upstream) or ``HARBOR_ENV_IMPORT_PATH`` (an environment class Harbor loads by
 import path, for providers the pinned Harbor lacks, e.g.
-``miles_ext.harbor.sail:SailEnvironment``). Upstream's ``_environment_config``
+``miles_ext.sandboxes.sail:SailEnvironment``). Upstream's ``_environment_config``
 only knows the first, so this module replaces it on the loaded upstream
 module; with no import path set it delegates unchanged.
 Both mini-swe-agent harnesses use the same settings: mini.yaml templates, swebench.yaml shell env (in-sandbox cwd
@@ -63,7 +63,9 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import context_exit, deepseek_sandbox, task_hash, trial_procs, upstream
+from miles_ext.harbor import task_hash, trial_procs, upstream
+from miles_ext.harnesses.deepseek import sandbox as deepseek_sandbox
+from miles_ext.harnesses.mini_swe_agent import context_exit
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes import recipe as R
 
@@ -75,10 +77,10 @@ SANDBOX_HARNESS, HOST_HARNESS, TERMINUS_SANDBOX_HARNESS = R.HARNESS_SANDBOX, R.H
 DEEPSEEK_SANDBOX_HARNESS = R.HARNESS_DEEPSEEK_SANDBOX
 # Harbor resolves agents it does not know by import path
 _IMPORT_PATHS = {
-    SANDBOX_HARNESS: "miles_ext.harbor.sandbox_agent:SandboxMiniSweAgent",
-    HOST_HARNESS: "miles_ext.harbor.host_agent:HostMiniSweAgent",
-    TERMINUS_SANDBOX_HARNESS: "miles_ext.harbor.terminus_sandbox:SandboxTerminus2",
-    DEEPSEEK_SANDBOX_HARNESS: "miles_ext.harbor.deepseek_sandbox:SandboxDeepSeek",
+    SANDBOX_HARNESS: "miles_ext.harnesses.mini_swe_agent.sandbox:SandboxMiniSweAgent",
+    HOST_HARNESS: "miles_ext.harnesses.mini_swe_agent.host:HostMiniSweAgent",
+    TERMINUS_SANDBOX_HARNESS: "miles_ext.harnesses.terminus.sandbox:SandboxTerminus2",
+    DEEPSEEK_SANDBOX_HARNESS: "miles_ext.harnesses.deepseek.sandbox:SandboxDeepSeek",
 }
 COMPACT_ENV = "MILES_EXT_COMPACT_AT_TOKENS"
 
@@ -86,7 +88,7 @@ COMPACT_ENV = "MILES_EXT_COMPACT_AT_TOKENS"
 @functools.cache
 def _swebench_environment() -> dict[str, Any]:
     """swebench.yaml's environment section; read once (every trial config uses it, on the rollout loop)."""
-    from miles_ext.harbor.host_agent import load_builtin_config
+    from miles_ext.harnesses.mini_swe_agent.host import load_builtin_config
 
     return load_builtin_config("benchmarks/swebench.yaml").get("environment", {})
 
@@ -188,7 +190,7 @@ def _environment_config():
 def _provider_config():
     import_path = os.getenv("HARBOR_ENV_IMPORT_PATH", "").strip()
     if not import_path:
-        from miles_ext.harbor import modal_env
+        from miles_ext.sandboxes import modal_env
 
         config = _upstream_environment_config()
         if config.type is not None and config.type.value == modal_env.REPLACES_TYPE:  # ext-041

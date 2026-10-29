@@ -56,7 +56,7 @@ def inner_import_path() -> str:
     from harbor.environments.factory import _ENVIRONMENT_REGISTRY
     from harbor.models.environment_type import EnvironmentType
 
-    from miles_ext.harbor import modal_env
+    from miles_ext.sandboxes import modal_env
 
     env_type = os.environ["HARBOR_ENV_TYPE"].strip().lower()
     if env_type == modal_env.REPLACES_TYPE:  # ext-041: the agent function runs the fork's Modal class
