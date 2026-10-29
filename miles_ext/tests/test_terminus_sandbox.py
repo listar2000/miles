@@ -72,6 +72,28 @@ def test_compaction_is_refused_where_it_cannot_work(spec, error):
         R.validate(recipe, local_inputs=False)
 
 
+def test_response_length_policy_reaches_the_binding():
+    assert "HARBOR_RESPONSE_LENGTH_POLICY" not in R.harbor_env(_recipe(), "run1")
+    recipe = _recipe(response_length_policy="regenerate")
+    R.validate(recipe, local_inputs=False)
+    assert R.harbor_env(recipe, "run1")["HARBOR_RESPONSE_LENGTH_POLICY"] == "regenerate"
+    other = R.from_dict({**BASE, "agent": {"response_length_policy": "regenerate"}})
+    with pytest.raises(ValueError, match="needs taskset.harness"):
+        R.validate(other, local_inputs=False)
+
+
+def test_a_salvaged_reply_comes_back_as_a_response():
+    from harbor.llms.base import LLMResponse
+
+    class Fake:
+        async def _query_llm(self, salvaged):
+            return "<response>ok</response>" if salvaged else LLMResponse(content="full")
+
+    terminus_runner._salvaged_replies_as_responses(Fake)
+    assert asyncio.run(Fake()._query_llm(True)).content == "<response>ok</response>"
+    assert asyncio.run(Fake()._query_llm(False)).content == "full"
+
+
 def _agent(tmp_path, **kwargs):
     return SandboxTerminus2(
         logs_dir=tmp_path,

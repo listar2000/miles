@@ -70,10 +70,25 @@ async def setup() -> int:
     return probe.return_code
 
 
+def _salvaged_replies_as_responses(terminus_cls) -> None:
+    """Terminus-2 at our Harbor pin returns a reply salvaged from one cut off at max_tokens as a bare str,
+    and its caller reads ``.content`` (AttributeError: the trial ends as AgentError). Wrap it."""
+    from harbor.llms.base import LLMResponse
+
+    query = terminus_cls._query_llm
+
+    async def _query_llm(self, *args, **kwargs):
+        response = await query(self, *args, **kwargs)
+        return LLMResponse(content=response) if isinstance(response, str) else response
+
+    terminus_cls._query_llm = _query_llm
+
+
 async def run(config_path: str) -> int:
     from harbor.agents.terminus_2 import Terminus2
     from harbor.models.agent.context import AgentContext
 
+    _salvaged_replies_as_responses(Terminus2)
     config = json.loads(Path(config_path).read_text())
     agent = Terminus2(logs_dir=Path(config["logs_dir"]), model_name=config["model_name"], **config["kwargs"])
     env = LocalEnvironment(config["session_id"])

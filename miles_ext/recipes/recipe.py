@@ -108,6 +108,9 @@ DEFAULTS: dict[str, Any] = {
         "context_exhausted_scores_zero": True,
         # terminus-2-sandbox: summarize the context once it holds this many tokens (ext-045; runs session server v2)
         "compact_at_tokens": None,
+        # terminus-2-sandbox: what Terminus-2 does with a reply cut off at max_response_len ("abort" ends the
+        # trial, "regenerate" re-asks for a shorter reply twice, then aborts); None: the upstream binding's "abort"
+        "response_length_policy": None,
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -296,6 +299,7 @@ FIELD_RULES: dict[str, dict] = {
     "agent.setup_timeout": {"type": "int", "min": 1},
     "agent.cwd": {"type": "str", "nullable": True},
     "agent.compact_at_tokens": {"type": "int", "nullable": True, "min": 1},
+    "agent.response_length_policy": {"type": "str", "nullable": True, "enum": ("abort", "regenerate")},
     "sandbox.provider": {"type": "str", "enum": SANDBOX_PROVIDERS},
     "sandbox.lifetime_secs": {"type": "int", "min": 60},
     "sandbox.idle_secs": {"type": "int", "min": 1},
@@ -461,6 +465,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
                 "agent.compact_at_tokens + algorithm.max_response_len must fit algorithm.max_seq_len "
                 "(the turn after the last check still has to fit)"
             )
+    if recipe["agent"]["response_length_policy"] and taskset["harness"] != HARNESS_TERMINUS_SANDBOX:
+        raise ValueError(f"agent.response_length_policy needs taskset.harness {HARNESS_TERMINUS_SANDBOX}")
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
@@ -822,6 +828,8 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         # Terminus-2's context limit (its compaction and context checks) and reply cap; upstream's defaults are 32k/8k
         env["AGENT_MAX_INPUT_TOKENS"] = str(recipe["algorithm"]["max_seq_len"])
         env["AGENT_MAX_OUTPUT_TOKENS"] = str(recipe["algorithm"]["max_response_len"])
+        if agent["response_length_policy"]:
+            env["HARBOR_RESPONSE_LENGTH_POLICY"] = agent["response_length_policy"]
         if compacts(recipe):
             env["MILES_EXT_COMPACT_AT_TOKENS"] = str(agent["compact_at_tokens"])
             env["HARBOR_TERMINUS_2_LINEAR_HISTORY"] = "true"

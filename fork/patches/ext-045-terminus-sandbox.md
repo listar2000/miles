@@ -33,6 +33,12 @@ DeepSeek-V4.1 ProgramBench eval did). Terminus-2's own trigger is relative ("few
   `/logs/agent/terminus-2-sandbox.result.json`; the host raises an exception of the same class name
   (Harbor's own class when it has one), so upstream's mapping (`SingleTurnMaxSeqLenExceededError` ->
   `SequenceLengthLimitExceeded`, the rest -> `AgentError`) works as for host terminus-2.
+- **Cut-off replies.** At our pin, Terminus-2 returns a reply salvaged from one cut off at `max_tokens` as
+  a bare `str` where its caller reads `.content`, so the trial ends as `AgentError`; the runner wraps it in
+  an `LLMResponse`. `agent.response_length_policy` (default None: the binding's `abort`) sets
+  `HARBOR_RESPONSE_LENGTH_POLICY`; `regenerate` re-asks for a shorter reply twice before aborting. A
+  DeepSeek-V4.1 ProgramBench run (thinking on, 32k replies) lost 23 of 200 trials in 20 minutes to these
+  two paths.
 - **`agent.compact_at_tokens`** (default None: off). Set, Terminus-2 summarizes once its context holds
   that many tokens (`proactive_summarization_threshold = max_input_tokens - compact_at_tokens`), with
   `AGENT_MAX_INPUT_TOKENS = algorithm.max_seq_len`. One key derives the rest: summarization on, linear
