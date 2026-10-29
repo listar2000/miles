@@ -1,7 +1,4 @@
-"""deepseek-sandbox (ext-046): DeepSeek's own agent (dsh) inside the task sandbox:
-
-    python -m pytest miles_ext/tests/test_deepseek_sandbox.py
-"""
+"""deepseek-sandbox (ext-046): DeepSeek's own agent (dsh) inside the task sandbox."""
 
 import asyncio
 import json
@@ -175,3 +172,14 @@ def test_a_full_window_ends_the_run_for_the_verifier(tmp_path):
     context = AgentContext()
     asyncio.run(_agent(tmp_path).run("x", _Sandbox(_events(_step(430), _turn_end({"kind": "max-tokens"}))), context))
     assert context.metadata[ds.AGENT_EXIT_STATUS] == context_exit.EXIT_STATUS  # no raise: the verifier runs
+
+
+def test_install_runs_npm_ci_of_the_pinned_lockfile(tmp_path):
+    sandbox = _Sandbox("")
+    asyncio.run(_agent(tmp_path).install(sandbox))
+    assert sandbox.uploads[f"{ds.FILES}/package-lock.json"] == (ds.NPM / "package-lock.json").read_text()
+    lock = json.loads(sandbox.uploads[f"{ds.FILES}/package-lock.json"])
+    assert lock["packages"]["node_modules/@deepseek-ai/dsh"]["version"] == "0.2.1-rc.3"
+    script = next(c for c in sandbox.commands if "npm ci" in c)
+    # a different lockfile installs afresh instead of reusing what an earlier install left
+    assert f".ready-{ds.LOCK_HASH}" in script and "npm install" not in script
