@@ -41,7 +41,7 @@ a recipe.
   the run to session server v2 ([ext-045](../patches/ext-045-terminus-sandbox.md),
   [ext-046](../patches/ext-046-deepseek-sandbox.md)).
 - deepseek-sandbox: no step cap (`agent.max_steps` is ignored), no images, glibc task images or
-  Alpine's own Node; each sandbox installs Node and dsh (about 2 min) unless the image has them
+  Alpine's own Node; each sandbox installs Node and dsh (about a minute)
   ([ext-046](../patches/ext-046-deepseek-sandbox.md)).
 - Sandboxes are Modal or Sail. Each has its own capacity, and a provider that is
   slow to start shows up as setup timeouts ([running.md](running.md)).
