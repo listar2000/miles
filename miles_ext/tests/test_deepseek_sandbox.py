@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
-from harbor.llms.base import MaxSeqLenExceededError, SingleTurnMaxSeqLenExceededError
+from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
 from miles_ext.harbor import agent_function as af
+from miles_ext.harbor import context_exit
 from miles_ext.harbor import deepseek_sandbox as ds
 from miles_ext.recipes import recipe as R
 
@@ -108,24 +109,32 @@ def _turn_end(reason):
 
 
 STEP = {"type": "status", "phase": "step_end", "usage": {"inputTokens": 10, "outputTokens": 3}}
+CAP = 4096
+
+
+def _step(output):
+    return {"type": "status", "phase": "step_end", "usage": {"inputTokens": 261712, "outputTokens": output}}
 
 
 @pytest.mark.parametrize(
-    "reason, error",
+    "steps, reason, expected",
     [
-        ({"kind": "completed"}, None),
-        ({"kind": "max-tokens"}, SingleTurnMaxSeqLenExceededError),  # mapped to SequenceLengthLimitExceeded
-        ({"kind": "error", "error": {"code": "CONTEXT_WINDOW_EXCEEDED"}}, MaxSeqLenExceededError),
-        ({"kind": "error", "error": {"code": "INVALID_REQUEST", "message": "bad"}}, NonZeroAgentExitCodeError),
+        ([STEP], {"kind": "completed"}, None),
+        # the server cut the last reply to the room left in the window: grade the workspace
+        ([STEP, _step(430)], {"kind": "max-tokens"}, context_exit.EXIT_STATUS),
+        ([STEP], {"kind": "error", "error": {"code": "CONTEXT_WINDOW_EXCEEDED"}}, context_exit.EXIT_STATUS),
+        # one reply ran to the recipe's cap: SequenceLengthLimitExceeded, as for terminus
+        ([STEP, _step(CAP)], {"kind": "max-tokens"}, SingleTurnMaxSeqLenExceededError),
+        ([STEP], {"kind": "error", "error": {"code": "INVALID_REQUEST", "message": "bad"}}, NonZeroAgentExitCodeError),
     ],
 )
-def test_turn_end_maps_to_harbor_exceptions(reason, error):
-    exc = ds.raised(_events(STEP, _turn_end(reason)))
-    assert exc is None if error is None else isinstance(exc, error)
+def test_turn_end_maps_to_an_exit(steps, reason, expected):
+    result = ds.outcome(_events(*steps, _turn_end(reason)), CAP)
+    assert result == expected if expected is None or isinstance(expected, str) else isinstance(result, expected)
 
 
 def test_a_run_without_events_fails():
-    assert isinstance(ds.raised("dsh: crashed\n"), NonZeroAgentExitCodeError)
+    assert isinstance(ds.outcome("dsh: crashed\n", CAP), NonZeroAgentExitCodeError)
 
 
 class _Sandbox:
@@ -141,12 +150,16 @@ class _Sandbox:
         return SimpleNamespace(return_code=0, stdout=stdout, stderr="")
 
 
+def _agent(tmp_path):
+    return ds.SandboxDeepSeek(
+        logs_dir=tmp_path, model_name="openai/model", model_info={"max_input_tokens": 32768, "max_output_tokens": CAP}
+    )
+
+
 def test_run_feeds_the_task_on_stdin_and_reports_usage(tmp_path):
     from harbor.models.agent.context import AgentContext
 
-    agent = ds.SandboxDeepSeek(
-        logs_dir=tmp_path, model_name="openai/model", model_info={"max_input_tokens": 32768, "max_output_tokens": 4096}
-    )
+    agent = _agent(tmp_path)
     sandbox, context = _Sandbox(_events(STEP, STEP, _turn_end({"kind": "completed"}))), AgentContext()
     asyncio.run(agent.run("pkill me", sandbox, context))
     assert sandbox.uploads[f"{ds.FILES}/task.md"] == "pkill me"
@@ -154,3 +167,11 @@ def test_run_feeds_the_task_on_stdin_and_reports_usage(tmp_path):
     assert "pkill me" not in launch and f"< {ds.FILES}/task.md" in launch
     assert json.loads(sandbox.uploads[f"{ds.FILES}/patch.json"]) == agent._patch
     assert (context.n_input_tokens, context.n_output_tokens) == (20, 6)
+
+
+def test_a_full_window_ends_the_run_for_the_verifier(tmp_path):
+    from harbor.models.agent.context import AgentContext
+
+    context = AgentContext()
+    asyncio.run(_agent(tmp_path).run("x", _Sandbox(_events(_step(430), _turn_end({"kind": "max-tokens"}))), context))
+    assert context.metadata[ds.AGENT_EXIT_STATUS] == context_exit.EXIT_STATUS  # no raise: the verifier runs

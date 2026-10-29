@@ -17,7 +17,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 
-from miles_ext.harbor import sandbox_agent
+from miles_ext.harbor import context_exit, sandbox_agent
 from miles_ext.recipes.recipe import DEEPSEEK_RETAIN_RATIO
 
 NAME = "deepseek-sandbox"
@@ -29,6 +29,7 @@ BIN = f"{DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
 FILES = "/tmp/miles-deepseek"  # patch, compat shim and task, uploaded per run
 EVENTS = (EnvironmentPaths.agent_dir / "deepseek-sandbox.jsonl").as_posix()  # dsh --json events
 STDERR = (EnvironmentPaths.agent_dir / "deepseek-sandbox.stderr.txt").as_posix()
+AGENT_EXIT_STATUS = "agent_exit_status"  # agent metadata key the agent function reads
 
 # Request fields Miles' Messages adapter rejects (miles/rollout/session/anthropic_adapter.py): dsh always sends
 # `thinking` and an effort, but the policy's chat template decides reasoning; `is_error` on a tool result.
@@ -132,28 +133,35 @@ def patch(model: str, context_window: int, max_output: int, compact_at: int | No
     ]
 
 
-def raised(events: str) -> Exception | None:
-    """The exception a finished dsh run maps to, from its last ``turn_end``: Harbor's own length classes, which
-    the agent function maps to SequenceLengthLimitExceeded, for a cut-off reply or a full context."""
-    from harbor.llms.base import MaxSeqLenExceededError, SingleTurnMaxSeqLenExceededError
+def outcome(events: str, reply_cap: int) -> str | Exception | None:
+    """How a finished dsh run ends, from its last ``turn_end``: None when it completed; ContextExhausted when the
+    context window filled (the server cut the last reply to the room left, or refused the request), so the
+    verifier grades the workspace as for mini-swe-agent's ContextExhausted; else the exception to raise (a reply
+    that hit ``max_tokens`` is Harbor's ``SingleTurnMaxSeqLenExceededError``, mapped to SequenceLengthLimitExceeded).
+    """
+    from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
-    reason = None
+    reason, last_output = None, None
     for line in events.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
+        if event.get("type") == "status" and event.get("phase") == "step_end":
+            last_output = (event.get("usage") or {}).get("outputTokens")
         if event.get("type") == "status" and event.get("phase") == "turn_end":
             reason = event.get("reason") or {}
     if reason is None:
         return NonZeroAgentExitCodeError("dsh ended without a turn_end event")
+    error = reason.get("error") or {}
     if reason.get("kind") == "completed":
         return None
     if reason.get("kind") == "max-tokens":
-        return SingleTurnMaxSeqLenExceededError("dsh reply cut off at max_tokens")
-    error = reason.get("error") or {}
+        if last_output is not None and last_output < reply_cap:
+            return context_exit.EXIT_STATUS
+        return SingleTurnMaxSeqLenExceededError(f"dsh reply hit its max_tokens cap of {reply_cap}")
     if error.get("code") == "CONTEXT_WINDOW_EXCEEDED":
-        return MaxSeqLenExceededError(error.get("message", ""))
+        return context_exit.EXIT_STATUS
     return NonZeroAgentExitCodeError(f"dsh turn ended {reason.get('kind')}: {error.get('message', '')}"[:4000])
 
 
@@ -170,9 +178,9 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         cap). ``max_seq_len`` is what Miles passes every harness; dsh does not use it."""
         super().__init__(*args, **kwargs)
         info = model_info or {}
-        window, output = int(info["max_input_tokens"]), int(info["max_output_tokens"])
+        window, self._reply_cap = int(info["max_input_tokens"]), int(info["max_output_tokens"])
         # Harbor names the model openai/<name>; dsh routes it as a deepseek-official model id
-        self._patch = patch(self.model_name.rpartition("/")[2], window, output, compact_at_tokens)
+        self._patch = patch(self.model_name.rpartition("/")[2], window, self._reply_cap, compact_at_tokens)
 
     @staticmethod
     def name() -> str:
@@ -211,8 +219,12 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         )
         events = (await environment.exec(command=f"cat {shlex.quote(EVENTS)}")).stdout or ""
         context.n_input_tokens, context.n_output_tokens = usage(events)
-        if exc := raised(events):
-            raise exc
+        result = outcome(events, self._reply_cap)
+        if result == context_exit.EXIT_STATUS:
+            # the agent function keeps this status and applies agent.context_exhausted_scores_zero
+            context.metadata = {**(context.metadata or {}), AGENT_EXIT_STATUS: result}
+        elif result is not None:
+            raise result
 
 
 def usage(events: str) -> tuple[int, int]:

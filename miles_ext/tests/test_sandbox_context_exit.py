@@ -28,7 +28,7 @@ def test_exit_status_reaches_agent_metadata(tmp_path):
     assert context.metadata["mswea_exit_status"] == context_exit.EXIT_STATUS
 
 
-def _run(monkeypatch, tmp_path, agent_status):
+def _run(monkeypatch, tmp_path, agent_status, key="mswea_exit_status"):
     """af.run_trial on a stand-in trial the verifier scored 1.0 and whose agent ended with agent_status."""
 
     class _Trial:
@@ -51,7 +51,7 @@ def _run(monkeypatch, tmp_path, agent_status):
             "reward": 1.0,
             "exit_status": "Submitted",
             "eval_report": {},
-            "agent_metrics": {"mswea_exit_status": agent_status},
+            "agent_metrics": {key: agent_status},
         },
     )
     return asyncio.run(af.run_trial("http://h:1/sessions/s", "p", {}, {"instance_id": "t"}))
@@ -67,3 +67,8 @@ def test_context_exhausted_scores_zero_when_switched_on(monkeypatch, tmp_path):
     monkeypatch.setenv("MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO", "1")
     assert _run(monkeypatch, tmp_path, context_exit.EXIT_STATUS)["reward"] == 0.0
     assert _run(monkeypatch, tmp_path, "Submitted")["reward"] == 1.0
+
+
+def test_deepseek_sandbox_reports_context_exhausted_too(monkeypatch, tmp_path):
+    out = _run(monkeypatch, tmp_path, context_exit.EXIT_STATUS, key=af.deepseek_sandbox.AGENT_EXIT_STATUS)
+    assert out["exit_status"] == context_exit.EXIT_STATUS
