@@ -31,9 +31,36 @@ EVENTS = (EnvironmentPaths.agent_dir / "deepseek-sandbox.jsonl").as_posix()  # d
 STDERR = (EnvironmentPaths.agent_dir / "deepseek-sandbox.stderr.txt").as_posix()
 AGENT_EXIT_STATUS = "agent_exit_status"  # agent metadata key the agent function reads
 
-# Request fields Miles' Messages adapter rejects (miles/rollout/session/anthropic_adapter.py): dsh always sends
-# `thinking` and an effort, but the policy's chat template decides reasoning; `is_error` on a tool result.
+# dsh's Messages requests, adapted to Miles' session server:
+# - it drops the request fields Miles' adapter rejects (miles/rollout/session/anthropic_adapter.py): dsh always
+#   sends `thinking` and an effort, but the policy's chat template decides reasoning; `is_error` on a tool result.
+# - it sends them with node:http(s), untimed: the server answers (a fake SSE) only once the whole reply is
+#   generated, and fetch's 300 s headers timeout cut long turns under load ("TRANSPORT"; dsh's 5 retries redo
+#   the whole turn). The trial's agent timeout bounds the wait.
 COMPAT = """\
+import http from "node:http";
+import https from "node:https";
+
+function post(url, init) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const headers = Object.fromEntries(new Headers(init.headers));
+    const request = (target.protocol === "https:" ? https : http).request(
+      target, {method: "POST", headers, signal: init.signal}, (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () => resolve(new Response(Buffer.concat(chunks), {
+          status: response.statusCode,
+          statusText: response.statusMessage,
+          headers: Object.entries(response.headers).flatMap(([k, v]) => [v].flat().map((x) => [k, x])),
+        })));
+      });
+    request.on("error", reject);
+    request.end(init.body);
+  });
+}
+
 const fetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : String(input);
@@ -44,7 +71,7 @@ globalThis.fetch = async (input, init) => {
     for (const message of body.messages ?? [])
       for (const block of Array.isArray(message.content) ? message.content : [])
         if (block.type === "tool_result") delete block.is_error;
-    init = {...init, body: JSON.stringify(body)};
+    return post(url, {...init, body: JSON.stringify(body)});
   }
   return fetch(input, init);
 };
