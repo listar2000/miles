@@ -191,7 +191,7 @@ def build_deps_layer(name: str, dest: Path):
 
 
 def check_image(ref: str) -> None:
-    """Fail unless the pushed image imports SGLang and has every fork marker (before :main moves to it)."""
+    """Cache the pushed image in Modal and fail unless it imports SGLang and has every fork marker."""
     cmd = f"python -c 'import sglang' && cd {stack.MILES_SRC} && python fork/tools/ledger.py markers"
     with modal.enable_output(), app.run():
         sb = modal.Sandbox.create("bash", "-c", cmd, image=modal.Image.from_registry(ref), app=app,
@@ -199,7 +199,7 @@ def check_image(ref: str) -> None:
         sb.wait()
         out = (sb.stdout.read() + sb.stderr.read())[-2000:]
     if sb.returncode:
-        raise SystemExit(f"{ref}: image check failed, {LATEST_TAG} not moved:\n{out}")
+        raise SystemExit(f"{ref}: image check failed (pushed, but {LATEST_TAG} not moved):\n{out}")
     print(f"image check: import sglang and ledger.py markers ok on {ref}", flush=True)
 
 
@@ -317,8 +317,9 @@ def main():
             mutate += ["--label", f"{k}={v}"]
         pushed = run_crane(*mutate)
         digest = run_crane("digest", target)
+        check_image(f"{target}@{digest}")  # the ref FORK_IMAGE below names, which hand launches paste
         if args.main:  # latest: what a run with trainer "latest" resolves to (miles_ext/platform/versions.py)
-            check_image(f"{target}@{digest}")
+            check_image(f"{repo}@{digest}")  # versions.resolve's form, a different Modal image definition
             run_crane("tag", f"{target}@{digest}", LATEST_TAG)
     print(f"pushed {pushed} in {(time.monotonic() - t0) / 60:.1f} min\n"
           f'FORK_IMAGE = "{target}@{digest}"')
