@@ -25,6 +25,10 @@ DeepSeek harness modeled on prime-rl's `verifiers/v1/harnesses/deepseek`
   Miles' Anthropic adapter rejects: `thinking` and `output_config` (dsh always sends them; the
   policy's chat template decides reasoning) and `tool_result.is_error`. Sampling comes from the
   session server's defaults (dsh sends none), as for claude-code.
+  The shim also sends those requests with `node:http(s)`, untimed: the session server answers only once the
+  whole reply is generated, and fetch's 300 s headers timeout cut long turns under load in the first eval
+  (`TRANSPORT` at step 66, 108k-123k context; dsh's 5 retries redo the whole turn). The trial's agent
+  timeout bounds the wait.
 - **Window and reply cap from the recipe**: `AGENT_MAX_INPUT_TOKENS = max_seq_len` is dsh's
   context window, `AGENT_MAX_OUTPUT_TOKENS = max_response_len` its `max_tokens`.
 - **`agent.compact_at_tokens`** (default None) sets `compaction-basic`'s trigger
