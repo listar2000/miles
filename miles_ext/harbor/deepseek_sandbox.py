@@ -1,14 +1,11 @@
-"""`taskset.harness: deepseek-sandbox`: DeepSeek's own agent inside the task sandbox (ext-046, see its patch page).
-
-The agent is the pinned DeepSeek Harness CLI (``@deepseek-ai/dsh``) as a black box: its ``sdk-minimal``
-composition, the one prime-rl's verifiers ships as its DeepSeek harness, with the SDK front door swapped for
-dsh's own one-shot ``headless`` runner and the features Miles cannot serve switched off in a ``--patch``.
-"""
+"""`taskset.harness: deepseek-sandbox`: DeepSeek's own agent (dsh) inside the task sandbox (ext-046, see its patch page)."""
 
 import asyncio
+import hashlib
 import json
 import shlex
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from harbor.agents.installed.base import BaseInstalledAgent, NonZeroAgentExitCodeError
@@ -21,22 +18,21 @@ from miles_ext.harbor import context_exit, sandbox_agent
 from miles_ext.recipes.recipe import DEEPSEEK_RETAIN_RATIO
 
 NAME = "deepseek-sandbox"
-DSH_VERSION = "0.2.1-rc.3"  # the release verifiers' DeepSeek harness pins
+# dsh's whole dependency tree, pinned: `npm ci` installs the lockfile (regenerate it on a dsh bump)
+NPM = Path(__file__).with_name("dsh")
+NPM_FILES = ("package.json", "package-lock.json")
+LOCK_HASH = hashlib.sha256((NPM / "package-lock.json").read_bytes()).hexdigest()[:12]
 PROFILE = "sdk-minimal"
 NODE_MIN = (22, 19)  # dsh's engines floor
 DIR = "$HOME/.miles-deepseek"  # the agent user's: nvm and npm install as that user, as Harbor's claude-code does
 BIN = f"{DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
-FILES = "/tmp/miles-deepseek"  # patch, compat shim and task, uploaded per run
+FILES = "/tmp/miles-deepseek"  # uploads: the npm files, then per run the patch, compat shim and task
 EVENTS = (EnvironmentPaths.agent_dir / "deepseek-sandbox.jsonl").as_posix()  # dsh --json events
 STDERR = (EnvironmentPaths.agent_dir / "deepseek-sandbox.stderr.txt").as_posix()
 AGENT_EXIT_STATUS = "agent_exit_status"  # agent metadata key the agent function reads
 
-# dsh's Messages requests, adapted to Miles' session server:
-# - it drops the request fields Miles' adapter rejects (miles/rollout/session/anthropic_adapter.py): dsh always
-#   sends `thinking` and an effort, but the policy's chat template decides reasoning; `is_error` on a tool result.
-# - it sends them with node:http(s), untimed: the server answers (a fake SSE) only once the whole reply is
-#   generated, and fetch's 300 s headers timeout cut long turns under load ("TRANSPORT"; dsh's 5 retries redo
-#   the whole turn). The trial's agent timeout bounds the wait.
+# dsh's Messages requests without the fields Miles' adapter rejects, sent untimed: the session server answers only
+# once the whole reply is generated, past fetch's 300 s headers timeout (patch page)
 COMPAT = """\
 import http from "node:http";
 import https from "node:https";
@@ -96,10 +92,9 @@ AGENT_INSTALL = (
     "set -euo pipefail; "
     + _LOAD_NVM
     + f"if ! {_NODE_OK}; then {nvm_node_install_snippet(NODE_MIN[0])}; fi; "
-    + f'if [ ! -f "{DIR}/.ready" ]; then '
+    + f'if [ ! -f "{DIR}/.ready-{LOCK_HASH}" ]; then mkdir -p "{DIR}" && cp {" ".join(f"{FILES}/{n}" for n in NPM_FILES)} "{DIR}/" && '
     # --ignore-scripts: no native builds (task images have no compilers); the sdk-minimal tree needs none
-    + f'npm install --prefix "{DIR}" --no-audit --no-fund --ignore-scripts "@deepseek-ai/dsh@{DSH_VERSION}" >/dev/null'
-    + f' && touch "{DIR}/.ready"; fi; '
+    + f'npm ci --prefix "{DIR}" --no-audit --no-fund --ignore-scripts >/dev/null && touch "{DIR}/.ready-{LOCK_HASH}"; fi; '
     + f'node "{BIN}" --version'
 )
 
@@ -161,11 +156,7 @@ def patch(model: str, context_window: int, max_output: int, compact_at: int | No
 
 
 def outcome(events: str, reply_cap: int) -> str | Exception | None:
-    """How a finished dsh run ends, from its last ``turn_end``: None when it completed; ContextExhausted when the
-    context window filled (the server cut the last reply to the room left, or refused the request), so the
-    verifier grades the workspace as for mini-swe-agent's ContextExhausted; else the exception to raise (a reply
-    that hit ``max_tokens`` is Harbor's ``SingleTurnMaxSeqLenExceededError``, mapped to SequenceLengthLimitExceeded).
-    """
+    """From the last ``turn_end``: None (completed), ContextExhausted (the window filled), or the exception to raise."""
     from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
     reason, last_output = None, None
@@ -184,6 +175,7 @@ def outcome(events: str, reply_cap: int) -> str | Exception | None:
     if reason.get("kind") == "completed":
         return None
     if reason.get("kind") == "max-tokens":
+        # a reply shorter than the cap was cut by the server to the room left in the window
         if last_output is not None and last_output < reply_cap:
             return context_exit.EXIT_STATUS
         return SingleTurnMaxSeqLenExceededError(f"dsh reply hit its max_tokens cap of {reply_cap}")
@@ -214,6 +206,9 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         return NAME
 
     async def install(self, environment: BaseEnvironment) -> None:
+        await self.exec_as_root(environment, command=f"mkdir -p {FILES}")
+        for name in NPM_FILES:
+            await self._upload(environment, name, (NPM / name).read_text())
         # safe to repeat: each step skips what is already in place (as SandboxMiniSweAgent's install retries)
         for attempt in range(1, sandbox_agent.INSTALL_ATTEMPTS + 1):
             try:
@@ -230,6 +225,7 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
             f.write(text)
             f.flush()
             await environment.upload_file(f.name, f"{FILES}/{name}")
+        await self.exec_as_root(environment, command=f"chmod a+rX {FILES} {FILES}/{name}")  # for the agent user
         return f"{FILES}/{name}"
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
@@ -238,7 +234,6 @@ class SandboxDeepSeek(sandbox_agent.PublicSetup, BaseInstalledAgent):
         patch_path = await self._upload(environment, "patch.json", json.dumps(self._patch))
         compat = await self._upload(environment, "compat.mjs", COMPAT)
         task = await self._upload(environment, "task.md", self.render_instruction(instruction))
-        await self.exec_as_root(environment, command=f"chmod -R a+rX {FILES}")
         await environment.exec(
             command=_LOAD_NVM
             + f'DSH_HOME="{DIR}/home" node --import {compat} "{BIN}" --profile {PROFILE} '

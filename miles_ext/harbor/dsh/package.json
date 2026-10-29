@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "deepseek-sandbox's pinned DeepSeek Harness CLI (ext-046); npm ci installs package-lock.json",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.3"
+  }
+}
