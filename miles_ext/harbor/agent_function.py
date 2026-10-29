@@ -63,7 +63,7 @@ from urllib.parse import urlsplit
 
 from miles.rollout.agentic.session import openai_session_url
 
-from miles_ext.harbor import context_exit, task_hash, trial_procs, upstream
+from miles_ext.harbor import context_exit, deepseek_sandbox, task_hash, trial_procs, upstream
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes import recipe as R
 
@@ -312,7 +312,11 @@ async def run_trial(
 
     out = hf.trial_result_to_metadata(result)
     # Harbor says "Submitted" whenever the verifier ran; keep the agent's ContextExhausted so filters can tell it apart
-    if out["exit_status"] == "Submitted" and out["agent_metrics"].get("mswea_exit_status") == context_exit.EXIT_STATUS:
+    metrics = out["agent_metrics"]
+    if out["exit_status"] == "Submitted" and context_exit.EXIT_STATUS in (
+        metrics.get("mswea_exit_status"),
+        metrics.get(deepseek_sandbox.AGENT_EXIT_STATUS),
+    ):
         out["exit_status"] = context_exit.EXIT_STATUS
         if os.environ.get("MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO") == "1":
             out["reward"] = 0.0
