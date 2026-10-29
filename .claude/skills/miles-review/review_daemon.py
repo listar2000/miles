@@ -95,21 +95,24 @@ def merge_refusal(pr, thread, allowed):
     return None
 
 
-def land(args, pr):
-    """Fold the PR onto main, check it and push main and the branch at once, as fork/README.md "Landing" says.
-    Returns (merged, note); nothing is pushed unless every check passes."""
-    head, branch = pr["headRefOid"], pr["headRefName"]
+def land(args, pr, by):
+    """Fold the PR onto main, check it, push the branch and then main, as fork/README.md "Landing" says.
+    `by` (the `/merge` commenter) is the folded commits' committer. Returns (merged, note); nothing is pushed
+    unless every check passes."""
+    head, branch, target = pr["headRefOid"], pr["headRefName"], pr["baseRefName"]  # target is main (merge_refusal)
     work = args.out / f"merge{pr['number']}-{head[:8]}"
     git = lambda *a, **kw: R.sh(["git", *a], cwd=work, check=False, timeout=600, **kw)  # noqa: E731
-    R.sh(["git", "fetch", "-q", "--tags", "origin", "main", branch], cwd=args.repo, timeout=600)
+    R.sh(["git", "fetch", "-q", "--tags", "origin", target, branch], cwd=args.repo, timeout=600)
     shutil.rmtree(work, ignore_errors=True)
     R.sh(["git", "worktree", "prune"], cwd=args.repo)
     R.sh(["git", "worktree", "add", "-q", "--detach", str(work), head], cwd=args.repo)
     try:
-        base = git("rev-parse", "origin/main").stdout.strip()
-        if git("rebase", "-q", "-i", "--autosquash", base, env={"GIT_SEQUENCE_EDITOR": ":"}).returncode:
+        base = git("rev-parse", f"origin/{target}").stdout.strip()
+        email = f"{by['id']}+{by['login']}@users.noreply.github.com"
+        env = {"GIT_SEQUENCE_EDITOR": ":", "GIT_COMMITTER_NAME": by["login"], "GIT_COMMITTER_EMAIL": email}
+        if (rebase := git("rebase", "-q", "-i", "--autosquash", base, env=env)).returncode:
             git("rebase", "--abort")
-            return False, "the branch does not fold onto main without conflicts; rebase it and push again"
+            return False, f"the branch does not fold onto main:\n```\n{R.tail(rebase, 10)}\n```"
         folded = git("rev-parse", "HEAD").stdout.strip()
         main_moved = git("merge-base", "--is-ancestor", base, head).returncode
         if not main_moved and git("diff", "--quiet", head, folded).returncode:
@@ -127,12 +130,23 @@ def land(args, pr):
             return False, f"`ledger.py check` fails on the folded branch:\n```\n{R.tail(ledger, 15)}\n```"
         if args.dry_run:
             return False, f"dry run: would land {folded[:8]} on main {base[:8]}"
-        push = git("push", "-q", "--atomic", f"--force-with-lease=refs/heads/{branch}:{head}", "origin",
-                   f"{folded}:refs/heads/main", f"{folded}:refs/heads/{branch}")  # fmt: skip
+        # GitHub must see the folded PR head before main reaches it to recognize the merge.
+        n = str(pr["number"])
+        push = git(
+            "push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}", "origin", f"{folded}:refs/heads/{branch}"
+        )
         if push.returncode:
-            return False, f"the push was refused (main or the branch moved?):\n```\n{R.tail(push, 10)}\n```"
-        for _ in range(30):  # GitHub marks the PR merged once main holds its head; then the branch can go
-            if gh("pr", "view", str(pr["number"]), "-R", R.REPO_SLUG, "--json", "state")["state"] == "MERGED":
+            return False, f"the branch moved; nothing was pushed:\n```\n{R.tail(push, 10)}\n```"
+        for _ in range(30):
+            if gh("pr", "view", n, "-R", R.REPO_SLUG, "--json", "headRefOid")["headRefOid"] == folded:
+                break
+            time.sleep(5)
+        else:
+            return False, "GitHub did not show the folded head on the PR; the branch holds it, main is unchanged"
+        if (push := git("push", "-q", "origin", f"{folded}:refs/heads/{target}")).returncode:
+            return False, f"main moved; the branch now holds the folded commits:\n```\n{R.tail(push, 10)}\n```"
+        for _ in range(30):
+            if gh("pr", "view", n, "-R", R.REPO_SLUG, "--json", "state")["state"] == "MERGED":
                 git("push", "-q", "origin", "--delete", branch)
                 break
             time.sleep(10)
@@ -204,7 +218,7 @@ def merge(args, pr, thread, ask):
     else:
         beat(args.out, running={"pr": n, "head": pr["headRefOid"], "mode": "merge", "since": time.time()})
         try:
-            merged, note = land(args, pr)
+            merged, note = land(args, pr, ask["user"])
         except SystemExit as e:  # a git, gh or sandbox step failed
             merged, note = False, f"the merge stopped: {e}"
         note = note if merged or note.startswith("dry run") else f"Not merged: {note}"
@@ -255,7 +269,17 @@ def update_checkout(repo):
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != before
 
 
+class Stopped(BaseException):
+    """A signal to stop; not a SystemExit, so the `except SystemExit` around gh() and land() cannot swallow it."""
+
+
+def stop(*_):
+    raise Stopped
+
+
 def main():
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # a stopped daemon runs run_review's finally, ending its review
+        signal.signal(sig, stop)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", type=Path, default=HERE.parents[2], help="the reviewer's own main checkout")
     ap.add_argument("--out", type=Path, default=Path("~/miles-review").expanduser())
@@ -324,4 +348,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Stopped:
+        sys.exit("stopped by a signal")

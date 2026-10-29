@@ -49,7 +49,7 @@ no secret in the repository; the review comments' markers are the only state tha
 matters. The PR's own code runs in a CPU Modal sandbox on the trainer image, never on the
 box that holds the Codex and GitHub logins, which also tests it in the image.
 `/merge` lands a single ready PR the merge desk's way (fold, same-code check, ledger,
-atomic push of `main` and the branch), so landing needs no Claude thread either; stacks
+push of the branch, then `main`), so landing needs no Claude thread either; stacks
 and tags stay with the desk.
 Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT
 logins are not for public-repository CI; an API key costs about $1.20 per review).

@@ -407,9 +407,9 @@ desk does (fork/README.md "Landing"), when the latest review is at the current
 head, says "ready", and is deep if the PR needs a deep review: it folds the
 fixups onto `main` and refuses leftover fixups or a conflicting rebase. When
 `main` has not moved past the reviewed head's base, the folded tree must equal
-that head. It runs `ledger.py check` in the sandbox, pushes `main` and the folded
-branch in one atomic push, and deletes the branch once GitHub marks the PR
-merged. It answers with a comment either way. Stacked PRs (base not `main`)
+that head. It runs `ledger.py check` in the sandbox, pushes the folded branch,
+then `main` (in that order, so GitHub shows the PR as merged), and deletes the
+branch once GitHub marks the PR merged. It answers with a comment either way. Stacked PRs (base not `main`)
 and upstream tags stay with the merge desk.
 
 **The thread that runs it** by hand reads only the printed lines and the report's top,
