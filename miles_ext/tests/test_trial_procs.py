@@ -83,5 +83,6 @@ def test_harbor_harnesses_run_inline_and_single_turn_in_subprocesses():
         R.HARNESS_SANDBOX: "inline",
         R.HARNESS_HOST: "inline",
         R.HARNESS_TERMINUS_SANDBOX: "inline",
+        R.HARNESS_DEEPSEEK_SANDBOX: "inline",
         R.HARNESS_SINGLE_TURN: "subproc",
     }
