@@ -11,7 +11,6 @@ from megatron.training.async_utils import maybe_finalize_async_save
 from torch_memory_saver import torch_memory_saver
 
 from miles.backends.megatron_utils.hf_export import save_hf_model
-from miles.backends.megatron_utils.lora.native.merge import merge_lora_into_weights  # [fork hook-006]
 from miles.backends.megatron_utils.lora.utils import is_lora_enabled, lora_rollout_enabled
 from miles.backends.megatron_utils.megatron_to_hf import converter_model_name
 from miles.backends.megatron_utils.rematerialize_utils import build_main_cast_context
@@ -53,12 +52,7 @@ from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.ft_utils.indep_dp import IndepDPInfo
 from miles.utils.logging_utils import rebind_env_reporting
-from miles.utils.lora.utils import (  # [fork hook-006]
-    build_lora_config,
-    is_multi_lora_enabled,
-    lora_merged_sync_enabled,
-    lora_without_weight_versions,
-)
+from miles.utils.lora.utils import build_lora_config, is_multi_lora_enabled
 from miles.utils.memory_utils import clear_memory, print_memory
 from miles.utils.misc import partition
 from miles.utils.object_store import StoreObjectRef, ValueSpec
@@ -304,11 +298,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater = WeightUpdater(
                 args,
                 self.model,
-                weights_getter=(
-                    self._get_merged_actor_weights  # [fork hook-006]
-                    if lora_merged_sync_enabled(args)
-                    else self._get_actor_weights
-                ),
+                weights_getter=self._get_actor_weights,
                 model_name=model_name,
                 quantization_config=quantization_config,
                 iterator_factory=get_hf_weight_iterator,
@@ -935,9 +925,6 @@ class MegatronTrainRayActor(TrainRayActor):
             }
         return dict(self._named_actor_weights(include_model_companion=include_model_companion))
 
-    def _get_merged_actor_weights(self):  # [fork hook-006]
-        return merge_lora_into_weights(self.model, self._get_actor_weights())
-
     def _get_actor_weight_version(self) -> int:
         return ModelCompanionWeightVersionUtils.from_params(
             self._get_actor_weights(include_model_companion=True).items()
@@ -1003,7 +990,7 @@ class MegatronTrainRayActor(TrainRayActor):
             updated_engines = [
                 e for e, c in zip(rollout_engines, info.engine_cell_ids, strict=True) if c in updated_cell_ids
             ]
-            if self.args.ci_test and not lora_without_weight_versions(self.args):  # [fork hook-006]
+            if self.args.ci_test and not is_lora_enabled(self.args):
                 self.weight_updater.verify_engine_version(updated_engines, weight_version=weight_version)
 
             if info.receiver_pool == "rollout" and getattr(self.args, "keep_old_actor", False):

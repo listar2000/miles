@@ -23,7 +23,6 @@ _ARGS_TO_CONFIG_FIELD = {
     "lora_rank": "lora_rank",
     "lora_adapter_path": "lora_adapter_path",
     "lora_train_only": "lora_train_only",
-    "lora_merged_sync": "lora_merged_sync",  # [fork hook-006]
     "use_session_server": "use_session_server",
     "session_message_matcher": "session_message_matcher",
     "pause_generation_mode": "pause_generation_mode",
@@ -60,7 +59,6 @@ _DISTINCT_ARGS_VALUES = dict(
     lora_rank=32,
     lora_adapter_path="/fake/adapters/x",
     lora_train_only=True,
-    lora_merged_sync=False,  # [fork hook-006]
     use_session_server="v2",
     session_message_matcher="fake.matcher",
     pause_generation_mode="in_place",
@@ -152,7 +150,6 @@ _COMPLETE_CONFIG_KWARGS = dict(
     lora_rank=0,
     lora_adapter_path=None,
     lora_train_only=False,
-    lora_merged_sync=False,  # [fork hook-006]
     use_session_server=None,
     session_message_matcher="strict",
     pause_generation_mode=None,

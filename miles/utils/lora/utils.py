@@ -23,24 +23,12 @@ def is_lora_enabled(args: Namespace) -> bool:
 
 
 def lora_rollout_enabled(args: Namespace) -> bool:
-    """LoRA enabled AND the rollout side participates; false under --lora-train-only and --lora-merged-sync.
+    """LoRA enabled AND the rollout side participates; false under --lora-train-only.
 
     Gates everything rollout-facing: SGLang's ``enable_lora``, the per-request
     ``lora_path``, and the adapter weight sync. Training-side LoRA is unaffected.
     """
-    return (
-        is_lora_enabled(args)
-        and not getattr(args, "lora_train_only", False)
-        and not lora_merged_sync_enabled(args)  # [fork hook-006]
-    )
-
-
-def lora_merged_sync_enabled(args: Namespace) -> bool:  # [fork hook-006]
-    return is_lora_enabled(args) and getattr(args, "lora_merged_sync", False)
-
-
-def lora_without_weight_versions(args: Namespace) -> bool:  # [fork hook-006]
-    return is_lora_enabled(args) and not lora_merged_sync_enabled(args)
+    return is_lora_enabled(args) and not getattr(args, "lora_train_only", False)
 
 
 def engine_loads_adapter_from_disk(args: Namespace) -> bool:

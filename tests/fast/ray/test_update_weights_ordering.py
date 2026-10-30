@@ -655,7 +655,6 @@ def _early_start_args(**overrides: Any) -> Namespace:
         lora_adapter_path=None,
         lora_adapter_targets=["q_proj"],
         lora_train_only=False,
-        lora_merged_sync=False,
     )
     return Namespace(**(values | overrides))
 
@@ -703,7 +702,6 @@ class TestRolloutAtEngineReady:
             ({"eval_interval": 5, "skip_eval_before_train": True}, True),
             ({"debug_rollout_only": True}, False),
             ({"lora_rank": 0}, False),
-            ({"lora_merged_sync": True}, False),
             ({"lora_train_only": True}, False),
             ({"train_backend": "fsdp"}, False),
         ],

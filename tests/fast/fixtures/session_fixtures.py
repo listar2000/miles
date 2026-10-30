@@ -26,7 +26,6 @@ def make_session_server_config(**overrides: Any) -> SessionServerConfig:
         lora_rank=0,
         lora_adapter_path=None,
         lora_train_only=False,
-        lora_merged_sync=False,  # [fork hook-006]
         use_session_server=None,
         session_message_matcher="strict",
         pause_generation_mode=None,

@@ -2,7 +2,7 @@ import re
 from argparse import Namespace
 from typing import TYPE_CHECKING
 
-from miles.utils.lora.utils import lora_without_weight_versions  # [fork hook-006]
+from miles.utils.lora.utils import is_lora_enabled
 
 if TYPE_CHECKING:
     from miles.utils.types import Sample, WeightVersionSpan
@@ -19,12 +19,7 @@ def max_rollouts_without_published_weight_version(args: Namespace) -> int:
 
 
 def assert_weight_version_is_published(args: Namespace, *, rollouts_since_publish: int) -> None:
-    if (
-        args.debug_rollout_only
-        or args.debug_train_only
-        or args.debug_skip_weight_update
-        or lora_without_weight_versions(args)  # [fork hook-006]
-    ):
+    if args.debug_rollout_only or args.debug_train_only or args.debug_skip_weight_update or is_lora_enabled(args):
         return
 
     assert rollouts_since_publish <= max_rollouts_without_published_weight_version(args), (
@@ -36,8 +31,7 @@ def assert_weight_version_is_published(args: Namespace, *, rollouts_since_publis
 
 
 def assert_samples_weight_version_sane(args: Namespace, samples: list["Sample"]) -> None:
-    # [fork hook-006]
-    if args.debug_rollout_only or args.debug_skip_weight_update or lora_without_weight_versions(args):
+    if args.debug_rollout_only or args.debug_skip_weight_update or is_lora_enabled(args):
         return
 
     for sample in samples:
