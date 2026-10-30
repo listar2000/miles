@@ -10,8 +10,10 @@ so nothing needs pushing. Inputs: the base weights on the weights volume
 and ``argv.json``. The same run id again resumes from the last checkpoint (fresh optimizer state).
 
 Layout: TP1, CP2 (ring attention over two GPUs), EP8, DP4; full recompute; packed THD batches
-of up to 32K tokens per GPU (64K per CP pair, the longest row). One optimizer step per rollout of
-``BATCH`` trajectories, cosine LR 1e-5 -> 1e-6 with 50 warmup steps (the recipe's card).
+of up to 32K tokens per GPU (64K per CP pair, the longest row); the fused log-prob kernel (the
+torch path keeps an fp32 softmax per chunk and ran out of memory at 32K tokens). One optimizer
+step per rollout of ``BATCH`` trajectories, cosine LR 1e-5 -> 1e-6 with 50 warmup steps (the
+recipe's card); about 16 s per step, 1,000 steps in about 5 h.
 """
 
 import json

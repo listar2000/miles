@@ -1,0 +1,69 @@
+# SWE-bench Verified tasks 0-99 (HF order), pass@2, no training: the SFT replication's eval contract.
+# Qwen3-30B-A3B-Thinking-2507 served by 8 SGLang engines (1 GPU each, bf16) on one H200:8 node,
+# Miles --debug-rollout-only; Harbor's mini-swe-agent 2.4.6 inside Sail sandboxes (role=tool observations).
+# Sampling as the recipe: T 0.6, top-p 0.95, top-k 20, 8196 new tokens per turn, 65536 context.
+# SFT arm: the same contract, serving the HF export of sft-q3-30b-swe-1000b at iter_0000999.
+# Needs: MILES_WEIGHTS_VOLUME=miles-rl-weights, MILES_OVERLAY_EXT=1 (the preset lives on this branch).
+name: swebv100-qwen3-sft-0000999
+model:
+  preset: qwen3-30b-a3b-thinking-2507
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 512
+  timeout_hours: 8
+parallel:  # validation only (no trainer runs)
+  tp: 1
+  cp: 1
+  ep: 8
+rollout:
+  gpus_per_engine: 1
+  context_length: 65536
+taskset:
+  tasks_dir: $MILES_DATA/swebench-verified-0-99/tasks  # FROM lines on ghcr.io/epoch-research (README)
+  prompts: $MILES_DATA/swebench-verified-0-99/prompts.jsonl
+  harness: mini-swe-agent-sandbox
+agent:
+  max_steps: 250
+  exec_timeout: 120
+  timeout: 3600
+  trial_timeout: 7200
+  verifier_timeout: 1800
+  setup_timeout: 1800
+  context_exhausted_scores_zero: false  # as the recipe: a full window is still graded
+sandbox:
+  provider: sail
+  app_prefix: miles-rl-sbx-
+  lifetime_secs: 10800
+  idle_secs: 3600
+  build_timeout_multiplier: 3
+algorithm:
+  mode: sync
+  num_rollout: 1
+  rollout_batch_size: 100
+  n_samples: 2
+  temperature: 0.6
+  max_response_len: 8196
+  max_seq_len: 65536
+  sglang_mem_fraction: 0.75
+checkpoint:
+  save_interval: 1000
+  keep: 1
+  save_optimizer: false
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-sft-eval
+extra_args:
+  - --hf-checkpoint
+  - /results/sft-q3-30b-swe-1000b/hf/iter_0000999
+  - --debug-rollout-only
+  # 4 trials per engine, 32 at once (the recipe's --concurrency 32): 200 at once overflowed the engines' KV
+  # cache with 60K-token histories, so every turn re-prefilled its context and SFT trials hit the 1 h limit
+  - --sglang-server-concurrency
+  - "4"
+  - --rollout-top-p
+  - "0.95"
+  - --rollout-top-k
+  - "20"

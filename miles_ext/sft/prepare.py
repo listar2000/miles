@@ -1,6 +1,7 @@
 """Build the strict-thinking SFT set from nvidia/Nemotron-SFT-SWE-v3 on Modal CPUs.
 
     modal run -m miles_ext.sft.prepare::weights     # Qwen3-30B-A3B-Thinking-2507 onto the weights volume
+    modal run -m miles_ext.sft.prepare::probe       # render the first rows of one shard, print the stats
     modal run -m miles_ext.sft.prepare::build       # map the 96 shards, then reduce to train/val
 
 Map (one container per source shard): validate and normalize every row (``render.normalize_row``:
@@ -64,7 +65,7 @@ def task_key(user: str) -> str:
     return hashlib.sha1(re.sub(r"[^a-z0-9]+", "", body.lower())[:600].encode()).hexdigest()
 
 
-def verified_probes() -> tuple[list[str], list[str]]:
+def _verified_probes() -> tuple[list[str], list[str]]:
     """SWE-bench Verified problem-statement windows (normalized) and instance ids."""
     import pyarrow.parquet as pq
     from huggingface_hub import hf_hub_download
@@ -196,7 +197,7 @@ def reduce(stats: list[dict]) -> dict:
     summary = {"source": f"{C.DATASET_REPO}@{C.DATASET_REVISION}", "tokenizer": f"{C.BASE_REPO}@{C.BASE_REVISION}",
                "renderer": "miles_ext.sft.render (tito qwennext)", "max_tokens": MAX_TOKENS,
                "source_rows": sum(s["rows"] for s in stats),
-               "invalid": {k: sum(s["invalid"].get(k, 0) for s in stats) for s in stats for k in s["invalid"]},
+               "invalid": {k: sum(x["invalid"].get(k, 0) for x in stats) for k in {k for x in stats for k in x["invalid"]}},
                "contaminated": sum(s["contaminated"] for s in stats),
                "too_long": sum(s["too_long"] for s in stats), "rendered_candidates": candidates,
                "kept": len(kept)}
@@ -225,7 +226,7 @@ def probe(shard: int = 0, limit: int = 200):
     """Render the first rows of one shard and print the stats (writes that shard's files)."""
     import time
 
-    windows, ids = verify_probes.remote()
+    windows, ids = verified_probes.remote()
     t = time.time()
     print(json.dumps(map_shard.remote(shard, windows, ids, limit), indent=1), f"{time.time() - t:.0f}s")
 
@@ -233,7 +234,7 @@ def probe(shard: int = 0, limit: int = 200):
 @app.local_entrypoint()
 def build(shards: str = ""):
     picked = [int(s) for s in shards.split(",")] if shards else list(range(NUM_SHARDS))
-    windows, ids = verify_probes.remote()
+    windows, ids = verified_probes.remote()
     stats = list(map_shard.map(picked, kwargs={"windows": windows, "ids": ids}, return_exceptions=True))
     bad = [s for s in stats if isinstance(s, Exception)]
     print(f"{len(bad)} shards failed: {bad[:3]}")
@@ -241,5 +242,5 @@ def build(shards: str = ""):
 
 
 @app.function(image=image, secrets=secrets, cpu=1, memory=4096, timeout=900)
-def verify_probes():
-    return verified_probes()
+def verified_probes() -> tuple[list[str], list[str]]:
+    return _verified_probes()
