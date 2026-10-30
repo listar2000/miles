@@ -1,4 +1,4 @@
-"""DeepSeek-V4.1 native LoRA (ext-030): adapters, the merged weights the engines receive, and target resolution."""
+"""DeepSeek-V4.1 native LoRA (ext-030): adapters, their merged weights (upstream's merge), and target resolution."""
 
 from types import SimpleNamespace
 

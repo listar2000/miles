@@ -188,10 +188,9 @@ DEFAULTS: dict[str, Any] = {
     # (OPTIMIZER_DISK_DIR on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
     # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
     "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32"},
-    # serving "merged": engines get the adapter folded into full weights; "adapter": they keep the base and
-    # apply the bf16 adapter (SGLang LoRA, hook-010 for V4.1). target_modules: Miles' selector syntax; None selects
-    # attention and MLP groups.
-    "lora": {"rank": 0, "alpha": 32, "target_modules": None, "serving": "adapter"},
+    # the engines keep the base and apply the bf16 adapter (SGLang LoRA, hook-010 for V4.1). target_modules:
+    # Miles' selector syntax; None selects attention and MLP groups.
+    "lora": {"rank": 0, "alpha": 32, "target_modules": None},
     # fully async rollout knobs (Miles' --async-* flags); None: Miles' default, or rollout_batch_size * n_samples
     # for max_concurrent_samples. A fully async run always buffers finished groups in the write-ahead group log
     # (ext-034), so a save does not write them in one go
@@ -344,7 +343,6 @@ FIELD_RULES: dict[str, dict] = {
     "lora.rank": {"type": "int", "min": 0},
     "lora.alpha": {"type": "int", "min": 1},
     "lora.target_modules": {"type": "str", "nullable": True},
-    "lora.serving": {"type": "str", "enum": ("merged", "adapter")},
     "async.over_sampling_batch_size": {"type": "int", "nullable": True, "min": 1},
     "async.max_concurrent_samples": {"type": "int", "nullable": True, "min": 1},
     "async.unused_samples": {"type": "str", "enum": UNUSED_SAMPLES},
@@ -495,10 +493,9 @@ def _validate_split(recipe: dict) -> None:
     cluster, lora = recipe["cluster"], recipe["lora"]
     if recipe["algorithm"]["mode"] != "fully_async":
         raise ValueError("cluster.placement split needs algorithm.mode fully_async")
-    if not (int(lora["rank"]) > 0 and lora["serving"] == "adapter"):
+    if not int(lora["rank"]) > 0:
         raise ValueError(
-            "cluster.placement split supports LoRA with lora.serving adapter only "
-            "(merged LoRA and full-parameter syncs are not carried over the volume)"
+            "cluster.placement split supports LoRA only (full-parameter syncs are not carried over the volume)"
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1 (hook-011)")
@@ -655,19 +652,16 @@ def _validate_trainer(recipe: dict) -> None:
 
 def _validate_lora(recipe: dict) -> None:
     if recipe["algorithm"]["mode"] != "fully_async":
-        raise ValueError("lora needs algorithm.mode fully_async: the merged sync reads the live trainer weights")
+        raise ValueError("lora needs algorithm.mode fully_async")
     if recipe["optimizer"]["offload"]:
         raise ValueError(
             "lora trains only the adapters; drop optimizer.offload (Miles refuses the disk Adam with LoRA)"
         )
     leaves = {t.strip().rpartition(".")[2] for t in (recipe["lora"]["target_modules"] or "").split(",")}
-    if recipe["lora"]["serving"] == "adapter" and "w3" in leaves and "w1" not in leaves:
-        raise ValueError("lora.serving adapter: SGLang drops a shared expert's lone w3 adapter; select w1 with it")
-    if recipe["lora"]["serving"] == "adapter" and recipe["parallel"]["pp"] > 1:
-        raise ValueError(
-            "lora.serving adapter syncs the adapter to separate engines only with parallel.pp 1 (hook-011); "
-            "use pp 1 or lora.serving merged"
-        )
+    if "w3" in leaves and "w1" not in leaves:
+        raise ValueError("lora: SGLang drops a shared expert's lone w3 adapter; select w1 with it")
+    if recipe["parallel"]["pp"] > 1:
+        raise ValueError("lora syncs the adapter to separate engines only with parallel.pp 1 (hook-011)")
 
 
 def _lora_args(recipe: dict) -> str:
@@ -675,8 +669,6 @@ def _lora_args(recipe: dict) -> str:
     if not lora["rank"]:
         return ""
     args = f" --lora-rank {lora['rank']} --lora-alpha {lora['alpha']}"
-    if lora["serving"] == "merged":
-        args += " --lora-merged-sync"
     if lora["target_modules"]:
         args += f" --target-modules {lora['target_modules']}"
     if spec := PRESETS[recipe["model"]["preset"]].lora_spec_path:
@@ -1024,7 +1016,7 @@ def trainer_env(recipe: dict) -> dict[str, str]:
     every process that parses args."""
     preset = PRESETS[recipe["model"]["preset"]]
     env = {**preset.env, **preset.precisions[rollout_precision(recipe)], "WANDB__DISABLE_STATS": "true"}
-    if not (recipe["lora"]["rank"] and recipe["lora"]["serving"] == "adapter"):
+    if not recipe["lora"]["rank"]:
         env.update(preset.weight_sync_env)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"

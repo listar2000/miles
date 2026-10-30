@@ -22,7 +22,6 @@ parallel:
 lora:
   rank: 32
   alpha: 32
-  serving: adapter
 rollout:
   gpus_per_engine: 4
   precision: fp8_fp4

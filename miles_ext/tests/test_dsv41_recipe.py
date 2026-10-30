@@ -87,7 +87,7 @@ def test_dsv41_bf16_rollout_trains_and_serves_one_copy():
 
 def test_dsv41_bf16_adapter_keeps_fp8_fusions_off():
     env = R.trainer_env(
-        _recipe(rollout={"precision": "bf16"}, lora={"rank": 32, "serving": "adapter"})
+        _recipe(rollout={"precision": "bf16"}, lora={"rank": 32})
     )
     assert env["SGLANG_OPT_FP8_WO_A_GEMM"] == env["SGLANG_OPT_DEEPGEMM_HC_PRENORM"] == "0"
 
@@ -95,9 +95,8 @@ def test_dsv41_bf16_adapter_keeps_fp8_fusions_off():
 def test_dsv41_fused_kernels_off_only_when_base_weights_sync():
     fused = ("SGLANG_OPT_FP8_WO_A_GEMM", "SGLANG_OPT_DEEPGEMM_HC_PRENORM")
     full = R.trainer_env(_recipe())
-    merged = R.trainer_env(_recipe(lora={"rank": 32, "serving": "merged"}))
-    adapter = R.trainer_env(_recipe(lora={"rank": 32, "serving": "adapter"}))
-    assert all(full[k] == merged[k] == "0" for k in fused)
+    adapter = R.trainer_env(_recipe(lora={"rank": 32}))
+    assert all(full[k] == "0" for k in fused)
     assert not any(k in adapter for k in fused)
     assert full["SGLANG_OPT_FUSE_WQA_WKV"] == adapter["SGLANG_OPT_FUSE_WQA_WKV"] == "0"
 
@@ -240,28 +239,25 @@ def test_mis_is_one_recipe_value():
     assert "--custom-tis-function-path" not in argv
 
 
-@pytest.mark.parametrize("serving", ["merged", "adapter"])
-def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec, serving):
+def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec):
     from miles.backends.megatron_utils.lora.native import validate_native_lora_args
 
-    lora = {"rank": 32, "alpha": 32, "serving": serving}
-    # adapter serving to separate rollout nodes needs PP 1 (hook-011), as the LoRA overfit recipes run
-    layout = {} if serving == "merged" else {"parallel": {"pp": 1}, "cluster": {"nodes": 3, "train_gpus": 8}}
+    lora = {"rank": 32, "alpha": 32}
+    # adapter sync to separate rollout nodes needs PP 1 (hook-011), as the LoRA overfit recipes run
+    layout = {"parallel": {"pp": 1}, "cluster": {"nodes": 3, "train_gpus": 8}}
     r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, **layout)
     R.validate(r, local_inputs=False)
     argv = R.miles_args(r, "run1", resume=False)
-    assert _value(argv, "--lora-rank") == "32" and ("--lora-merged-sync" in argv) == (serving == "merged")
+    assert _value(argv, "--lora-rank") == "32"
     assert _value(argv, "--custom-lora-spec-path") == "miles_ext.lora.dsv41"
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "deepseek_v41"}))
     validate_native_lora_args(_native_lora_args(argv, hf_checkpoint=str(tmp_path)))
-    if serving == "adapter":
-        lone_w3 = lora | {"target_modules": "attn.wq_a,ffn.shared_experts.w3"}
-        with pytest.raises(ValueError, match="lone w3"):
-            R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, **layout),
-                       local_inputs=False)
-        # hook-011 refuses adapter sync with PP > 1 only on the trainer, after the engines start
-        with pytest.raises(ValueError, match="parallel.pp 1"):
-            R.validate(_recipe(lora=lora, optimizer={"offload": None}, parallel={"pp": 2}), local_inputs=False)
+    lone_w3 = lora | {"target_modules": "attn.wq_a,ffn.shared_experts.w3"}
+    with pytest.raises(ValueError, match="lone w3"):
+        R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, **layout), local_inputs=False)
+    # hook-011 refuses adapter sync with PP > 1 only on the trainer, after the engines start
+    with pytest.raises(ValueError, match="parallel.pp 1"):
+        R.validate(_recipe(lora=lora, optimizer={"offload": None}, parallel={"pp": 2}), local_inputs=False)
 
 
 def _native_lora_args(argv: list[str], **overrides):
@@ -275,7 +271,6 @@ def _native_lora_args(argv: list[str], **overrides):
         lora_rank=int(_value(argv, "--lora-rank")),
         lora_adapter_path=None,
         lora_train_only=False,
-        lora_merged_sync="--lora-merged-sync" in argv,
         expert_tensor_parallel_size=int(_value(argv, "--expert-tensor-parallel-size")),
         pipeline_model_parallel_size=int(_value(argv, "--pipeline-model-parallel-size")),
         **overrides,

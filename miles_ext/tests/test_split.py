@@ -31,8 +31,7 @@ def test_split_argv_and_shape(monkeypatch):
 @pytest.mark.parametrize(
     "overrides,message",
     [
-        ({"lora": {"serving": "merged"}}, "lora.serving adapter only"),
-        ({"lora": {"rank": 0}}, "lora.serving adapter only"),
+        ({"lora": {"rank": 0}}, "supports LoRA only"),
         ({"cluster": {"nodes": 2}}, "one trainer node"),
         ({"cluster": {"train_gpus": 4}}, "whole node"),
     ],

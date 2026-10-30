@@ -41,8 +41,8 @@ class Preset:
     speculative_algorithm: str | None = None
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
-    # env added only when weight syncs replace the engines' base weights (full-parameter or merged LoRA);
-    # an adapter-served LoRA run (lora.serving adapter) leaves the base frozen and runs without it
+    # env added only when weight syncs replace the engines' base weights (full-parameter runs); a LoRA run
+    # leaves the base frozen and runs without it
     weight_sync_env: dict = field(default_factory=dict)
     # SGLang flags; {gpus} is the recipe's rollout.gpus_per_engine
     sglang_args: str = ""
