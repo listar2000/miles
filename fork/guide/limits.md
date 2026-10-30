@@ -21,8 +21,8 @@ a recipe.
 
 - LoRA adapters sync to separate engines only with pipeline parallel size 1
   ([hook-011](../patches/hook-011-native-lora-disaggregated.md)).
-- `lora.serving: adapter` (the default) keeps the FP8/FP4 base on the engines and applies a BF16
-  adapter ([hook-010](../patches/hook-010-dsv4-lora-serving.md)). `merged` folds it into full weights.
+- LoRA keeps the FP8/FP4 base on the engines and applies a BF16 adapter
+  ([hook-010](../patches/hook-010-dsv4-lora-serving.md)).
 
 ## Algorithms
 

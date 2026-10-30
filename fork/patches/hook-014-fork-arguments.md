@@ -10,8 +10,8 @@ fix-060) left nine; the rule in `fork/README.md` "Flags, recipe keys and env var
   user-provided function arguments read the partial parse. Each flag keeps its own `[fork <id>]` block.
 - Validation that reads a fork flag stays in `arguments.py` next to the upstream check it extends
   (fix-004, fix-006, fix-054, fix-059): moving it would put the same upstream condition in two places.
-- hook-006's `--lora-merged-sync` and `--custom-lora-spec-path` stay in `miles/utils/lora/arguments.py`:
-  upstream tests build a LoRA parser with `add_lora_arguments` alone and pass them.
+- hook-006's `--custom-lora-spec-path` stays in `miles/utils/lora/arguments.py`:
+  upstream tests build a LoRA parser with `add_lora_arguments` alone and pass it.
 - Rejected: keeping the blocks where they were (every sync meets them one by one).
 
 ## How it is applied

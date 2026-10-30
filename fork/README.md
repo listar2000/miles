@@ -87,8 +87,8 @@ rather than editing upstream code from the extension's commit.
 Every switch doubles the runs someone has to reason about, so the fork adds one
 only when a real run needs its other value. `miles/utils/fork_arguments.py`
 holds every Miles flag the fork adds, registered by one call in
-`add_miles_arguments` (hook-014). The one exception is hook-006's LoRA flags
-(`--lora-merged-sync`, `--custom-lora-spec-path`), which stay in
+`add_miles_arguments` (hook-014). The one exception is hook-006's LoRA flag
+(`--custom-lora-spec-path`), which stays in
 `miles/utils/lora/arguments.py` because upstream tests build that parser alone; recipe keys and their defaults live in
 `miles_ext/recipes/recipe.py`.
 
