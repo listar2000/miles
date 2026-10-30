@@ -19,8 +19,9 @@ a recipe.
 
 ## LoRA
 
-- LoRA adapters sync to separate engines only with pipeline parallel size 1
-  ([hook-011](../patches/hook-011-native-lora-disaggregated.md)).
+- LoRA recipes run with pipeline parallel size 1: the adapter sync to separate engines
+  ([hook-016](../patches/hook-016-lora-non-colocate-upstream.md)) takes more, but no LoRA run here
+  has used it yet.
 - LoRA keeps the FP8/FP4 base on the engines and applies a BF16 adapter
   ([hook-010](../patches/hook-010-dsv4-lora-serving.md)).
 

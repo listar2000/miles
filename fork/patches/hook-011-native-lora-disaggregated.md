@@ -1,5 +1,8 @@
 # hook-011: native LoRA syncs adapters to non-colocated engines without pipeline parallelism
 
+Retired on 2026-10-30 by [hook-016](hook-016-lora-non-colocate-upstream.md), which carries
+upstream's own version of this change (and of hook-012).
+
 ## Why
 Upstream native LoRA (#1792) refuses adapter serving unless the engines are colocated
 (`validate_native_lora_args`). The V4.1 LoRA overfit recipes run the trainer and the rollout engines on separate nodes, so
