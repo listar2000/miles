@@ -76,6 +76,7 @@ a larger change. Low = cosmetic or specific to our stack.
 | [fix-016](patches/fix-016-flat-topk-logprobs.md) (flat base64 top-k logprobs) | [radixark/miles#3952](https://github.com/radixark/miles/pull/3952), commit `0cc65167f9`, 2026-10-20 | upstream keeps the nested rows as a fallback where ours raises; dropped in sync-v0.1.3 |
 | [fix-055](patches/fix-055-lora-apply-gate.md) (SGLang: `should_apply_lora` gates the LoRA wrap) | [sgl-project/sglang#39798](https://github.com/sgl-project/sglang/pull/39798), on `sglang-miles` `3a938213c1` (v0.1.3's pin) | patch deleted in sync-v0.1.3 |
 | [hook-011](patches/hook-011-native-lora-disaggregated.md), hook-012 (adapter sync to non-colocated engines, checksum without PP gather) | radixark/miles branch `yueming/native-lora-non-colocate` (`1fe8a1aaba`, `5ced68ee7e`), not merged into main `65feb4a61` on 2026-10-29 | upstream's version carried as [hook-016](patches/hook-016-lora-non-colocate-upstream.md) until the branch merges |
+| [fix-065 to fix-069](patches/fix-065-sglang-swa-fixes.md) (SGLang: V4.1 SWA, prefix cache, prefill host sync) | sgl-project/sglang #44347, #43168, #45223, #45586, #46700, all on main `80afdc128`, none on `sglang-miles` `5403606db9` (2026-10-30) | copies of SGLang's own commits; each patch goes when `SGLANG_COMMIT` has its commit |
 | fix-056 (SGLang: speculative top-p sampling masks, draft #84, never landed) | [sgl-project/sglang#34201](https://github.com/sgl-project/sglang/pull/34201), on `sglang-miles` `3a938213c1` | draft #84 closes unmerged after sync-v0.1.3 lands |
 
 ## Not listed
