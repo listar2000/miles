@@ -23,7 +23,7 @@ from miles.backends.megatron_utils.lora.native.spec.lm_head import InklingLMHead
 from miles.backends.megatron_utils.lora.native.spec.mlp import FusedGateUpMLPSpec, SplitGateUpMLPSpec
 from miles.backends.megatron_utils.lora.native.spec.moe import GroupedExpertsSpec
 from miles.utils.lora.hf_lora_targets import resolve_hf_lora_targets
-from miles.utils.lora.utils import lora_rollout_enabled, matches_lora_target
+from miles.utils.lora.utils import matches_lora_target  # [fork hook-016] no colocate-only guard
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +188,6 @@ def resolve_adapter_targets(
 
 def validate_native_lora_args(args) -> None:
     """Reject run configurations native LoRA has not been validated with; needs Megatron's resolved args."""
-    # [fork hook-011] without PP the full adapter is on every sender, so the broadcast protocol carries it
-    assert args.colocate or args.pipeline_model_parallel_size == 1 or not lora_rollout_enabled(args), (
-        "native LoRA syncs adapters to non-colocated engines only without pipeline parallelism; use --colocate, "
-        "--pipeline-model-parallel-size 1, --lora-train-only, or --megatron-to-hf-mode bridge"
-    )
     assert not args.overlap_param_gather, (
         "native LoRA does not support --overlap-param-gather: sibling-module adapter attachment has not "
         "been validated against MCore's bucket prefetch ordering."
