@@ -81,6 +81,18 @@ PRESETS: dict[str, Preset] = {
         megatron_model_type="qwen3-8B",
         shapes=(("H200", 1, "fsdp"),),
     ),
+    # SFT replication (miles_ext/sft): thinking always on (the 2507 template opens <think> itself), so no
+    # chat_template_kwargs; served for evaluation only so far
+    "qwen3-30b-a3b-thinking-2507": Preset(
+        hf_repo="Qwen/Qwen3-30B-A3B-Thinking-2507",
+        tito_model="qwennext",
+        tool_call_parser="qwen25",
+        reasoning_parser="qwen3",
+        backend="megatron",
+        megatron_model_type="qwen3-30B-A3B",
+        megatron_args="--rotary-base 10000000",  # the 2507 checkpoints' rope_theta (the model args assume 1e6)
+        shapes=(("H200", 1, "megatron"),),
+    ),
     # scripts/run_deepseek_v4_1.py (train) and docs/models/deepseek/deepseek-v4-1-flash.md.
     # The engines serve the released checkpoint (FP8 dense, FP4 experts); the trainer loads the
     # BF16 cast of it through mbridge.

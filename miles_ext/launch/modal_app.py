@@ -155,6 +155,11 @@ if RECIPE is not None and not INPUTS_ON_VOLUME:  # local files last: Modal adds 
     if RECIPE["taskset"]["tasks_dir"]:
         image = image.add_local_dir(RECIPE["taskset"]["tasks_dir"], str(R.TASKS))
     image = image.add_local_file(RECIPE["taskset"]["prompts"], str(R.PROMPTS))
+# MILES_OVERLAY_EXT=1: this checkout's miles_ext over the image's (an unpushed branch on a published image)
+if RECIPE is not None and os.environ.get("MILES_OVERLAY_EXT") == "1":
+    from miles_ext.sft.common import overlay
+
+    image = overlay(image)
 
 
 def _image_commit() -> str:
