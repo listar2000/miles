@@ -243,7 +243,6 @@ def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec):
     from miles.backends.megatron_utils.lora.native import validate_native_lora_args
 
     lora = {"rank": 32, "alpha": 32}
-    # adapter sync to separate rollout nodes needs PP 1 (hook-011), as the LoRA overfit recipes run
     layout = {"parallel": {"pp": 1}, "cluster": {"nodes": 3, "train_gpus": 8}}
     r = _recipe(lora=lora, optimizer={"offload": None, "moment_dtype": None}, **layout)
     R.validate(r, local_inputs=False)
@@ -255,7 +254,6 @@ def test_dsv41_lora_argv_passes_native_lora_startup(tmp_path, dsv41_lora_spec):
     lone_w3 = lora | {"target_modules": "attn.wq_a,ffn.shared_experts.w3"}
     with pytest.raises(ValueError, match="lone w3"):
         R.validate(_recipe(lora=lone_w3, optimizer={"offload": None}, **layout), local_inputs=False)
-    # hook-011 refuses adapter sync with PP > 1 only on the trainer, after the engines start
     with pytest.raises(ValueError, match="parallel.pp 1"):
         R.validate(_recipe(lora=lora, optimizer={"offload": None}, parallel={"pp": 2}), local_inputs=False)
 

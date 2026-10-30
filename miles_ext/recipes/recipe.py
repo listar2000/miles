@@ -498,7 +498,7 @@ def _validate_split(recipe: dict) -> None:
             "cluster.placement split supports LoRA only (full-parameter syncs are not carried over the volume)"
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
-        raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1 (hook-011)")
+        raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
     if int(cluster["nodes"]) != 1:
         raise ValueError("cluster.placement split runs one trainer node (cluster.nodes 1)")
     if int(cluster["train_gpus"]) != GPUS_PER_NODE:
@@ -661,7 +661,8 @@ def _validate_lora(recipe: dict) -> None:
     if "w3" in leaves and "w1" not in leaves:
         raise ValueError("lora: SGLang drops a shared expert's lone w3 adapter; select w1 with it")
     if recipe["parallel"]["pp"] > 1:
-        raise ValueError("lora syncs the adapter to separate engines only with parallel.pp 1 (hook-011)")
+        # only single-stage LoRA recipes have been run
+        raise ValueError("lora runs with parallel.pp 1 only")
 
 
 def _lora_args(recipe: dict) -> str:

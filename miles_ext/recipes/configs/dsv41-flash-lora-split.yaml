@@ -16,7 +16,7 @@ cluster:
     idle_minutes: 30
 parallel:
   tp: 4
-  pp: 1  # adapter sync to separate engines needs PP 1 (hook-011)
+  pp: 1  # the only pipeline size a LoRA run has used here
   cp: 2
   ep: 8
 lora:
