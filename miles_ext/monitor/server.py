@@ -24,6 +24,7 @@ import functools
 import gzip
 import hmac
 import json
+import math
 import os
 import re
 import subprocess
@@ -964,7 +965,7 @@ HTTP_LINE = re.compile(r'INFO:\s+[\d.]+:\d+ - "(GET|POST|PUT|DELETE) |"(GET|POST
 STAGES = [  # (key, label, log marker); the furthest marker seen wins, and stays once seen
     ("queued", "queued for a GPU node", None),
     ("container", "node placed, container starting", None),
-    ("ray", "Ray up, Miles starting", re.compile(r"ray up;|train_async\.py --|Ray cluster ready")),
+    ("ray", "Ray up, Miles starting", re.compile(r"ray up;|train_async\.py --|Ray cluster ready|Ray runtime started")),
     ("sessions", "session servers up", re.compile(r"Session servers ready")),
     ("loading", "engine loading weights", re.compile(r"Load weight begin")),
     ("loaded", "weights loaded, engine warming up", re.compile(r"Load weight end")),
@@ -979,6 +980,8 @@ STAGES = [  # (key, label, log marker); the furthest marker seen wins, and stays
     ("done", "done", re.compile(r"\] eval done|^eval done|^exit record: .*\"reason\": \"success\"")),
 ]
 TRAIN_ONLY = {"training"}
+# SFT runs (manifest kind "sft") start no engines and run no trials: the trainer's stages only
+SFT_STAGES = ("queued", "container", "ray", "training", "done")
 
 # training runs: Miles logs each step's metrics as one Python dict per line; the ones the page shows
 STEP_LINE = re.compile(r" - (rollout|step|perf) (\d+): (\{.*\})")
@@ -1001,16 +1004,30 @@ TRAIN_KEYS = {
     "train/sc_importance_weight": "sc_weight",
     "train/sc_correction": "sc_correction",
     "train/loss": "loss",
+    "train/lr-pg_0": "lr",
     "perf/step_time": "step_time",
+    "perf/actor_train_time": "train_time",
+    "perf/actor_train_tok_per_s": "tok_per_s",
+    "perf/actor_train_mfu": "mfu",
     "perf/update_weights_time": "update_weights_time",
     "perf/wait_time_ratio": "wait_ratio",
 }
 SAVE_LINE = re.compile(r"successfully saved checkpoint from iteration\s+(\d+)")
+HF_LINE = re.compile(r"Successfully saved HuggingFace model to (\S+)")
+# held-out loss of an SFT run: "validation at step N: {'val/nll': ...}" (miles_ext.sft), N = optimizer steps done
+VAL_LINE = re.compile(r" - (?:validation|val) (?:at )?step (\d+): (\{.*\})")
+VAL_KEYS = ("val/nll", "val/loss")
+LOSS_NAN = re.compile(r"'train/loss': -?(?:nan|inf)\b")
 SYNC_START = re.compile(r"ft op=update_weights phase=start rollout=(\d*)")
 SYNC_END = re.compile(r"fn=update_weights ok=(\w+) elapsed_s=([\d.]+)")
 EXIT_LINE = re.compile(r"^exit record: (\{.*\})")
 # the trainer's phases, from rank 0's Megatron timers: waiting for a batch, weight sync, the step itself
 TIMER_LINE = re.compile(r"rank0+\] timer\.py:\d+ - Timer (train_wait|update_weights|train) (start|end)\b")
+
+
+def _r5(v: float) -> float:
+    """5 decimals, but small values (a learning rate of 1e-6) keep 4 significant digits instead of becoming 0."""
+    return round(v, 5) if abs(v) >= 1e-3 or v == 0 else float(f"{v:.4g}")
 
 
 def _pydict(text: str) -> dict:
@@ -1057,8 +1074,8 @@ def advance_stage(app_id: str, rid: str, key: str, t: float | None):
 class LogTail:
     """One attempt's launch log (the `modal run` stdout the launcher redirected to a file)."""
 
-    def __init__(self, app_id: str, run_id: str, path: str, engine: bool):
-        self.app_id, self.run_id, self.path = app_id, run_id, Path(path)
+    def __init__(self, app_id: str, run_id: str, path: str, engine: bool, sft: bool = False):
+        self.app_id, self.run_id, self.path, self.sft = app_id, run_id, Path(path), sft
         self.pos, self.partial, self.initial = 0, b"", True
         self.feed = metrics.EngineFeed(run_id) if engine else None
         self.lines: collections.deque = collections.deque(maxlen=4000)  # [seq, t, cat, text]
@@ -1081,6 +1098,9 @@ class LogTail:
         self.sync_open = None  # t a weight sync started, until it ends
         self.exit = None  # the launcher's exit record
         self.phases: list = []  # [name, t0, t1 or None] per trainer phase (TIMER_LINE)
+        self.vals: list = []  # [step, nll, t] per validation pass (VAL_LINE); step 0 is before any training
+        self.hf: list = []  # [t, path] per HF export
+        self.loss_nan: list = []  # steps whose train/loss was nan or inf
 
     def _train(self, line: str, t: float):
         m = TIMER_LINE.search(line)
@@ -1106,9 +1126,34 @@ class LogTail:
             if len(self.phases) > 600:
                 del self.phases[:100]
             return "stage"
+        m = VAL_LINE.search(line)
+        if m:
+            k, d = int(m.group(1)), _pydict(m.group(2))
+            v = next((d[x] for x in VAL_KEYS if isinstance(d.get(x), (int, float))), None)
+            if v is not None and not any(x[0] == k for x in self.vals):
+                self.vals.append([k, v, t])
+                # validation after k steps belongs to step k - 1 (the "step N" lines count from 0)
+                prev = self.steps.get(k - 1)
+                if prev is not None:
+                    prev["val_nll"] = v
+                    if "t" in prev and self.feed:
+                        metrics.STORE.add(self.run_id, [(prev["t"], "train.val_nll", v)])
+                EVENTS.emit(
+                    f"{self.app_id}:val:{k}",
+                    self.run_id,
+                    f"validation NLL {v:.4f} " + ("before training" if k == 0 else f"after step {k - 1}"),
+                    "info",
+                    t,
+                )
+            return "stage"
         m = STEP_LINE.search(line)
         if m:
             kind, n = m.group(1), int(m.group(2))
+            if kind == "step" and LOSS_NAN.search(line) and n not in self.loss_nan:
+                self.loss_nan.append(n)
+                EVENTS.emit(
+                    f"{self.app_id}:loss_nan:{n}", self.run_id, f"train/loss is not finite at step {n}", "bad", t
+                )
             vals = {
                 TRAIN_KEYS[k]: v
                 for k, v in _pydict(m.group(3)).items()
@@ -1116,31 +1161,40 @@ class LogTail:
             }
             step = self.steps.setdefault(n, {"n": n})
             step.update(vals)
+            # an RL run's train/loss is the policy loss, not worth a curve; an SFT run's is the curve that matters
+            skip = ("n", "t", "samples", "dt", "val_nll", "train_time") + (() if self.sft else ("loss",))
             if (
                 kind != "step" and "t" in step and self.feed
             ):  # a line about a step already done (its perf line follows it)
                 metrics.STORE.add(
                     self.run_id,
-                    [(step["t"], "train." + k, v) for k, v in vals.items() if k not in ("samples", "loss")],
+                    [(step["t"], "train." + k, v) for k, v in vals.items() if k not in skip],
                 )
             if kind == "step":  # the trainer's line: the step is done
                 first = "t" not in step
                 step["t"] = t
+                prev = self.steps.get(n - 1)
+                if first and prev and prev.get("t") and t > prev["t"]:
+                    step["dt"] = round(t - prev["t"], 1)  # wall time since the previous step: SFT logs no step_time
                 if self.feed:
                     metrics.STORE.add(
                         self.run_id,
-                        [(t, "train." + k, v) for k, v in step.items() if k not in ("n", "t", "samples", "loss")],
+                        [(t, "train." + k, v) for k, v in step.items() if k not in skip],
                     )
                 if first:
                     if len(self.steps) == 1 or n == min(self.steps):
                         advance_stage(self.app_id, self.run_id, "training", t)
                     r, secs = step.get("raw_reward"), step.get("step_time")
+                    loss = step.get("loss") if self.sft else None
                     text = (
                         f"step {n} trained"
                         + (f", reward {r:.3f}" if r is not None else "")
+                        + (f", loss {loss:.4f}" if loss is not None else "")
                         + (f", {round(secs / 60)} min" if secs else "")
                     )
-                    EVENTS.emit(f"{self.app_id}:step:{n}", self.run_id, text, "info", t)
+                    # an SFT step takes seconds: one feed line per 50 steps, not one per step
+                    if not self.sft or n % 50 == 0 or n == min(self.steps):
+                        EVENTS.emit(f"{self.app_id}:step:{n}", self.run_id, text, "info", t)
             return "stage"
         m = SAVE_LINE.search(line)
         if m:
@@ -1148,6 +1202,13 @@ class LogTail:
             if not any(x[1] == n for x in self.saves):
                 self.saves.append((t, n))
                 EVENTS.emit(f"{self.app_id}:save:{n}", self.run_id, f"checkpoint saved at step {n}", "good", t)
+            return "stage"
+        m = HF_LINE.search(line)
+        if m:
+            path = m.group(1).rstrip(".,")
+            if not any(x[1] == path for x in self.hf):
+                self.hf.append([t, path])
+                EVENTS.emit(f"{self.app_id}:hf:{path}", self.run_id, f"HF export saved: {path}", "good", t)
             return "stage"
         m = SYNC_START.search(line)
         if m:
@@ -1192,13 +1253,13 @@ class LogTail:
         return None
 
     def train_summary(self) -> dict | None:
-        if not (self.steps or self.saves or self.syncs or self.exit or self.phases):
+        if not (self.steps or self.saves or self.syncs or self.exit or self.phases or self.vals):
             return None
         done = sorted((s for s in self.steps.values() if "t" in s), key=lambda s: s["n"])
-        times = sorted(s["step_time"] for s in done if s.get("step_time"))
+        times = sorted(s.get("step_time") or s.get("dt") for s in done if s.get("step_time") or s.get("dt"))
         ok_syncs = [x[2] for x in self.syncs if x[1]]
         return {
-            "steps": [{k: (round(v, 5) if isinstance(v, float) else v) for k, v in s.items()} for s in done],
+            "steps": [{k: (_r5(v) if isinstance(v, float) else v) for k, v in s.items()} for s in done],
             "last_step": done[-1]["n"] if done else None,
             "last_step_t": done[-1]["t"] if done else None,
             "median_step_s": times[len(times) // 2] if times else None,
@@ -1211,6 +1272,9 @@ class LogTail:
             "phases": [list(x) for x in self.phases[-400:]],
             "trains_started": sum(1 for x in self.phases if x[0] == "train"),
             "training_now": any(x[0] == "train" and x[2] is None for x in self.phases[-3:]),
+            "vals": [list(x) for x in self.vals],
+            "hf": [list(x) for x in self.hf],
+            "loss_nan": list(self.loss_nan),
         }
 
     def poll(self) -> bool:
@@ -1265,6 +1329,7 @@ class LogTail:
             or "rollout" in line
             or "perf" in line
             or "checkpoint" in line
+            or "HuggingFace" in line
             or "update_weights" in line
             or "Timer " in line
             or line.startswith("exit record")
@@ -1375,11 +1440,15 @@ def tail_loop():
                         lp = m.get("log_path")
                         nxt = _ts(ms[i + 1]["started_at"]) if i + 1 < len(ms) else None
                         tail = TAILS.get(m["app_id"])
+                        if tail:
+                            tail.sft = ms[-1].get("kind") == "sft"  # a manifest edited to kind sft applies at once
                         if tail and nxt:
                             tail.frozen = True  # a newer attempt exists; its launcher may reuse this file
                         if lp and not tail and Path(lp).exists() and not (nxt and Path(lp).stat().st_mtime > nxt + 60):
                             # engine curves come from the newest attempt only, so attempts never interleave
-                            TAILS[m["app_id"]] = LogTail(m["app_id"], rid, lp, engine=i == len(ms) - 1)
+                            TAILS[m["app_id"]] = LogTail(
+                                m["app_id"], rid, lp, engine=i == len(ms) - 1, sft=ms[-1].get("kind") == "sft"
+                            )
                             STARTUP.setdefault(
                                 m["app_id"],
                                 {"stage": "queued", "seen": {}, "shards": None, "last": "", "tail_read": True},
@@ -1463,14 +1532,22 @@ def collect_startup():
 
 
 def startup_view(app: dict, st: dict, kind: str | None = None) -> dict:
-    train = kind == "train" or "training" in st["seen"]
+    train = kind in ("train", "sft") or "training" in st["seen"]
     # on a training run trials fill the first batch; nothing trains until the trainer's first step starts
     relabel = (
-        {"done": "run finished", "trials": "rollout filling batch 0", "training": "training"}
-        if train
-        else {"done": "eval done"}
+        {"ray": "Ray up, trainer loading", "done": "run finished"}
+        if kind == "sft"
+        else (
+            {"done": "run finished", "trials": "rollout filling batch 0", "training": "training"}
+            if train
+            else {"done": "eval done"}
+        )
     )
-    stages = [[k, relabel.get(k, label)] for k, label, _ in STAGES if train or k not in TRAIN_ONLY]
+    stages = [
+        [k, relabel.get(k, label)]
+        for k, label, _ in STAGES
+        if (k in SFT_STAGES if kind == "sft" else train or k not in TRAIN_ONLY)
+    ]
     return {
         "app_id": app["app_id"],
         "app_state": app["state"],
@@ -1728,6 +1805,12 @@ def run_train(entry: dict) -> dict | None:
     out["steps"] = [steps[n] for n in sorted(steps)]
     out["saves"] = sorted({tuple(x) for p in parts for x in p["saves"]})
     out["phases"] = sorted((x for p in parts for x in p.get("phases") or []), key=lambda x: x[1])[-600:]
+    vals = {}
+    for p in parts:
+        vals.update({v[0]: v for v in p.get("vals") or []})
+    out["vals"] = [vals[k] for k in sorted(vals)]
+    out["hf"] = sorted((x for p in parts for x in p.get("hf") or []), key=lambda x: x[0])
+    out["loss_nan"] = sorted({n for p in parts for n in p.get("loss_nan") or []})
     out["expected_steps"] = entry.get("expected_steps")
     if out["steps"]:
         out["last_step"], out["last_step_t"] = out["steps"][-1]["n"], out["steps"][-1]["t"]
@@ -1874,7 +1957,8 @@ def signals(run: dict, entry: dict, now: float) -> list[dict]:
     seen = st.get("seen", {})
     si = STAGE_KEYS.index(stage)
     # only once the startup log has been read: a run registered late would otherwise look stuck at "queued"
-    if m["app_id"] in STARTUP and si < STAGE_KEYS.index("ready") and now - created > READY_BY * 0.8:
+    sft = entry.get("kind") == "sft"  # starts no engines: the step-stall check below covers its startup
+    if not sft and m["app_id"] in STARTUP and si < STAGE_KEYS.index("ready") and now - created > READY_BY * 0.8:
         add(
             "bad" if now - created > READY_BY else "warn",
             "slow_ready",
@@ -1940,9 +2024,11 @@ def signals(run: dict, entry: dict, now: float) -> list[dict]:
         add("warn", "sandboxes", f"only {live_sbx} sandboxes live for {inflight} trials in flight")
     tr = tail.train_summary() if tail else None
     exp_steps = entry.get("expected_steps")
-    if tr or (entry.get("kind") == "train" and tail):
+    if tr or (entry.get("kind") in ("train", "sft") and tail):
         tr = tr or {}
         med = tr.get("median_step_s")
+        if tr.get("loss_nan"):
+            add("bad", "loss_nan", f"train/loss not finite at step {', '.join(map(str, tr['loss_nan'][-5:]))}")
         if tr.get("exit") and tr["exit"]["reason"] not in ("success",):
             add(
                 "bad",
@@ -1950,10 +2036,17 @@ def signals(run: dict, entry: dict, now: float) -> list[dict]:
                 f"trainer exited: {tr['exit']['reason']}"
                 + (f" ({tr['exit']['note'][:140]})" if tr["exit"].get("note") else ""),
             )
-        last = tr.get("last_step_t") or seen.get("rollout")
+        # an SFT run has no rollout: from Ray up, loading the trainer must reach a first step
+        last = (
+            tr.get("last_step_t") or seen.get("rollout") or (seen.get("ray") if entry.get("kind") == "sft" else None)
+        )
         if last and not tr.get("exit"):
             # before the first step the batch waits on whole trials, so the trial cap sets the bar; after it, the step time
-            warn_after = max(3 * med, 45 * 60) if med else (lim.get("trial_secs") or 3 * 3600) + 30 * 60
+            warn_after = (
+                max(3 * med, 45 * 60)
+                if med
+                else 3600 if entry.get("kind") == "sft" else (lim.get("trial_secs") or 3 * 3600) + 30 * 60
+            )
             gap = now - last
             if gap > warn_after:
                 what = f"no training step for {round(gap / 60)} min" + (
@@ -2099,6 +2192,9 @@ def run_status(run: dict, j: dict, su: dict | None) -> tuple[str, str]:
         return "stopped, trials cut off", "warn"
     if t.get("finished"):
         return "finished", "good"
+    tr, exp = run.get("train") or {}, (run.get("registry") or {}).get("expected_steps")
+    if exp and tr.get("last_step") is not None and tr["last_step"] + 1 >= exp:
+        return "finished", "good"  # a trainer-only run (SFT): every expected step logged
     # ended with no finished trials: "stopped" when its app was stopped, else plain "ended" (an old dir, a bench)
     if any((a.get("app_state") or "").startswith("stopped") for a in run.get("attempts") or []) or any(
         a["state"].startswith("stopped") for a in j["gpu_apps"][:1]
@@ -2125,6 +2221,8 @@ def runs_view() -> list:
     for r in runs:
         entry = reg.get(r["run_id"], {})
         slim = {k: v for k, v in r.items() if k not in ("rows", "restored")}
+        if entry:  # the manifests as they are now (a field added by register.py shows without waiting for a scan)
+            slim["registry"] = {k: v for k, v in entry.items() if not k.startswith("_")}
         if slim.get("trials"):
             slim["trials"] = slim_summary(slim["trials"])
         ms = entry.get("_manifests") or []
@@ -2140,10 +2238,11 @@ def runs_view() -> list:
         j = joins(r, entry, apps, sail, wb)
         su = startup.get(r["run_id"])
         slim["links"] = j
+        slim["train"] = run_train(entry)
         slim["status"], slim["tone"] = run_status(slim, j, su)
         slim["signals"] = signals(r, entry, now) if entry.get("watch") else []
         slim["cost"] = run_cost(entry, j)
-        slim["train"] = run_train(entry)
+        slim["pass"] = pass_at((r.get("trials") or {}).get("tasks") or [], entry.get("n_samples"))
         slim["group"], slim["type"] = groups.classify(slim)
         if ms:
             signal_events(r["run_id"], ms[-1]["app_id"], slim["signals"])
@@ -2151,7 +2250,63 @@ def runs_view() -> list:
         slim["sort_t"] = max([x for x in starts if x] + [(r.get("trials") or {}).get("first_start") or 0])
         out.append(slim)
     out.sort(key=lambda r: -r["sort_t"])
+    link_evals(out)
     return out
+
+
+def pass_at(tasks: list[dict], k: int | None) -> dict | None:
+    """pass@1 and pass@k over the tasks with at least k finished trials (unbiased estimator; reward 1 = solved).
+    k: the manifest's n_samples, else the most finished trials of any task."""
+    tasks = [t for t in tasks if t.get("finished")]
+    if not tasks:
+        return None
+    k = int(k or max(t["finished"] for t in tasks))
+
+    def est(n, c, kk):
+        return 1.0 if n - c < kk else 1.0 - math.comb(n - c, kk) / math.comb(n, kk)
+
+    full = [t for t in tasks if t["finished"] >= k]
+    return {
+        "k": k,
+        "at1": round(sum(t["solved"] / t["finished"] for t in tasks) / len(tasks), 4),
+        "atk": round(sum(est(t["finished"], t["solved"], k) for t in full) / len(full), 4) if full else None,
+        "tasks": len(tasks),
+        "tasks_k": len(full),
+    }
+
+
+def link_evals(runs: list):
+    """Attach evaluation summaries to the training runs named by their registry entries."""
+    by_id = {r["run_id"]: r for r in runs}
+    for r in runs:
+        ev = (r.get("registry") or {}).get("evaluates")
+        if isinstance(ev, str):
+            ev = {"run": ev}
+        target = by_id.get((ev or {}).get("run"))
+        if not target or target is r:
+            continue
+        t = r.get("trials") or {}
+        target.setdefault("evals", []).append(
+            {
+                "run_id": r["run_id"],
+                "key": r["key"],
+                "step": ev.get("step"),
+                "label": ev.get("label"),
+                "status": r["status"],
+                "tone": r["tone"],
+                "finished": t.get("finished"),
+                "expected": t.get("expected"),
+                "mean_reward": t.get("mean_reward"),
+                "pass": r.get("pass"),
+                "cost": (r.get("cost") or {}).get("estimate"),
+                "started": r["sort_t"],
+            }
+        )
+    for r in runs:
+        if r.get("evals"):
+            r["evals"].sort(
+                key=lambda e: (e["step"] is None, e["step"] if isinstance(e["step"], int) else 0, e["started"])
+            )
 
 
 def build_topics(only: set | None, cache: dict) -> dict:

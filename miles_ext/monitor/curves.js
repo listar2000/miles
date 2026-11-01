@@ -15,6 +15,7 @@
   function tickFmt(v, step, unit) {
     if (unit === "frac") { v *= 100; step *= 100; }
     const a = Math.abs(v);
+    if (step && step < 1e-4) return v ? v.toExponential(1).replace(".0e", "e") : "0";  // learning rates: 1.5e-5
     if (a >= 1e6) return +(v / 1e6).toFixed(step >= 1e6 ? 0 : 1) + "M" + (unit === "frac" ? "%" : "");
     if (a >= 1e4 || (a >= 1e3 && step >= 1e3)) return +(v / 1e3).toFixed(step >= 1e3 ? 0 : 1) + "k";
     const dec = Math.max(0, Math.min(4, -Math.floor(Math.log10(step) + 1e-9)));
@@ -224,7 +225,7 @@
                     GPU: "W&B system metrics of the run: the GPUs of the node W&B runs on (on a training run, trainer GPUs only; engines aren't covered)",
                     Trials: "the monitor's own scans of the trial dirs" };
   // the charts each group shows before "show more": what answers "is it learning, is it fast"
-  const KEY = { Training: ["train.raw_reward", "train.raw_reward_unfiltered", "train.response_len", "train.truncated", "train.logprob_diff", "train.grad_norm", "train.step_time", "train.wait_ratio",
+  const KEY = { Training: ["train.loss", "train.val_nll", "train.lr", "train.tok_per_s", "train.raw_reward", "train.raw_reward_unfiltered", "train.response_len", "train.truncated", "train.logprob_diff", "train.grad_norm", "train.step_time", "train.wait_ratio",
                             "train.mis_mask_low", "train.mis_mask_high", "train.sc_masked", "train.sc_weight"],
                 Engine: ["engine.gen_tps", "engine.running_req", "engine.queue_req", "engine.kv_usage"], GPU: ["gpu.util", "gpu.power", "gpu.mem_alloc", "gpu.temp_max"] };
   const st = { zooms: {}, data: null, runId: null, wb: [], custom: {}, steps: [], all: new Set(),

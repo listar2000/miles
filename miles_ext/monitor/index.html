@@ -299,13 +299,13 @@ svg.tl .tl-mark { font-size: var(--fs-xs); fill: var(--ink-2); paint-order: stro
 }
 
 /* ---- run types: RL training is the default look; evals, benches and smokes carry a tinted pill and an edge ---- */
-:root { --t-train: var(--accent); --t-eval: #7b4fc9; --t-bench: #0f8a8a; --t-smoke: var(--ink-3); --t-other: var(--idle); --cmp-a: #2a78d6; --cmp-b: #e0632a; }
-:root[data-theme="dark"] { --t-eval: #a98bea; --t-bench: #3cbcbc; --cmp-a: #4a92ea; --cmp-b: #ef7a45; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --t-eval: #a98bea; --t-bench: #3cbcbc; --cmp-a: #4a92ea; --cmp-b: #ef7a45; } }
+:root { --t-train: var(--accent); --t-sft: #b5730f; --t-eval: #7b4fc9; --t-bench: #0f8a8a; --t-smoke: var(--ink-3); --t-other: var(--idle); --cmp-a: #2a78d6; --cmp-b: #e0632a; }
+:root[data-theme="dark"] { --t-sft: #e0a347; --t-eval: #a98bea; --t-bench: #3cbcbc; --cmp-a: #4a92ea; --cmp-b: #ef7a45; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --t-sft: #e0a347; --t-eval: #a98bea; --t-bench: #3cbcbc; --cmp-a: #4a92ea; --cmp-b: #ef7a45; } }
 .tpill { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 10px; font-size: var(--fs-xs); font-weight: 600; line-height: 18px; white-space: nowrap; letter-spacing: .02em;
   color: var(--tc); background: color-mix(in srgb, var(--tc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent); }
 .tpill svg { width: 11px; height: 11px; }
-.t-train { --tc: var(--t-train); } .t-eval { --tc: var(--t-eval); } .t-bench { --tc: var(--t-bench); } .t-smoke { --tc: var(--t-smoke); } .t-other { --tc: var(--t-other); }
+.t-train { --tc: var(--t-train); } .t-sft { --tc: var(--t-sft); } .t-eval { --tc: var(--t-eval); } .t-bench { --tc: var(--t-bench); } .t-smoke { --tc: var(--t-smoke); } .t-other { --tc: var(--t-other); }
 .typed { border-left: 3px solid var(--tc, var(--line)); }
 .typed.t-train { border-left-color: var(--line); }
 /* ---- Runs tab: groups ---- */

@@ -38,6 +38,11 @@ CATALOG = {
     "gpu.temp_max": ("GPU", "Temperature, hottest GPU", "°C"),
     # training runs: Miles' own per-step log lines ("rollout N: {...}", "step N: {...}", "perf N: {...}"), at the
     # time the step's line was logged
+    "train.loss": ("Training", "Train loss (train/loss)", ""),
+    "train.val_nll": ("Training", "Validation NLL (val/nll)", ""),
+    "train.lr": ("Training", "Learning rate", ""),
+    "train.tok_per_s": ("Training", "Trainer tokens/s", "tok/s"),
+    "train.mfu": ("Training", "Trainer MFU", "frac"),
     "train.raw_reward": ("Training", "Reward per step (rollout/raw_reward)", ""),
     "train.raw_reward_unfiltered": ("Training", "Reward of groups finished this step (not the trained batch)", ""),
     "train.zero_std_all_zero": ("Training", "Groups with all-zero reward", "frac"),
@@ -134,13 +139,18 @@ def thin(pts: list, n: int) -> list:
     for t, v in pts:
         k = int((t - t0) / w)
         if b is not None and k != b and acc:
-            out.append([round(acc[-1][0], 1), round(sum(x for _, x in acc) / len(acc), 4)])
+            out.append([round(acc[-1][0], 1), _r4(sum(x for _, x in acc) / len(acc))])
             acc = []
         b = k
         acc.append((t, v))
     if acc:
-        out.append([round(acc[-1][0], 1), round(sum(x for _, x in acc) / len(acc), 4)])
+        out.append([round(acc[-1][0], 1), _r4(sum(x for _, x in acc) / len(acc))])
     return out
+
+
+def _r4(v: float) -> float:
+    """4 decimals; a value below 1e-2 (a learning rate) keeps 4 significant digits instead."""
+    return round(v, 4) if abs(v) >= 1e-2 or v == 0 else float(f"{v:.4g}")
 
 
 STORE = Store()

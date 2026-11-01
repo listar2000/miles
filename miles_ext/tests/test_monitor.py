@@ -107,3 +107,69 @@ def test_log_tail_reads_mis_metrics(monkeypatch, tmp_path):
     tail.poll()
     (step,) = tail.train_summary()["steps"]
     assert (step["sc_masked"], step["sc_weight"]) == (0.0004, 0.9993)
+
+
+SFT_LOG = """\
+(SftTrainRayActor pid=1) [2026-11-01 10:00:00] val.py:80 - validation at step 0: {'val/nll': 0.61, 'train/step': 0}
+(SftTrainRayActor pid=1) [2026-11-01 10:00:20] log_utils.py:555 - step 0: {'train/loss': 0.63, 'train/grad_norm': 0.5, 'train/lr-pg_0': 2e-07, 'train/step': 0}
+(SftTrainRayActor pid=1) [2026-11-01 10:00:20] perf.py:56 - perf 0: {'perf/actor_train_time': 15.0, 'perf/actor_train_tok_per_s': 24000.0, 'perf/actor_train_mfu': 0.41}
+(SftTrainRayActor pid=1) [2026-11-01 10:00:38] log_utils.py:555 - step 1: {'train/loss': nan, 'train/grad_norm': 0.4, 'train/lr-pg_0': 4e-07, 'train/step': 1}
+(SftTrainRayActor pid=1) [2026-11-01 10:00:50] val.py:80 - validation at step 2: {'val/nll': 0.55, 'train/step': 2}
+(SftTrainRayActor pid=1) [2026-11-01 10:00:51] hf_export.py:87 - Successfully saved HuggingFace model to /results/s/hf/iter_0000001
+"""
+
+
+def test_log_tail_reads_an_sft_run(monkeypatch, tmp_path):
+    """Loss, LR, throughput, validation NLL (on the step it follows), HF exports and a non-finite loss."""
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import server
+
+    log = tmp_path / "sft.log"
+    log.write_text(SFT_LOG)
+    tail = server.LogTail("ap-1", "sft-1", str(log), engine=False, sft=True)
+    tail.poll()
+    s = tail.train_summary()
+    s0, s1 = s["steps"]
+    assert (s0["loss"], s0["lr"], s0["tok_per_s"], s0["mfu"]) == (0.63, 2e-07, 24000.0, 0.41)
+    assert s1["dt"] == 18.0 and s1["val_nll"] == 0.55 and s["median_step_s"] == 18.0
+    assert [v[:2] for v in s["vals"]] == [[0, 0.61], [2, 0.55]]
+    assert s["hf"][0][1] == "/results/s/hf/iter_0000001" and s["loss_nan"] == [1]
+
+
+def test_pass_at_k_and_eval_links(monkeypatch, tmp_path):
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import server
+
+    tasks = [{"finished": 2, "solved": 1}, {"finished": 2, "solved": 0}, {"finished": 1, "solved": 1}]
+    p = server.pass_at(tasks, 2)
+    assert (p["k"], p["atk"], p["tasks_k"], p["at1"]) == (2, 0.5, 2, 0.5)
+    runs = [
+        {"run_id": "sft-1", "key": "v/sft-1", "registry": {"kind": "sft"}},
+        {
+            "run_id": "ev-1",
+            "key": "v/ev-1",
+            "registry": {"evaluates": {"run": "sft-1", "step": 500}},
+            "status": "finished",
+            "tone": "good",
+            "trials": {"finished": 4},
+            "pass": p,
+            "sort_t": 1,
+        },
+    ]
+    server.link_evals(runs)
+    assert [(e["run_id"], e["step"], e["pass"]["atk"]) for e in runs[0]["evals"]] == [("ev-1", 500, 0.5)]
+
+
+def test_sft_kind_is_its_own_type(monkeypatch, tmp_path):
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import groups
+
+    assert groups.classify({"run_id": "sft-q36-1", "registry": {"kind": "sft"}, "train": {}})[1] == "sft"
+
+
+def test_thinned_curves_keep_small_values(monkeypatch, tmp_path):
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import metrics
+
+    pts = [[float(i), 2e-7] for i in range(100)]
+    assert {v for _, v in metrics.thin(pts, 10)} == {2e-7}

@@ -6,7 +6,9 @@ launchers call `write_manifest`, and `register.py` adds one by hand after the fa
 
 Known fields (all optional except the two ids): title, kind, campaign, gpu, gpu_app_name, sandbox {provider, app},
 wandb {project}, expected_steps, expected_trials, batch_size, n_samples, group_filter, stale_secs, limits
-{agent_secs, trial_secs, verifier_secs, turns, context, hard_stop_h}, launcher, recipe, docs, notes. `log_path`
+{agent_secs, trial_secs, verifier_secs, turns, context, hard_stop_h}, launcher, recipe, docs, notes. kind is
+"train" for RL (the recipe's), "sft" for a trainer-only SFT run; an eval of a training run's checkpoint adds
+evaluates {run, step, label} (step = optimizer steps trained, 0 = the base model). `log_path`
 (the launcher's own stdout, when it is redirected to a file) is filled in here: the monitor tails that file for
 live stage, engine and trial-outcome events.
 """

@@ -104,6 +104,31 @@ and the launcher's exit record. The run page shows a Training panel (tiles plus 
 steps" (mean reward of the trials that finished during each step; trials don't record their step, so this bins
 by finish time) and a Training group of curves. Engine curves sum over all engines that log.
 
+## SFT runs
+
+An SFT run (no engines, no trials) registers with `"kind": "sft"` and `"expected_steps"`. Its own Modal app writes
+the manifest with `manifest.write_manifest(app_id, run_id, kind="sft", expected_steps=..., gpu=..., wandb={...})`,
+or by hand once the log names the app:
+
+```bash
+python -m miles_ext.monitor.register <run_id> <launch log> --kind sft --expected-steps 1000 \
+    --gpu "1x H200:8" --wandb-project miles-sft --hard-stop-h 24 --title "..."
+```
+
+From the launch log: Miles' `step N:` lines (train loss, grad norm, `lr-pg_0`), `perf N:` lines (trainer tokens/s, MFU),
+`validation at step N: {'val/nll': ...}` (`miles_ext.sft` validation; N = optimizer steps done, 0 = before training),
+checkpoint saves and HF exports ("Successfully saved HuggingFace model to ..."). Step time is the wall time between
+step lines when the run logs none. The run is type `sft` (its own tab), its row shows the loss sparkline and the last
+validation NLL, and its page has an SFT panel and loss, validation NLL, LR and tokens/s curves on the step axis. Signals:
+a non-finite train/loss, no step for the greater of 3 median steps and 45 min (60 min after Ray is up before the first
+step), step pace against `hard_stop_h`. It reads "finished" once every expected step is logged. A run registered as `train` and edited to `sft` takes the new
+kind at once; restart the monitor to rebuild its loss curve from the log.
+
+**Evals of its checkpoints.** An eval run says what it evaluates; the SFT run's page lists every such eval with pass@k
+(unbiased, over tasks with at least k finished trials; k = the eval's `n_samples`) and pass@1. In the eval's manifest or
+`runs.json` entry: `"evaluates": {"run": "<sft run id>", "step": <steps trained, 0 = base model>, "label": "..."}`, or
+`register.py <eval run id> <eval log> <eval recipe> --evaluates <sft run id>@<step>`. Eval rows with k > 1 show pass@k.
+
 ## GPUs tab
 
 Every GPU the shown Modal apps (`app_prefixes`, first of `modal_environments`) hold right now, what it is for, and the last 24 hours.
@@ -145,10 +170,10 @@ URL passwords, `api_key=`/`token:` values) are scrubbed from every response.
 
 - **Groups and types.** `groups.json` in the data dir (optional) is the one place that says which group a run belongs to and its type: `train`
   (RL training), `eval` (quality eval), `bench` (inference speed/correctness), `smoke` (smokes, probes, profiles) or
-  `other` (result dirs with no launch record, hidden by default). The first regex matching the run id wins; an
+  `other` (result dirs with no launch record, hidden by default), plus `sft` (manifest kind `sft`). The first regex matching the run id wins; an
   unmatched run is grouped by its id prefix. Format: `{"rules": [["^smoke-", "Smokes", "smoke"], ["^grpo-math-", "GRPO math", "train"]]}`
   (regex, group label, type). `groups.py` applies it and the server adds `group` and `type` to every
-  run. New campaign: add one rule. The registry's `kind` is not used for this (most benches were registered `train`).
+  run. New campaign: add one rule. The registry's `kind` is not used for this (most benches were registered `train`), except `sft`.
 - **Runs tab.** Groups, newest first; a group with a run in the last 3 days opens by default. Tabs filter by type.
   Each row shows what the run produced: the reward over steps (sparkline, last value), the trial mean reward, or the
   eval/bench headline from its `summary.json` (pass@1, best decode tok/s, checks passed).

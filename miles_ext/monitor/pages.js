@@ -142,7 +142,7 @@
     return undefined;
   }
   const cmpState = { mode: null };
-  const STEP_METRICS = [["raw_reward", "Reward per step", "r"], ["raw_reward_unfiltered", "Reward of groups finished this step (not the trained batch)", "r"], ["response_len", "Response length, mean", "tok"],
+  const STEP_METRICS = [["loss", "Train loss", ""], ["val_nll", "Validation NLL", ""], ["lr", "Learning rate", ""], ["tok_per_s", "Trainer tokens/s", "tok/s"], ["raw_reward", "Reward per step", "r"], ["raw_reward_unfiltered", "Reward of groups finished this step (not the trained batch)", "r"], ["response_len", "Response length, mean", "tok"],
     ["truncated", "Truncated samples", "frac"], ["zero_std_all_zero", "Groups with all-zero reward", "frac"], ["zero_std_all_one", "Groups with all-one reward", "frac"],
     ["grad_norm", "Grad norm", ""], ["logprob_diff", "Train vs rollout log-prob gap", ""],
     ["mis_mask_low", "MIS masked, ratio below band", "frac"], ["mis_mask_high", "MIS masked, ratio above band", "frac"], ["sc_masked", "MIS masked (score centering)", "frac"], ["sc_weight", "MIS mean token weight (score centering)", ""], ["staleness", "Weight staleness", ""], ["step_time", "Step time", "s"], ["update_weights_time", "Weight sync time", "s"]];
@@ -179,6 +179,9 @@
       ["Modal cost", r => r.cost ? [costNow(r.cost), r.cost.estimate || r.cost.total] : null, "lower"],
       ["GPU", r => (r.registry || {}).gpu ? [esc(h.gpuLabel(r)), null] : null],
       ["Steps done", r => stepsOf(r).length ? [String(stepsOf(r).length), stepsOf(r).length] : null, "higher"],
+      ["Train loss, mean of last 10", r => { if (typeOf(r) !== "sft") return null; const v = avg(stepsOf(r).slice(-10).map(s => s.loss)); return v != null ? [v.toFixed(4), v] : null; }, "lower"],
+      ["Val NLL, last", r => { const v = ((r.train || {}).vals || []).slice(-1)[0]; return v ? [`${v[1].toFixed(4)} <span class="muted small">after ${v[0]} steps</span>`, v[1]] : null; }, "lower"],
+      ["Trainer tokens/s, median", r => { const v = med(stepsOf(r).map(s => s.tok_per_s)); return v != null ? [int(v), v] : null; }, "higher"],
       ["Reward, first step", r => rw(stepsOf(r)).length ? [mean2(rw(stepsOf(r))[0]), rw(stepsOf(r))[0]] : null, "higher"],
       ["Reward, last step", r => rw(stepsOf(r)).length ? [mean2(rw(stepsOf(r)).slice(-1)[0]), rw(stepsOf(r)).slice(-1)[0]] : null, "higher"],
       ["Reward, mean of last 3", r => rw(stepsOf(r)).length >= 3 ? [mean2(avg(rw(stepsOf(r)).slice(-3))), avg(rw(stepsOf(r)).slice(-3))] : null, "higher"],
@@ -254,13 +257,15 @@
     const el = document.getElementById("cmp-charts");
     if (!el || !CUR || el.dataset.painted === el.dataset.keep) return;
     el.dataset.painted = el.dataset.keep;
-    const { A, B, sA, sB, mode, ready, stA, stB } = CUR, { esc } = H();
+    const { A, B, sA, sB, mode, ready, stA, stB } = CUR, { esc, typeOf } = H();
     const ca = getComputedStyle(document.documentElement).getPropertyValue("--cmp-a").trim(), cb = getComputedStyle(document.documentElement).getPropertyValue("--cmp-b").trim();
     const card = (id, label) => `<div class="card chart-card" data-c="${esc(id)}"><div class="card-head"><span class="card-title">${esc(label)}</span><span class="card-val"></span></div><canvas></canvas><div class="card-note readout"></div></div>`;
     const plots = [];
     const steps = el.querySelector('[data-cmp="steps"]');
     if (steps) {
-      const defs = STEP_METRICS.filter(([k]) => stA.some(s => s[k] != null) || stB.some(s => s[k] != null));
+      // an RL run's train/loss is its policy loss: compared only when one of the two is an SFT run
+      const sft = [A, B].some(r => typeOf(r) === "sft");
+      const defs = STEP_METRICS.filter(([k]) => (k !== "loss" || sft) && (stA.some(s => s[k] != null) || stB.some(s => s[k] != null)));
       steps.innerHTML = defs.map(([k, l]) => card("s-" + k, l)).join("");
       for (const [k, l, unit] of defs) plots.push(["s-" + k, l, { unit, xType: "step", dots: stA.length + stB.length <= 80, series: [
         { name: A.run_id, color: ca, points: stA.filter(s => s[k] != null).map(s => [s.n, s[k]]) }, { name: B.run_id, color: cb, points: stB.filter(s => s[k] != null).map(s => [s.n, s[k]]) }] }]);

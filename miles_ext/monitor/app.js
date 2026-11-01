@@ -360,6 +360,72 @@
           rowAttrs: s => `title="step ${s.n} · before filter ${mean2(s.raw_reward_unfiltered)} · staleness ${num(s.staleness, 2)}"` })}</div>`) :
         `<p class="muted small">${tr && tr.training_now ? "Step 0 is training now; its" : "No step yet. The first step trains once a full batch of trials has finished; its"} reward, step time and weight sync show here from Miles' own per-step log lines once it ends.</p>`}</div>`;
   }
+  // ---- SFT runs (manifest kind "sft"): loss, held-out NLL, throughput, checkpoints and the evals of them ----------
+  const isSft = r => typeOf(r) === "sft";
+  const loss4 = v => v == null ? "–" : (+v).toFixed(4);
+  const lastOf = (steps, k) => { for (let i = steps.length - 1; i >= 0; i--) if (steps[i][k] != null) return steps[i]; return null; };
+  const avgOf = xs => { const v = xs.filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  // the train loss is noisy step to step: tiles show the mean of the last 10 steps
+  const lossTail = steps => avgOf(steps.slice(-10).map(s => s.loss));
+  function sftKpis(r, k) {
+    const tr = r.train || {}, steps = stepsOf(r), exp = tr.expected_steps || (r.registry || {}).expected_steps;
+    const last = steps[steps.length - 1], vals = tr.vals || [], v0 = vals[0], v1 = vals[vals.length - 1];
+    const left = exp && last ? exp - 1 - last.n : null, eta = left > 0 && tr.median_step_s ? last.t + left * tr.median_step_s : null;
+    const tps = lastOf(steps, "tok_per_s");
+    return [
+      k(last ? `${last.n + 1}<small>/${exp || "?"}</small>` : `0<small>/${exp || "?"}</small>`, "Steps done", last ? `last ${agoTxt(last.t)}${eta ? ` · done ~${hm(eta)}` : ""}` : "trainer loading"),
+      k(loss4(lossTail(steps)), "Train loss", steps.length ? `mean of last ${Math.min(10, steps.length)}${steps[0].loss != null && steps.length > 10 ? ` · first ${loss4(steps[0].loss)}` : ""}` : ""),
+      k(v1 ? loss4(v1[1]) : "–", "Val NLL", v1 ? (v0 && v0 !== v1 ? `${v0[0] ? "step " + v0[0] : "before training"}: ${loss4(v0[1])}` : v1[0] ? `after ${v1[0]} steps` : "before training") : "no validation yet"),
+      k(tps ? int(tps.tok_per_s) : "–", "Tokens/s", tps && tps.mfu != null ? `trainer · MFU ${Math.round(100 * tps.mfu)}%` : "trainer"),
+      k(tr.median_step_s ? secs(tr.median_step_s) : "–", "Step time", tr.median_step_s ? "median" : ""),
+    ];
+  }
+  /* The evals that name this run in "evaluates" (manifest or runs.json): one row per checkpoint eval. */
+  function evalsHTML(r) {
+    const evs = r.evals || [];
+    if (!evs.length) return `<p class="muted small">No eval of this run's checkpoints yet. An eval links here when its manifest (or runs.json entry) says <span class="mono">"evaluates": {"run": "${esc(r.run_id)}", "step": N}</span>; <span class="mono">register.py --evaluates ${esc(r.run_id)}@N</span> writes it.</p>`;
+    const cols = [
+      { k: "step", label: "Checkpoint", sort: e => e.step ?? -1, cell: e => esc(e.label || (e.step === 0 || e.step === "base" ? "base model" : e.step != null ? `step ${e.step}` : "–")) },
+      { k: "run", label: "Eval run", sort: e => e.run_id, cell: e => `<a href="#tab=runs&run=${encodeURIComponent(e.key)}">${esc(e.run_id)}</a>` },
+      { k: "status", label: "Status", sort: e => e.status, cell: e => `<span class="nowrap"><span class="dot t-${e.tone}"></span>${esc(e.status)}</span>` },
+      { k: "atk", label: "pass@k", cls: "num", desc: true, sort: e => e.pass && e.pass.atk, cell: e => e.pass && e.pass.atk != null ? `<b>${(100 * e.pass.atk).toFixed(1)}%</b> <span class="muted small">@${e.pass.k}</span>` : "–" },
+      { k: "at1", label: "pass@1", cls: "num", desc: true, sort: e => e.pass && e.pass.at1, cell: e => e.pass ? `${(100 * e.pass.at1).toFixed(1)}%` : "–" },
+      { k: "tasks", label: "Tasks", cls: "num", sort: e => e.pass && e.pass.tasks, cell: e => e.pass ? (e.pass.tasks_k !== e.pass.tasks ? `${e.pass.tasks_k} of ${e.pass.tasks}` : int(e.pass.tasks)) : "–" },
+      { k: "trials", label: "Trials", cls: "num", sort: e => e.finished, cell: e => e.finished != null ? `${int(e.finished)}${e.expected ? "/" + int(e.expected) : ""}` : "–" },
+      { k: "cost", label: "Cost", cls: "num", sort: e => e.cost, cell: e => e.cost != null ? usd(e.cost) : "–" },
+    ];
+    return `<div class="tight">${table("sft-evals", evs, cols, { key: e => e.key, sort: "step", dir: 1 })}</div>
+      <p class="muted small">pass@k is the unbiased estimate over the tasks with at least k finished trials (reward 1 = solved); k is the eval's n_samples.</p>`;
+  }
+  function sftPanel(r) {
+    const tr = r.train || {}, steps = stepsOf(r), saves = tr.saves || [], hf = tr.hf || [], vals = tr.vals || [];
+    const kk = (v, label, sub) => `<div class="tile"><div class="v" data-flash>${v ?? "–"}</div><div class="k">${label}</div><div class="s">${sub || "&nbsp;"}</div></div>`;
+    const lr = lastOf(steps, "lr"), gn = lastOf(steps, "grad_norm");
+    const cols = [
+      { k: "n", label: "Step", cls: "num", sort: s => s.n, cell: s => s.n },
+      { k: "t", label: "Done", cls: "small nowrap", desc: true, sort: s => s.t, cell: s => `<span title="${fmt(s.t)}">${hm(s.t)}</span>` },
+      { k: "loss", label: "Train loss", cls: "num", desc: true, sort: s => s.loss, cell: s => `<b>${loss4(s.loss)}</b>` },
+      { k: "val_nll", label: "Val NLL", cls: "num", desc: true, sort: s => s.val_nll, cell: s => s.val_nll != null ? `<b>${loss4(s.val_nll)}</b>` : "" },
+      { k: "lr", label: "LR", cls: "num", sort: s => s.lr, cell: s => sig3(s.lr) },
+      { k: "grad_norm", label: "Grad norm", cls: "num", desc: true, sort: s => s.grad_norm, cell: s => sig3(s.grad_norm) },
+      { k: "tok_per_s", label: "Tokens/s", cls: "num", desc: true, sort: s => s.tok_per_s, cell: s => int(s.tok_per_s) },
+      { k: "mfu", label: "MFU", cls: "num", desc: true, sort: s => s.mfu, cell: s => s.mfu != null ? Math.round(100 * s.mfu) + "%" : "–" },
+      { k: "step_time", label: "Step time", cls: "num", desc: true, sort: s => s.step_time || s.dt, cell: s => secs(s.step_time || s.dt) },
+    ];
+    const ckpts = [...saves.map(([t, n]) => ({ t, what: `checkpoint, step ${n}` })), ...hf.map(([t, p]) => ({ t, what: `HF export ${p.split("/").slice(-2).join("/")}`, title: p }))].sort((a, b) => b.t - a.t);
+    return `<div class="panel" data-key="p-train"><h2>SFT training</h2>
+      <div class="tiles">${sftKpis(r, kk).slice(1).join("")}
+        ${kk(lr ? sig3(lr.lr) : "–", "Learning rate", lr ? `at step ${lr.n}` : "")}
+        ${kk(gn ? sig3(gn.grad_norm) : "–", "Grad norm", gn ? `at step ${gn.n}` : "")}
+        ${kk(saves.length ? saves[saves.length - 1][1] : "–", "Last checkpoint", saves.length ? `${ago(saves[saves.length - 1][0])}${hf.length ? ` · ${plural(hf.length, "HF export")}` : ""}` : hf.length ? plural(hf.length, "HF export") : "none yet")}</div>
+      ${(tr.loss_nan || []).length ? `<p class="err small">train/loss was not finite at step ${tr.loss_nan.slice(-5).join(", ")}</p>` : ""}
+      ${tr.exit ? `<p class="${tr.exit.reason === "success" ? "muted" : "err"} small">Trainer exited: ${esc(tr.exit.reason)}${tr.exit.step != null ? ` at step ${tr.exit.step}` : ""}${tr.exit.note ? " · " + esc(tr.exit.note) : ""} (${fmt(tr.exit.t)})</p>` : ""}
+      <h3>Evals of its checkpoints</h3>${evalsHTML(r)}
+      ${vals.length ? more("sft-vals", `validation passes (${vals.length})`, () => `<table class="tight"><thead><tr><th>After</th><th class="num">Val NLL</th><th>When</th></tr></thead><tbody>${vals.map(([n, v, t]) => `<tr><td>${n ? plural(n, "step") : "before training"}</td><td class="num">${loss4(v)}</td><td class="small muted">${fmt(t)}</td></tr>`).join("")}</tbody></table>`) : ""}
+      ${ckpts.length ? more("sft-ckpts", `checkpoints and HF exports (${ckpts.length})`, () => `<table class="tight"><tbody>${ckpts.map(c => `<tr><td${c.title ? ` title="${esc(c.title)}"` : ""}>${esc(c.what)}</td><td class="small muted">${fmt(c.t)}</td></tr>`).join("")}</tbody></table>`) : ""}
+      ${steps.length ? more("train-steps", `table of every step (${steps.length})`, () => `<div class="tight">${table("steps", steps, cols, { key: s => s.n, sort: "n", dir: -1, page: 15 })}</div>`) :
+        `<p class="muted small">No step yet. Loss, learning rate and throughput show here from Miles' own per-step log lines (<span class="mono">step N: {...}</span>, <span class="mono">perf N: {...}</span>) once the first step ends; validation NLL from <span class="mono">validation at step N: {'val/nll': ...}</span>.</p>`}</div>`;
+  }
   function trainerNow(r, su, ended) {
     const tr = r.train || {}, ph = tr.phases || [], seen = (su && su.seen) || {};
     const trains = ph.filter(x => x[0] === "train"), open = [...ph].reverse().find(x => x[2] == null);
@@ -593,7 +659,11 @@
     const n = (r.attempts || []).length;
     const k = (v, label, sub) => `<div class="kpi"><div class="v" data-flash>${v}</div><div class="k">${label}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
     const tr = r.train;
-    const kpis = tr || typeOf(r) === "train" ? [
+    const kpis = isSft(r) ? [
+      ...sftKpis(r, k),
+      k(start ? `<span data-for="${start}">${dur(now() - start)}</span>` : "–", "Elapsed", lim.hard_stop_h && start ? `limit ${hm(start + lim.hard_stop_h * 3600)}` : ""),
+      costKpi(r, k),
+    ].join("") : tr || typeOf(r) === "train" ? [
       ...trainKpis(r, k),
       t ? k(t.in_flight, "Trials in flight", `${t.finished} finished · ${t.solved} reward 1`) : "",
       engineKpi(r, att),
@@ -614,7 +684,7 @@
         <div class="runcard-title"><span class="dot t-${r.tone}"></span><a href="#tab=runs&run=${encodeURIComponent(r.key)}">${esc(r.run_id)}</a> <span class="muted" style="font-weight:400">· ${esc(r.status)}</span></div>
         <div class="sub">${esc(reg.title || "")}</div></div>
         <div class="row">${tpill(typeOf(r))}${reg.gpu ? `<span class="chip">${esc(gpuLabel(r))}</span>` : ""}${n ? `<span class="chip">attempt ${n}</span>` : ""}${linksHTML(r)}</div></div>
-      ${tr || typeOf(r) === "train" ? stepper(su, r) : ""}
+      ${tr || typeOf(r) === "train" || isSft(r) ? stepper(su, r) : ""}
       <div class="kpis">${kpis}</div>
       ${t ? bar(t, "100%") + barKey(t) : ""}
       ${signalsHTML(r.signals, "card")}
@@ -677,7 +747,7 @@
 
   // ---- Runs: every run, in groups ----------------------------------------------------------------------------
   // the server owns a run's group and type (monitor/groups.json); these are only their labels and colours
-  const TYPES = { train: ["RL training", "RL"], eval: ["Evals", "Eval"], bench: ["Benchmarks", "Bench"], smoke: ["Smokes and probes", "Smoke"], other: ["Folders", "Folder"] };
+  const TYPES = { train: ["RL training", "RL"], sft: ["SFT", "SFT"], eval: ["Evals", "Eval"], bench: ["Benchmarks", "Bench"], smoke: ["Smokes and probes", "Smoke"], other: ["Folders", "Folder"] };
   const typeOf = r => r.type || "other";
   /* "1x None:8" in older manifests means the GPU type wasn't recorded: say "8 GPUs" (or the type a bench summary names). */
   const gpuLabel = r => { const g = (r.registry || {}).gpu; if (!g) return ""; const m = /^(\d+)x None:(\d+)$/.exec(g), e = EV[r.run_id];
@@ -717,10 +787,20 @@
   }
   /* What a run produced, in one short line, by type: reward over steps, trial score, or the eval/bench headline. */
   function resultHTML(r) {
+    if (isSft(r)) {
+      const st = stepsOf(r).filter(s => s.loss != null), vals = (r.train || {}).vals || [], v = vals[vals.length - 1];
+      const ev = (r.evals || []).filter(e => e.pass && e.pass.atk != null).slice(-1)[0];
+      if (!st.length && !v) return `<span class="muted small">–</span>`;
+      return `${sparkSVG(st.map(s => s.loss))}${v ? `<b>${loss4(v[1])}</b> <span class="muted small">val NLL` : `<b>${loss4(lossTail(st))}</b> <span class="muted small">loss`} · ${plural(stepsOf(r).length, "step")}${ev ? ` · pass@${ev.pass.k} ${(100 * ev.pass.atk).toFixed(1)}%` : ""}</span>`;
+    }
     const steps = stepsOf(r).filter(s => s.raw_reward != null), t = r.trials;
     if (steps.length) {
       const a = steps[0], z = steps[steps.length - 1];
       return `${sparkSVG(steps.map(s => s.raw_reward))}<b>${mean2(z.raw_reward)}</b> <span class="muted small">reward${steps.length > 1 ? ` · from ${mean2(a.raw_reward)}` : ""} · ${plural(stepsOf(r).length, "step")}</span>`;
+    }
+    if (t && t.with_reward && r.pass && r.pass.k > 1 && r.pass.atk != null) {
+      const p = r.pass;
+      return `<span class="res-bar" title="pass@${p.k}"><i style="width:${(100 * Math.min(1, p.atk)).toFixed(0)}%"></i></span><b>${(100 * p.atk).toFixed(1)}%</b> <span class="muted small">pass@${p.k} · pass@1 ${(100 * p.at1).toFixed(1)}% · ${p.tasks_k} tasks</span>`;
     }
     if (t && t.with_reward) {
       const m = t.mean_reward || 0;
@@ -754,6 +834,11 @@
   }
   /* The best result in a group, for its header: highest last-step reward, else highest trial mean. */
   function groupBest(g) {
+    if (g.type === "sft") {  // lowest last validation NLL
+      let b = null;
+      for (const r of g.runs) { const v = ((r.train || {}).vals || []).slice(-1)[0]; if (v && (!b || v[1] < b.v)) b = { v: v[1], r }; }
+      return b ? `best val NLL <b>${loss4(b.v)}</b> · ${esc(b.r.run_id)}` : "";
+    }
     let best = null;
     for (const r of g.runs) {
       const st = stepsOf(r).filter(s => s.raw_reward != null), v = st.length ? st[st.length - 1].raw_reward : r.trials && r.trials.with_reward ? r.trials.mean_reward : null;
@@ -766,7 +851,7 @@
     const open = q ? true : FOLD[fid] ?? (g.live || recent);
     const cost = g.runs.reduce((a, r) => a + (r.cost ? r.cost.estimate || r.cost.total || 0 : 0), 0);
     const n = ui.grpN[g.name] || 5, shown = q ? g.runs : g.runs.slice(0, n);
-    const best = g.type === "train" || g.type === "eval" ? groupBest(g) : "";
+    const best = g.type === "train" || g.type === "sft" || g.type === "eval" ? groupBest(g) : "";
     return `<div class="grp typed t-${g.type} ${open ? "open" : ""}" data-key="${esc(fid)}">
       <div class="grp-h" onclick="MON.fold('${esc(fid).replace(/'/g, "\\'")}', ${!open})"><span class="chev">▸</span>
         <div class="grp-name">${esc(g.name)} ${tpill(g.type)}${g.live ? `<span class="muted small" style="font-weight:400"><span class="dot t-run"></span>live</span>` : ""}${best ? `<span class="grp-best">${best}</span>` : ""}</div>
@@ -782,7 +867,7 @@
     let runs = S.runs.filter(r => tt === "all" ? typeOf(r) !== "other" || ui.showOther : typeOf(r) === tt);
     if (q) runs = runs.filter(r => (r.run_id + " " + ((r.registry || {}).title || "") + " " + (r.group || "") + " " + r.status).toLowerCase().includes(q));
     const groups = groupsOf(runs);
-    const seg = [["all", "All", S.runs.length - (counts.other || 0)], ...["train", "eval", "bench", "smoke"].map(k => [k, TYPES[k][0], counts[k] || 0])];
+    const seg = [["all", "All", S.runs.length - (counts.other || 0)], ...["train", "sft", "eval", "bench", "smoke"].map(k => [k, TYPES[k][0], counts[k] || 0])];
     return `<div class="runs-head"><h2 class="page-title">Runs</h2>
         <div class="seg">${seg.map(([k, l, n]) => `<button class="${tt === k ? "on" : ""}" onclick="MON.runType('${k}')">${l} <span class="muted">${n}</span></button>`).join("")}</div>
         <input type="search" placeholder="search runs" value="${esc(TBL.runs ? TBL.runs.q : "")}" oninput="MON.runsQ(this.value)">
@@ -941,7 +1026,7 @@
     if (!r) return `<div class="panel">${loaded ? "Run not found." : "loading…"} <a href="#tab=runs">← all runs</a></div>`;
     const sum = runByKey(route.run) || r;  // the summary (status, signals, links, group, type) from the runs topic
     const reg = sum.registry || {}, t = r.trials, rows = r.rows || [], su = S.startup[r.run_id];
-    const type = typeOf(sum), isTrain = !!sum.train || type === "train", live = isLiveRun(sum);
+    const type = typeOf(sum), isTrain = !!sum.train || type === "train" || type === "sft", live = isLiveRun(sum);
     const ev = !isTrain && (type === "eval" || type === "bench") ? evalOf(r.run_id) : null;
     const peers = S.runs.filter(x => x.group && x.group === sum.group && x.key !== sum.key);
     const jumps = [];
@@ -950,7 +1035,14 @@
     const hl = (v, k, s) => `<div><div class="hv">${v}</div><div class="hk">${k}</div>${s ? `<div class="hs">${s}</div>` : ""}</div>`;
     const steps = stepsOf(sum), lastS = steps[steps.length - 1], tr = sum.train || {};
     let head = "";
-    if (isTrain) head = [
+    const vals = tr.vals || [], v0 = vals[0], v1 = vals[vals.length - 1], bestEv = (sum.evals || []).filter(e => e.pass && e.pass.atk != null).slice(-1)[0];
+    if (isSft(sum)) head = [
+      hl(`${lastS ? lastS.n + 1 : 0}<small class="muted">/${tr.expected_steps || reg.expected_steps || "?"}</small>`, "Steps done", ""),
+      hl(loss4(lossTail(steps)), "Train loss", steps.length > 10 && steps[0].loss != null ? `last 10 · step 0: ${loss4(steps[0].loss)} ${sparkSVG(steps.map(s => s.loss), 64, 14)}` : ""),
+      hl(v1 ? loss4(v1[1]) : "–", "Val NLL", v0 && v0 !== v1 ? `${v0[0] ? "step " + v0[0] : "before training"}: ${loss4(v0[1])}` : ""),
+      bestEv ? hl(`${(100 * bestEv.pass.atk).toFixed(1)}%`, `pass@${bestEv.pass.k}`, esc(`${bestEv.label || (bestEv.step != null ? "step " + bestEv.step : "")} · ${bestEv.run_id}`)) : "",
+    ].join("");
+    else if (isTrain) head = [
       hl(`${lastS ? lastS.n + 1 : 0}<small class="muted">/${tr.expected_steps || reg.expected_steps || "?"}</small>`, "Steps done", tr.training_now ? "training now" : ""),
       hl(lastS && lastS.raw_reward != null ? mean2(lastS.raw_reward) : "–", "Reward, last step", steps.length > 1 && steps[0].raw_reward != null ? `step ${steps[0].n}: ${mean2(steps[0].raw_reward)} ${sparkSVG(steps.map(s => s.raw_reward), 64, 14)}` : ""),
     ].join("");
@@ -970,12 +1062,13 @@
       ${S.watchdogs[r.run_id] ? `<div class="foot">${watchdogLine(r.run_id)}</div>` : ""}
       <div class="jump" data-key="jump">@@JUMP@@</div></div>`;
     let body = "";
-    if (isTrain) { body += J("p-train", "Training") + trainPanel(sum); }
+    if (isSft(sum)) body += J("p-train", "SFT") + sftPanel(sum);
+    else if (isTrain) { body += J("p-train", "Training") + trainPanel(sum); }
     if (!isTrain && (type === "eval" || type === "bench") && !(ev === null && t)) body += J("p-results", "Results") + window.Pages.evalResults(ev, sum);
     if (t && !isTrain) body += J("p-tasks", "Per task") + tasksHTML(t, r.compare);
     const curves = J("curves", "Curves") + `<div id="curves" class="panel" data-key="curves" data-keep="curves-${esc(r.run_id)}"></div>`;
     if (isTrain) body += curves;
-    if (isTrain) { const p = phaseTimeline(sum, rows, su, isTrain); if (p) body += J("p-phases", "Phases") + p; }
+    if (isTrain && !isSft(sum)) { const p = phaseTimeline(sum, rows, su, isTrain); if (p) body += J("p-phases", "Phases") + p; }
     if (t && sum.train) { const ts = taskStepsHTML(sum, rows); if (ts) body += J("sec-task-steps", "Per task over steps") + ts; }
     if (t) {
       const p = t.phases, tile = (v, k, sub) => `<div class="tile"><div class="v" data-flash>${v ?? "–"}</div><div class="k">${k}</div><div class="s">${sub || "&nbsp;"}</div></div>`;
