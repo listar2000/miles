@@ -540,7 +540,7 @@ def post(meta, r, verdict, deep, summary_for):
         for c in page
         if c["user"]["login"] == me and ROUND.search(c["body"])
     ]
-    ours.sort(key=lambda c: c["updated_at"])
+    ours.sort(key=lambda c: c["created_at"])  # collapsing an older summary bumps its updated_at
     lines = diff_lines(n)
 
     def on_diff(f):

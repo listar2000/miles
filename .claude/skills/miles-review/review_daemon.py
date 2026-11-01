@@ -48,13 +48,13 @@ def decide(pr, thread, allowed, done, now, first_seen, settle):
     """What to review on this PR now, as (mode, command comment or None), or None.
 
     `thread` is the PR's comments, oldest first; only comments by `allowed` users count, so nobody else can
-    trigger a review or forge a review marker. A command counts if it is newer than the last edit of a review
-    (the summary is edited in place each round). `done` holds "<head>:<mode>" reviews and "cmd:<id>" commands
+    trigger a review or forge a review marker. A command counts if it is newer than the last edit of the summary
+    (the newest review comment, edited in place each round). `done` holds "<head>:<mode>" reviews and "cmd:<id>" commands
     already run."""
     if pr["author"]["login"] not in allowed or pr["isCrossRepository"]:
         return None
     head, ours = pr["headRefOid"], [c for c in thread if c["user"]["login"] in allowed]
-    last = max((c["updated_at"] for c in ours if MARKER.match(c["body"])), default="")
+    last = next((c["updated_at"] for c in latest_first(ours, allowed) if MARKER.match(c["body"])), "")
     for c in [c for c in ours if c["created_at"] > last][::-1]:
         if (m := COMMAND.fullmatch(c["body"].strip())) and f"cmd:{c['id']}" not in done:
             return ("deep" if m.group(1) or auto_deep(pr) else "normal"), c
@@ -66,8 +66,8 @@ def decide(pr, thread, allowed, done, now, first_seen, settle):
 
 
 def latest_first(thread, allowed):
-    """Allowed users' comments, most recently edited first."""
-    return sorted((c for c in thread if c["user"]["login"] in allowed), key=lambda c: c["updated_at"], reverse=True)
+    """Allowed users' comments, newest first; by creation, as collapsing an older summary bumps its updated_at."""
+    return sorted((c for c in thread if c["user"]["login"] in allowed), key=lambda c: c["created_at"], reverse=True)
 
 
 def auto_deep(pr):

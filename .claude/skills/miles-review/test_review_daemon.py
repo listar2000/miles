@@ -78,11 +78,9 @@ def test_merge_needs_a_ready_review_at_the_head_and_answers_once():
     assert D.merge_refusal(pr, [_review("h1")], ME) is None
     assert "no Codex review" in D.merge_refusal({**pr, "headRefOid": "h2"}, [_review("h1")], ME)
     assert "stacked" in D.merge_refusal({**pr, "baseRefName": "topic"}, [_review("h1")], ME)
+    collapsed = _review("h0", id=1, edited="2026-01-01T00:00:30Z")  # an older summary, collapsed after h1's round
+    assert D.merge_refusal(pr, [collapsed, _review("h1", id=2)], ME) is None
     assert "blocked" in D.merge_refusal(pr, [_review("h1"), _review("h1", id=2, verdict="blocked")], ME)
-    assert (
-        D.merge_refusal(pr, [_review("h1", edited="2026-01-01T00:00:30Z"), _review("h1", id=2, verdict="blocked")], ME)
-        is None
-    )
     assert "deep" in D.merge_refusal({**pr, "files": [{"path": "miles/x.py"}]}, [_review("h1")], ME)
 
 

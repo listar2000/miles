@@ -60,7 +60,9 @@ slots while reviews run; once `main` has moved it starts none until the running 
 finish, then updates, so every review reads one protocol version. The heartbeat's `running` is a list.
 Each round edits one summary comment in place and posts a "Comment" review whose line
 comments carry the findings on changed lines (exact ones as GitHub suggestions); fixes are
-recommendations the author decides on. Approve and Request changes are not used: the box
+recommendations the author decides on. The summary is the newest-created review comment
+(collapsing older ones as outdated bumps their edit time, so edit time cannot pick it); a
+`/review` counts as answered once the summary was edited after it. Approve and Request changes are not used: the box
 posts as the PR author, and GitHub refuses both on one's own PR (a reviewer GitHub App
 would allow them).
 Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT
