@@ -14,3 +14,4 @@ or a design that several changes follow.
 | RFC | Status |
 | --- | --- |
 | [0001 One running main, latest or a stable version](0001-main-and-stable-versions.md) | accepted 2026-10-15; in the rulebook |
+| [0002 SFT data tokenized the way the model sees it when served](0002-tito-aware-sft-tokenization.md) | accepted 2026-11-01; implemented (ext-048, hook-017) |
