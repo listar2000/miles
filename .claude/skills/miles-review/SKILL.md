@@ -262,8 +262,8 @@ and the code the PR touches or calls, given with `--context`). Two questions:
 
 Rules `measurement` (a claim the evidence does not support as stated) and
 `technical` (a correctness, numerics, memory or state risk). Evidence quotes the
-code lines or the evidence file; `fix` is the exact code change, or the exact
-command and comparison that would settle it (marked unproven). A finding may
+code lines or the evidence file; `suggestion` is the recommended code change,
+or the command and comparison that would settle it (marked unproven). A finding may
 anchor in a `--context` file the change affects.
 
 ## Severity
@@ -287,7 +287,7 @@ that folder exists (otherwise put it in your reply):
 
 1. Verdict on the first line: ready / ready after the should-fixes / blocked.
 2. Findings by severity, each with `file:line`, the evidence (command and
-   output), and the exact fix (replacement text or a diff).
+   output), and a recommended fix the author may adapt.
 3. Any proposed rewrite (comment or test) in full, with its green and red proof.
 4. The checks you ran, with counts and times, head against `$BASE`.
 5. Handoffs, each naming its owner.
@@ -297,7 +297,7 @@ Then remove the worktree: `git worktree remove "$SCRATCH/pr$N"`.
 ## Done means
 
 Every required check ran on the head and on `$BASE`; every finding carries
-evidence and a concrete fix; every proposed test was proven green on the head
+evidence and a recommended fix; every proposed test was proven green on the head
 and red on `$BASE`; and the PR's branch is untouched (reviewer) or holds
 one commit per fork id, plus any `fixup!` commits, that passes every check (author).
 
@@ -359,7 +359,7 @@ files, with times; `error` when it cannot run on this host),
 `prior_review.md` when given (check each of its findings against the head).
 
 **The reviewer** does sections 1-4 from the prompt alone. A smaller test it
-proposes goes in `fix` marked unproven; the PR's owner proves it. Upstream's
+proposes goes in `suggestion` marked unproven; the PR's owner proves it. Upstream's
 `REVIEW.md` is for upstream PRs; on this fork, this file wins.
 
 **The answer** is one JSON object matching `output.schema.json`:
@@ -370,7 +370,13 @@ proposes goes in `fix` marked unproven; the PR's owner proves it. Upstream's
   review), `PR body` or `commit <sha8>`; `line` is 1-based at the head, 0 for
   a whole file, the body or a commit;
 - `evidence` quotes the text, or the bundle file and lines it comes from;
-  `fix` is the exact replacement text or a diff, never advice;
+  `suggestion` is the recommended fix, which the author decides on: for prose
+  (PR body, docs, comments) say what to change and why, with example wording
+  at most; set `exact` only for a small code change on changed lines, where
+  `suggestion` is the exact replacement of `line`..`end_line` (it becomes a
+  one-click GitHub suggestion); otherwise `end_line` equals `line`;
+- `prior` gives each finding of `prior_review.md` (in order) as fixed, open
+  or dropped; a still-open one is also a finding again;
 - `rule` names the broken rule, `severity` follows Severity, and `verdict`
   follows from them (any blocking: blocked; any should-fix: ready after the
   should-fixes; else ready);
@@ -379,7 +385,8 @@ proposes goes in `fix` marked unproven; the PR's owner proves it. Upstream's
 
 **The supervisor rejects** an answer whose verdict does not follow from its
 severities; a finding off the changed files, the body or a commit, past the end
-of its file, or without evidence and an exact fix; a failing ledger on the head
+of its file, or without evidence and a suggestion; an exact suggestion outside a
+changed file; a failing ledger on the head
 without a blocking `ledger` finding; attribution lines without an `attribution`
 finding; and a new test that passes on the base without a `test` finding
 naming it.
@@ -394,7 +401,18 @@ branches of this repository:
 | a ready PR has a head with no review (after `--settle` seconds, so quick pushes coalesce) | deep if labelled `deep-review` or the diff touches `miles/`, `miles_plugins/` or `train_async.py`, else normal |
 | a `/review` or `/review deep` comment after the last review, drafts too | as asked (or deep by the rule above) |
 
-The last review comment is the `--prior`. For a deep review the PR body can
+**What a round posts** (`--post`): one summary comment per PR, edited in
+place each round, with the verdict first, the findings not on a diff line in
+full, checks folded unless worse than the base, and earlier rounds under
+"History"; and a "Comment" review on the head with a one-line round note and
+each finding on a changed line as a comment on that line (an exact suggestion
+as a GitHub suggestion). Earlier rounds' line threads are resolved, since the
+round repeats what is still open, and older summaries are collapsed. The
+summary carries the `<!-- miles-review ... round=N -->` marker the daemon and
+`/merge` read. Reviews post as the box's GitHub user, so they cannot approve
+or request changes on that user's own PRs.
+
+The summary is the `--prior`. For a deep review the PR body can
 name more inputs on lines of their own: `Review context: <paths or globs>` and
 `Evidence: <modal://volume/path>...` (our volumes only). A review the PR's
 next head overtakes is stopped; a head that fails twice gets a short error

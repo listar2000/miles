@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import review as R
 
 HERE = Path(__file__).resolve().parent
-MARKER = re.compile(r"<!-- miles-review head=(\w+) mode=(\w+) verdict=([\w-]+) -->")
+MARKER = re.compile(r"<!-- miles-review head=(\w+) mode=(\w+) verdict=([\w-]+)(?: round=\d+)? -->")
 COMMAND = re.compile(r"/review( deep)?")
 MERGE = re.compile(r"/merge")
 MERGE_MARKER = re.compile(r"<!-- miles-merge result=(\w+) -->")
@@ -48,13 +48,14 @@ def decide(pr, thread, allowed, done, now, first_seen, settle):
     """What to review on this PR now, as (mode, command comment or None), or None.
 
     `thread` is the PR's comments, oldest first; only comments by `allowed` users count, so nobody else can
-    trigger a review or forge a review marker. `done` holds "<head>:<mode>" reviews and "cmd:<id>" commands
+    trigger a review or forge a review marker. A command counts if it is newer than the last edit of a review
+    (the summary is edited in place each round). `done` holds "<head>:<mode>" reviews and "cmd:<id>" commands
     already run."""
     if pr["author"]["login"] not in allowed or pr["isCrossRepository"]:
         return None
     head, ours = pr["headRefOid"], [c for c in thread if c["user"]["login"] in allowed]
-    last = max((i for i, c in enumerate(ours) if MARKER.match(c["body"])), default=-1)
-    for c in ours[last + 1 :][::-1]:
+    last = max((c["updated_at"] for c in ours if MARKER.match(c["body"])), default="")
+    for c in [c for c in ours if c["created_at"] > last][::-1]:
         if (m := COMMAND.fullmatch(c["body"].strip())) and f"cmd:{c['id']}" not in done:
             return ("deep" if m.group(1) or auto_deep(pr) else "normal"), c
     if pr["isDraft"] or now - first_seen.setdefault(head, now) < settle:
@@ -62,6 +63,11 @@ def decide(pr, thread, allowed, done, now, first_seen, settle):
     mode = "deep" if auto_deep(pr) else "normal"
     reviewed = done | {f"{m.group(1)}:{m.group(2)}" for c in ours if (m := MARKER.match(c["body"]))}
     return None if {f"{head}:{mode}", f"{head}:deep"} & reviewed else (mode, None)
+
+
+def latest_first(thread, allowed):
+    """Allowed users' comments, most recently edited first."""
+    return sorted((c for c in thread if c["user"]["login"] in allowed), key=lambda c: c["updated_at"], reverse=True)
 
 
 def auto_deep(pr):
@@ -85,7 +91,7 @@ def merge_refusal(pr, thread, allowed):
         return "the PR is a draft"
     if pr["baseRefName"] != "main":
         return f"the PR is stacked on `{pr['baseRefName']}`; stacks merge through the merge desk"
-    reviews = [m for c in thread if c["user"]["login"] in allowed and (m := MARKER.match(c["body"]))]
+    reviews = [m for c in latest_first(thread, allowed) if (m := MARKER.match(c["body"]))][::-1]
     if not reviews or reviews[-1].group(1) != pr["headRefOid"]:
         return f"no Codex review at the current head {pr['headRefOid'][:8]}; comment `/review` first"
     if reviews[-1].group(3) != "ready":
@@ -324,7 +330,7 @@ def main():
             if command and not args.dry_run:
                 R.sh(["gh", "api", "-X", "POST", f"repos/{R.REPO_SLUG}/issues/comments/{command['id']}/reactions",
                       "-f", "content=eyes"], check=False)  # fmt: skip
-            reviews = [c for c in thread if MARKER.match(c["body"]) and c["user"]["login"] in args.allow]
+            reviews = [c for c in latest_first(thread, args.allow) if MARKER.match(c["body"])][::-1]
             prior = None
             if reviews:
                 prior = args.out / f"pr{n}-prior.md"
@@ -337,7 +343,7 @@ def main():
             elif result == "failed":
                 state["done"] += settled
                 if not args.dry_run:
-                    marker = R.MARKER.format(head=pr["headRefOid"], mode=mode, verdict="error")
+                    marker = R.MARKER.format(head=pr["headRefOid"], mode=mode, verdict="error", round=0)
                     note = f"{marker}\nThe review daemon could not review this head; comment `/review` to retry."
                     R.sh(["gh", "pr", "comment", str(n), "-R", R.REPO_SLUG, "--body", note])
             state_file.write_text(json.dumps(state))

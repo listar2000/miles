@@ -21,7 +21,7 @@ Codex (to spend Codex credits instead of Claude's) was the moment to pin the pro
   Rejected: running the agent unsandboxed with the user's GitHub login.
 - **Checked output.** The answer must match `output.schema.json`; the script rejects a
   verdict that does not follow from the severities, findings off the changed files or
-  without an exact fix, a failing ledger without a ledger finding, and a new test that
+  without evidence and a suggested fix, a failing ledger without a ledger finding, and a new test that
   passes on the base without a test finding, then reruns the agent once.
 
 Pilot (Codex GPT-6-Astra, effort high): 12 of the 13 problems the Claude reviewer found
@@ -51,6 +51,11 @@ box that holds the Codex and GitHub logins, which also tests it in the image.
 `/merge` lands a single ready PR the merge desk's way (fold, same-code check, ledger,
 push of the branch, then `main`), so landing needs no Claude thread either; stacks
 and tags stay with the desk.
+Each round edits one summary comment in place and posts a "Comment" review whose line
+comments carry the findings on changed lines (exact ones as GitHub suggestions); fixes are
+recommendations the author decides on. Approve and Request changes are not used: the box
+posts as the PR author, and GitHub refuses both on one's own PR (a reviewer GitHub App
+would allow them).
 Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT
 logins are not for public-repository CI; an API key costs about $1.20 per review).
 
