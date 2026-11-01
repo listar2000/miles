@@ -21,7 +21,7 @@ Codex (to spend Codex credits instead of Claude's) was the moment to pin the pro
   Rejected: running the agent unsandboxed with the user's GitHub login.
 - **Checked output.** The answer must match `output.schema.json`; the script rejects a
   verdict that does not follow from the severities, findings off the changed files or
-  without an exact fix, a failing ledger without a ledger finding, and a new test that
+  without evidence and a suggested fix, a failing ledger without a ledger finding, and a new test that
   passes on the base without a test finding, then reruns the agent once.
 
 Pilot (Codex GPT-6-Astra, effort high): 12 of the 13 problems the Claude reviewer found

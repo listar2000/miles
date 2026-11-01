@@ -518,10 +518,7 @@ def line_comment(f):
 
 
 def post(meta, r, verdict, deep, summary_for):
-    """Post one round: edit the PR's summary comment in place (or start it), and submit the round as a
-    GitHub "Comment" review carrying the line comments. Earlier rounds' line threads are resolved (the
-    current round repeats what is still open) and older summaries are collapsed as outdated.
-    `summary_for(inline)` renders the summary given the findings posted on lines; returns the round."""
+    """Update the summary and post findings inline; summary_for(inline) returns (round, summary)."""
     n, head = meta["number"], meta["headRefOid"]
     me = gh_api("user")["login"]
     ours = [
@@ -666,6 +663,23 @@ def brief(name, text):
     return text.strip().splitlines()[-1].strip("= ") if text.strip() else "-"
 
 
+def regressed(name, head, base):
+    """Whether a check's brief result is worse on the head than on the base."""
+    if name == "ledger":
+        return "ok" not in head and "ok" in base
+    if name == "precommit":
+        return bool(failed_hooks(head) - failed_hooks(base))
+    return failures(head) > failures(base)
+
+
+def failed_hooks(brief_text):
+    return set(brief_text.removeprefix("failed: ").split(", ")) if brief_text.startswith("failed") else set()
+
+
+def failures(brief_text):
+    return sum(int(n) for n in re.findall(r"(\d+) (?:failed|errors?)\b", brief_text))
+
+
 def counts(r):
     n = {s: sum(f["severity"] == s for f in r["findings"]) for s in SEVERITY_ORDER}
     return ", ".join(f"{v} {k}" for k, v in n.items() if v) or "no findings"
@@ -678,9 +692,7 @@ def suggestion_md(f):
 
 
 def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
-    """The review summary: verdict first, findings not on a diff line in full, the rest folded away.
-    `prior` is the previous summary (for the round and history); `inline` holds the indexes of findings
-    posted as line comments, which the summary only lists."""
+    """Render the round summary, listing inline findings and keeping prior rounds' history."""
     rnd = 1
     history = []
     if prior:
@@ -724,7 +736,7 @@ def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
     if r["handoffs"]:
         lines += ["**For a human**", ""] + [f"- {h['owner']}: {h['note']}" for h in r["handoffs"]] + [""]
     rows = [(k, brief(k, checks["head"][k]), brief(k, checks["base"][k])) for k in ("ledger", "precommit", "pytest")]
-    worse = [row for row in rows if row[1] != row[2] and "ok" not in row[1] and "pass" not in row[1]]
+    worse = [row for row in rows if regressed(*row)]
     table = ["| Check | Head | Base |", "| --- | --- | --- |"] + [f"| {k} | {h} | {b} |" for k, h, b in rows]
     if proofs:
         table += [""] + ["| New test | Head | Base |", "| --- | --- | --- |"]
@@ -733,6 +745,10 @@ def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
         lines += ["**Checks that differ from the base**", ""] + table + [""]
     else:
         lines += ["<details><summary>Checks (none worse than the base)</summary>", "", *table, "", "</details>", ""]
+    if inline:  # in full here too, so the next round's --prior has the substance
+        full = [f"- **{f['title']}** ({f['location']}:{f['line']}): {f['evidence'].strip()} Suggested: {f['suggestion'].strip()}"
+                for i, f in enumerate(r["findings"]) if i in inline]  # fmt: skip
+        lines += ["<details><summary>Line comments in full</summary>", "", *full, "", "</details>", ""]
     if history:
         lines += ["<details><summary>History</summary>", "", *history, "", "</details>", ""]
     folded = f"; {meta['folded']}" if meta["folded"] else ""

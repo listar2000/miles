@@ -34,3 +34,10 @@ def test_diff_lines_are_the_head_side_of_each_hunk(monkeypatch):
     patch = "@@ -1,3 +1,4 @@\n a\n-b\n+c\n+d\n e\n@@ -10,1 +11,1 @@\n-x\n+y"
     monkeypatch.setattr(R, "gh_api", lambda *a: [[{"filename": "a.py", "patch": patch}]])
     assert R.diff_lines(7) == {"a.py": {1, 2, 3, 4, 11}}
+
+
+def test_regressions_count_failures_not_wording():
+    assert R.regressed("pytest", "1 failed, 434 passed", "435 passed")
+    assert not R.regressed("pytest", "435 passed, 1 error", "437 passed, 1 error")
+    assert R.regressed("precommit", "failed: isort, Black", "failed: isort")
+    assert not R.regressed("ledger", "ledger check: ok", "ledger check: ok")
