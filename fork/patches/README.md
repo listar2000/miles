@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-050 | Ext | Monitor: SFT runs (kind `sft`) show loss, validation NLL, LR, throughput, checkpoints; an eval names the run and step it evaluates and the run lists those evals with pass@k | active; remove when the monitor is retired | [ext-050-monitor-sft-runs.md](ext-050-monitor-sft-runs.md) |
 | ext-049 | Ext | SFT record connectors: `write_records` validates and reports; the ATIF connector turns Harbor trial dirs (continuations, `context_management`, subagents) into records by the spec alone | active; remove when upstream Miles reads ATIF into session-server-shaped SFT data | [ext-049-sft-connectors.md](ext-049-sft-connectors.md) |
 | ext-048 | Ext | SFT records (OpenAI messages plus each call's context) tokenized with session server v2's own attach rule and TITO, offline into shards a rollout function serves; `thinking_retention` `all` or `template` | active; remove when upstream tokenizes SFT through the session server's rules | [ext-048-sft-tokenization.md](ext-048-sft-tokenization.md) |
 | hook-017 | Hook | `TITOTokenizer.tokenize_completion`: an assistant message as the tokens the engine samples (default: template diff minus one trailing token; families override) | active; not filed upstream | [hook-017-tito-tokenize-completion.md](hook-017-tito-tokenize-completion.md) |
