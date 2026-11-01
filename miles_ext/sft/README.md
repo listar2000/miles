@@ -1,0 +1,39 @@
+# SFT data tokenized like served rollouts
+
+SFT records are text (OpenAI chat messages plus the context of each model call). This
+package turns them into training samples with the RL path's TITO tokenizer and the session
+server's tree rules, so prompts and sample splits are laid out as in serving. A text reply
+becomes the template's canonical form of it, which can differ from what the engine sampled
+(for example in whitespace); give `completion_token_ids` to keep sampled tokens exactly.
+The design and its reasons are in [RFC 0002](../../fork/rfcs/0002-tito-aware-sft-tokenization.md);
+the record format is in its "The record" section and in `record.py`.
+
+| File | Role |
+| --- | --- |
+| `record.py` | the record format: `parse_record` validates a JSON record into an `SftRecord` of messages and steps |
+| `postprocess.py` | `fn(record) -> record` processors by dotted path, and the built-in ones |
+| `render.py` | `SftRenderer`: steps to samples with the session server v2 attach rule; `thinking_retention` `all` or `template`; `load_renderer` |
+| `prepare.py` | the offline CLI: records to token shards, `prompts.jsonl`, `samples.jsonl`, `manifest.json` |
+| `rollout.py` | `--rollout-function-path miles_ext.sft.rollout.generate_rollout`: prepared samples for `--debug-train-only` training |
+| `parity.py` | `compare`: a served sample against the render of the same record |
+
+```bash
+python -m miles_ext.sft.prepare --input data.jsonl --output /data/sft-run \
+    --hf-checkpoint /weights/Qwen3-30B-A3B-Thinking-2507 --tito-model qwennext \
+    --postprocess miles_ext.sft.postprocess.normalize_openai_messages --max-tokens 65536
+# then train with: --debug-train-only --rollout-function-path miles_ext.sft.rollout.generate_rollout
+#                  --prompt-data /data/sft-run/prompts.jsonl --input-key text
+```
+
+Supported families are `SUPPORTED_FAMILIES` in `render.py`: Qwen3-Thinking (`qwennext`) and
+DeepSeek V4.1 (`deepseekv41`); `SftRenderer` refuses others. Adding one needs its cases in
+`tests/fast/utils/chat_template_utils/test_tito_tokenize_completion.py`,
+`miles_ext/tests/test_sft_render.py` and `test_sft_render_hub.py`, and an override of
+`TITOTokenizer.tokenize_completion` if its turn close is not part of the assistant render (GLM).
+
+Not here yet (a later RFC): adapters that build records from Harbor ATIF or from rollouts,
+and launching SFT through the fork's recipes on Modal.
+
+Tests: `python -m pytest miles_ext/tests/test_sft_record.py miles_ext/tests/test_sft_render.py
+miles_ext/tests/test_sft_prepare.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
+Hub for the real Qwen3 and DeepSeek V4.1 tokenizers.
