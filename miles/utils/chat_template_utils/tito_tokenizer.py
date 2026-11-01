@@ -361,6 +361,34 @@ class TITOTokenizer:
         incremental = self.tokenize_additional_messages(old_messages, new_messages, template_args=template_args)
         return list(pretokenized_token_ids) + incremental
 
+    # [fork hook-017] begin: the tokens the engine samples for an assistant message (SFT)
+    def tokenize_completion(
+        self,
+        assistant_message: dict[str, Any],
+        *,
+        template_args: dict[str, Any] | None = None,
+    ) -> list[int]:
+        """Return *assistant_message* rendered as a canonical completion: the text after
+        the generation prompt through the stop token, without one trailing template-only
+        token (``trailing_token_ids``). Families whose turn close is rendered elsewhere override this.
+
+        Parsed text can lose formatting, so this is the template's form of the reply, not
+        necessarily what the engine sampled; exact sampled tokens come from recorded token IDs.
+        """
+        probe = [_DUMMY_SYSTEM, {"role": "user", "content": "dummy user"}]
+        prompt = self.apply_chat_template(probe, add_generation_prompt=True, template_args=template_args)
+        full = self.apply_chat_template(
+            probe + [assistant_message], add_generation_prompt=False, template_args=template_args
+        )
+        if not full.startswith(prompt):
+            raise ValueError("assistant render does not extend the generation prompt")
+        token_ids = self._encode_text(full[len(prompt) :])
+        if token_ids and token_ids[-1] in self.trailing_token_ids:
+            token_ids.pop()
+        return token_ids
+
+    # [fork hook-017] end
+
 
 # ---------------------------------------------------------------------------
 # Qwen3 implementation
