@@ -393,7 +393,7 @@ naming it.
 
 **The review daemon** (`review_daemon.py`, kept alive by `supervisor.sh` on
 the reviewer box) polls GitHub and runs `review.py --checks-on modal --post`
-by itself, one review at a time, on PRs by the allowed users (`--allow`) from
+by itself, up to `--parallel` (5) reviews at once, each its own Codex session, on PRs by the allowed users (`--allow`) from
 branches of this repository:
 
 | When | Mode |
@@ -416,9 +416,10 @@ The summary is the `--prior`. For a deep review the PR body can
 name more inputs on lines of their own: `Review context: <paths or globs>` and
 `Evidence: <modal://volume/path>...` (our volumes only). A review the PR's
 next head overtakes is stopped; a head that fails twice gets a short error
-comment, and `/review` retries it. The daemon fast-forwards its checkout to
-`main` before each pass, so reviews always use main's protocol. `review_daemon.py --status`
-prints its heartbeat, the review in progress, the queue and recent results.
+comment, and `/review` retries it. When `main` moves, the daemon
+starts no new review until the running ones finish, then fast-forwards its checkout, so
+each review uses one version of main's protocol. `review_daemon.py --status`
+prints its heartbeat, the reviews in progress, the queue and recent results.
 
 **`/merge`** from an allowed user lands a ready PR on `main` the way the merge
 desk does (fork/README.md "Landing"), when the latest review is at the current

@@ -51,6 +51,13 @@ box that holds the Codex and GitHub logins, which also tests it in the image.
 `/merge` lands a single ready PR the merge desk's way (fold, same-code check, ledger,
 push of the branch, then `main`), so landing needs no Claude thread either; stacks
 and tags stay with the desk.
+Up to `--parallel` (default 5) reviews run at once, each `review.py` in its own process
+group with its log in `logs/`; a new head or a closed PR stops only that PR's review, and
+a daemon stop ends them all. `/merge` still runs one at a time. Git writes to the shared
+checkout (fetches, the review clone, the merge worktree) take one file lock, and the
+checkout moves to a newer `main` only when no review runs. The daemon normally fills free
+slots while reviews run; once `main` has moved it starts none until the running reviews
+finish, then updates, so every review reads one protocol version. The heartbeat's `running` is a list.
 Each round edits one summary comment in place and posts a "Comment" review whose line
 comments carry the findings on changed lines (exact ones as GitHub suggestions); fixes are
 recommendations the author decides on. Approve and Request changes are not used: the box

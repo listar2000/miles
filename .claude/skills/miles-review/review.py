@@ -2,6 +2,8 @@
 """Run the independent review of a listar2000/miles PR with a fresh agent, as SKILL.md "Supervised runs" says."""
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -96,6 +98,15 @@ def sh(cmd, cwd=None, timeout=None, check=True, input=None, env=None):
     return p
 
 
+@contextlib.contextmanager
+def repo_lock(repo):
+    """Serialise git writes to the reviewer's checkout, which parallel reviews, the daemon's update and /merge share."""
+    git_dir = sh(["git", "rev-parse", "--git-common-dir"], cwd=repo).stdout.strip()
+    with open(Path(repo) / git_dir / "miles-review.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
 def tail(p, n=25):
     lines = (p.stdout + p.stderr).strip().splitlines()
     return "\n".join(lines[-n:])
@@ -180,34 +191,35 @@ def prepare(args, work):
     )
     if args.body:
         meta["body"] = args.body.read_text()
-    sh(["git", "fetch", "-q", "--tags", "origin", "main"], cwd=args.repo)
-    if args.head:
-        sh(["git", "update-ref", f"refs/review/pr{args.pr}", args.head], cwd=args.repo)
-    else:
-        sh(["git", "fetch", "-q", "origin", f"+pull/{args.pr}/head:refs/review/pr{args.pr}"], cwd=args.repo)
-    head = meta["headRefOid"] = sh(["git", "rev-parse", f"refs/review/pr{args.pr}"], cwd=args.repo).stdout.strip()
-    tree = work / "tree"
-    if tree.exists():
-        shutil.rmtree(tree)
-    sh(["git", "clone", "-q", "--local", "--no-checkout", str(args.repo), str(tree)])
-    sh(
-        [
-            "git",
-            "fetch",
-            "-q",
-            str(args.repo),
-            "refs/remotes/origin/main:refs/remotes/origin/main",
-            f"refs/review/pr{args.pr}:refs/review/pr{args.pr}",
-        ],
-        cwd=tree,
-    )
-    sh(["git", "checkout", "-q", head], cwd=tree)
-    base_ref = "origin/main"
-    if stacked := re.match(r"\s*Stacked on #(\d+)", meta["body"] or ""):
-        n = stacked.group(1)
-        sh(["git", "fetch", "-q", "origin", f"+pull/{n}/head:refs/review/pr{n}"], cwd=args.repo)
-        sh(["git", "fetch", "-q", str(args.repo), f"refs/review/pr{n}:refs/review/pr{n}"], cwd=tree)
-        base_ref = f"refs/review/pr{n}"
+    with repo_lock(args.repo):
+        sh(["git", "fetch", "-q", "--tags", "origin", "main"], cwd=args.repo)
+        if args.head:
+            sh(["git", "update-ref", f"refs/review/pr{args.pr}", args.head], cwd=args.repo)
+        else:
+            sh(["git", "fetch", "-q", "origin", f"+pull/{args.pr}/head:refs/review/pr{args.pr}"], cwd=args.repo)
+        head = meta["headRefOid"] = sh(["git", "rev-parse", f"refs/review/pr{args.pr}"], cwd=args.repo).stdout.strip()
+        tree = work / "tree"
+        if tree.exists():
+            shutil.rmtree(tree)
+        sh(["git", "clone", "-q", "--local", "--no-checkout", str(args.repo), str(tree)])
+        sh(
+            [
+                "git",
+                "fetch",
+                "-q",
+                str(args.repo),
+                "refs/remotes/origin/main:refs/remotes/origin/main",
+                f"refs/review/pr{args.pr}:refs/review/pr{args.pr}",
+            ],
+            cwd=tree,
+        )
+        sh(["git", "checkout", "-q", head], cwd=tree)
+        base_ref = "origin/main"
+        if stacked := re.match(r"\s*Stacked on #(\d+)", meta["body"] or ""):
+            n = stacked.group(1)
+            sh(["git", "fetch", "-q", "origin", f"+pull/{n}/head:refs/review/pr{n}"], cwd=args.repo)
+            sh(["git", "fetch", "-q", str(args.repo), f"refs/review/pr{n}:refs/review/pr{n}"], cwd=tree)
+            base_ref = f"refs/review/pr{n}"
     base = sh(["git", "merge-base", base_ref, "HEAD"], cwd=tree).stdout.strip()
     meta["folded"] = fold_fixups(tree, base)
     return meta, sh(["git", "rev-parse", "HEAD"], cwd=tree).stdout.strip(), base, tree
@@ -371,7 +383,8 @@ def build_bundle(args, work, meta, head, base, tree):
         (bundle / "ledger_list.txt").write_text(
             runner.run([runner.python, "fork/tools/ledger.py", "list"], check=True).stdout
         )
-        sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
+        with repo_lock(args.repo):
+            sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
         taken = sh(
             [
                 "git",
@@ -589,7 +602,7 @@ def graphql(query, **variables):
 def resolve_old_threads(n, me):
     owner, name = REPO_SLUG.split("/")
     q = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-      reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"""
+      reviewThreads(last:100){nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"""
     threads = graphql(q, o=owner, r=name, n=n)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
     for t in threads:
         first = t["comments"]["nodes"][0] if t["comments"]["nodes"] else {}
