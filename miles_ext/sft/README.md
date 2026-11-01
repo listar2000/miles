@@ -31,9 +31,31 @@ DeepSeek V4.1 (`deepseekv41`); `SftRenderer` refuses others. Adding one needs it
 `miles_ext/tests/test_sft_render.py` and `test_sft_render_hub.py`, and an override of
 `TITOTokenizer.tokenize_completion` if its turn close is not part of the assistant render (GLM).
 
-Not here yet (a later RFC): adapters that build records from Harbor ATIF or from rollouts,
-and launching SFT through the fork's recipes on Modal.
+## Connectors
+
+A connector turns another data format into records ([RFC 0003](../../fork/rfcs/0003-sft-record-connectors.md)).
+It yields record dicts or `Dropped(source, reason, detail)` items, and
+`connectors.base.write_records` validates the records with `parse_record`, writes them as JSONL
+and writes a `.report.json` beside it with drops counted by reason.
+
+| File | Role |
+| --- | --- |
+| `connectors/base.py` | `Dropped`, `write_records`, the report |
+| `connectors/atif.py` | Harbor trial directories in ATIF to records, by the spec alone: continuations, `context_management` boundaries, subagents as their own records |
+
+```bash
+python -m miles_ext.sft.connectors.atif --input /jobs/my-harbor-job --output /data/atif-records.jsonl \
+    --chat-template-kwargs '{"enable_thinking": true}'
+# then: python -m miles_ext.sft.prepare --input /data/atif-records.jsonl ...
+```
+
+`--model` names the model trained on (default: each trial's `agent.model_name`); steps by other
+models stay in the context untrained. `--token-ids` copies ATIF `completion_token_ids`; use it
+only when the trajectories were sampled by a model with the trained model's tokenizer.
+
+Not here yet: other connectors (Nemotron-style datasets, Miles rollout dumps), and launching
+SFT through the fork's recipes on Modal.
 
 Tests: `python -m pytest miles_ext/tests/test_sft_record.py miles_ext/tests/test_sft_render.py
-miles_ext/tests/test_sft_prepare.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
+miles_ext/tests/test_sft_prepare.py miles_ext/tests/test_sft_connector_atif.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
 Hub for the real Qwen3 and DeepSeek V4.1 tokenizers.
