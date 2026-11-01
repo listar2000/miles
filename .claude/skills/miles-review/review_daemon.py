@@ -182,35 +182,49 @@ def review_argv(args, pr, mode, prior):
     return argv
 
 
-def run_review(args, pr, mode, prior, log):
-    """Run one review; stop it if the PR gets a new head meanwhile. Returns "ok", "stopped" or "failed"."""
-    with log.open("a") as f:
-        f.write(f"\n=== {time.time():.0f} PR #{pr['number']} {pr['headRefOid'][:8]} {mode}\n")
-        f.flush()
-        p = subprocess.Popen(
-            review_argv(args, pr, mode, prior),
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            cwd=args.repo,
-            start_new_session=True,
-        )
-        since = time.time()
-        try:
-            while p.poll() is None:
-                beat(args.out, running={"pr": pr["number"], "head": pr["headRefOid"], "mode": mode, "since": since})
-                time.sleep(args.poll)
-                try:
-                    now = gh("pr", "view", str(pr["number"]), "-R", R.REPO_SLUG, "--json", "headRefOid")["headRefOid"]
-                except SystemExit:  # GitHub hiccup: keep waiting rather than leave the review running alone
-                    continue
-                if now != pr["headRefOid"]:
-                    f.write("stopped: the PR has a new head\n")
-                    return "stopped"
-        finally:
-            if p.poll() is None:  # the agent and review.py's sandbox go with it (review.py closes it on SIGTERM)
-                os.killpg(p.pid, signal.SIGTERM)
-                p.wait()
-    return "ok" if p.returncode == 0 else "failed"
+class Review:
+    """One review.py run in the background, in its own process group with its own log."""
+
+    def __init__(self, args, pr, mode, command, prior):
+        self.pr, self.mode, self.since = pr, mode, time.time()
+        self.key = f"{pr['headRefOid']}:{mode}"
+        self.settled = [self.key] + ([f"cmd:{command['id']}"] if command else [])
+        logs = args.out / "logs"
+        logs.mkdir(exist_ok=True)
+        with (logs / f"pr{pr['number']}-{pr['headRefOid'][:8]}-{mode}.log").open("w") as f:
+            argv = review_argv(args, pr, mode, prior)
+            self.p = subprocess.Popen(argv, stdout=f, stderr=subprocess.STDOUT, cwd=args.repo, start_new_session=True)
+        note(args.out, f"=== {self.since:.0f} PR #{pr['number']} {pr['headRefOid'][:8]} {mode}")
+
+    def stop(self):
+        if self.p.poll() is None:  # the agent and review.py's sandbox go with it (review.py closes it on SIGTERM)
+            os.killpg(self.p.pid, signal.SIGTERM)
+            self.p.wait()
+
+    def info(self):
+        return {"pr": self.pr["number"], "head": self.pr["headRefOid"], "mode": self.mode, "since": self.since}
+
+
+def note(out, line):
+    with (out / "daemon.log").open("a") as f:
+        f.write(line + "\n")
+
+
+def finish(args, state, review):
+    """Record a finished review: done, or a failure (an error comment after MAX_FAILURES)."""
+    pr, key = review.pr, review.key
+    ok = review.p.returncode == 0
+    note(args.out, f"PR #{pr['number']} {pr['headRefOid'][:8]} {review.mode}: {'ok' if ok else 'failed'}")
+    if ok:
+        state["done"] += review.settled
+    elif (fails := state["failures"].get(key, 0) + 1) < MAX_FAILURES:
+        state["failures"][key] = fails
+    else:
+        state["done"] += review.settled
+        if not args.dry_run:
+            marker = R.MARKER.format(head=pr["headRefOid"], mode=review.mode, verdict="error", round=0)
+            body = f"{marker}\nThe review daemon could not review this head; comment `/review` to retry."
+            R.sh(["gh", "pr", "comment", str(pr["number"]), "-R", R.REPO_SLUG, "--body", body], check=False)
 
 
 def merge(args, pr, thread, ask):
@@ -220,18 +234,16 @@ def merge(args, pr, thread, ask):
         R.sh(["gh", "api", "-X", "POST", f"repos/{R.REPO_SLUG}/issues/comments/{ask['id']}/reactions",
               "-f", "content=eyes"], check=False)  # fmt: skip
     if why := merge_refusal(pr, thread, set(args.allow)):
-        merged, note = False, f"Not merged: {why}."
+        merged, result = False, f"Not merged: {why}."
     else:
-        beat(args.out, running={"pr": n, "head": pr["headRefOid"], "mode": "merge", "since": time.time()})
         try:
-            merged, note = land(args, pr, ask["user"])
+            merged, result = land(args, pr, ask["user"])
         except SystemExit as e:  # a git, gh or sandbox step failed
-            merged, note = False, f"the merge stopped: {e}"
-        note = note if merged or note.startswith("dry run") else f"Not merged: {note}"
-    with (args.out / "daemon.log").open("a") as f:
-        f.write(f"\n=== {time.time():.0f} PR #{n} {pr['headRefOid'][:8]} merge\n{note}\n")
+            merged, result = False, f"the merge stopped: {e}"
+        result = result if merged or result.startswith("dry run") else f"Not merged: {result}"
+    note(args.out, f"=== {time.time():.0f} PR #{n} {pr['headRefOid'][:8]} merge\n{result}")
     if not args.dry_run:
-        body = f"<!-- miles-merge result={'merged' if merged else 'refused'} -->\n{note}"
+        body = f"<!-- miles-merge result={'merged' if merged else 'refused'} -->\n{result}"
         R.sh(["gh", "pr", "comment", str(n), "-R", R.REPO_SLUG, "--body", body], check=False)
 
 
@@ -248,15 +260,13 @@ def status(out):
     """What the daemon is doing, for a person on the box: `review_daemon.py --status`."""
     hb = json.loads((out / "heartbeat.json").read_text()) if (out / "heartbeat.json").exists() else {}
     age = f"{pt(hb['time'])} ({time.time() - hb['time']:.0f} s ago)" if hb else "never"
-    print(f"heartbeat: {age} (a pass every --poll seconds; a review in progress also beats)")
-    if run := hb.get("running"):
+    print(f"heartbeat: {age} (a pass every --poll seconds)")
+    for run in hb.get("running", []):
         print(f"reviewing: PR #{run['pr']} {run['head'][:8]} {run['mode']}, since {pt(run['since'])}")
     print(f"queue: {', '.join(f'#{n}' for n in hb.get('queue', [])) or 'empty'}")
     lines = (out / "daemon.log").read_text().splitlines() if (out / "daemon.log").exists() else []
     print("recent reviews:")
-    for line in [ln for ln in lines if ln.startswith(("===", "PR #", "stopped", "Not merged", "landed", "dry run"))][
-        -12:
-    ]:
+    for line in [ln for ln in lines if ln.startswith(("===", "PR #", "Not merged", "landed", "dry run"))][-12:]:
         if m := re.match(r"=== (\d+) (.*)", line):
             line = f"{pt(int(m.group(1)))} {m.group(2)}"
         print(f"  {line}")
@@ -284,7 +294,7 @@ def stop(*_):
 
 
 def main():
-    for sig in (signal.SIGTERM, signal.SIGHUP):  # a stopped daemon runs run_review's finally, ending its review
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # a stopped daemon runs main's finally, ending its reviews
         signal.signal(sig, stop)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", type=Path, default=HERE.parents[2], help="the reviewer's own main checkout")
@@ -294,6 +304,7 @@ def main():
     ap.add_argument("--allow", nargs="+", default=["listar2000"], help="whose PRs and /review comments count")
     ap.add_argument("--checks-on", choices=("local", "modal"), default="modal")
     ap.add_argument("--poll", type=int, default=120, help="seconds between GitHub polls")
+    ap.add_argument("--parallel", type=int, default=5, help="reviews at once, each its own Codex session")
     ap.add_argument("--settle", type=int, default=120, help="seconds a new head waits, so quick pushes coalesce")
     ap.add_argument("--dry-run", action="store_true", help="review without posting; reviewed heads kept locally")
     ap.add_argument("--once", action="store_true", help="one pass, then exit")
@@ -302,55 +313,62 @@ def main():
     if args.status:
         return status(args.out)
     args.out.mkdir(parents=True, exist_ok=True)
-    state_file, log = args.out / "daemon-state.json", args.out / "daemon.log"
+    state_file = args.out / "daemon-state.json"
     state = json.loads(state_file.read_text()) if state_file.exists() else {"done": [], "failures": {}}
-    first_seen = {}
-    while True:
-        if update_checkout(args.repo):
-            sys.exit("review_daemon.py changed on main; exiting for the supervisor to restart it")
-        if args.board:  # fork id reservations
-            R.sh(["git", "pull", "-q", "--ff-only"], cwd=args.board.resolve().parent, timeout=300, check=False)
-        for old in args.out.glob("pr*-*/"):
-            if time.time() - old.stat().st_mtime > KEEP_DAYS * 86400:
-                shutil.rmtree(old, ignore_errors=True)
-        jobs = []
-        for pr in open_prs():
-            thread = comments(pr["number"])
-            if ask := merge_request(thread, set(args.allow), set(state["done"])):
-                state["done"].append(f"cmd:{ask['id']}")
-                state_file.write_text(json.dumps(state))
-                merge(args, pr, thread, ask)
-                continue
-            if want := decide(pr, thread, set(args.allow), set(state["done"]), time.time(), first_seen, args.settle):
-                jobs.append((want[1] is None, pr["number"], pr, thread, *want))
-        beat(args.out, queue=[j[1] for j in jobs])
-        for _, n, pr, thread, mode, command in sorted(jobs, key=lambda j: j[:2])[:1]:  # commands first
-            key = f"{pr['headRefOid']}:{mode}"
-            settled = [key] + ([f"cmd:{command['id']}"] if command else [])
-            if command and not args.dry_run:
-                R.sh(["gh", "api", "-X", "POST", f"repos/{R.REPO_SLUG}/issues/comments/{command['id']}/reactions",
-                      "-f", "content=eyes"], check=False)  # fmt: skip
-            reviews = [c for c in latest_first(thread, args.allow) if MARKER.match(c["body"])][::-1]
-            prior = None
-            if reviews:
-                prior = args.out / f"pr{n}-prior.md"
-                prior.write_text(reviews[-1]["body"])
-            result = run_review(args, pr, mode, prior, log)
-            if result == "ok":
-                state["done"] += settled
-            elif result == "failed" and (fails := state["failures"].get(key, 0) + 1) < MAX_FAILURES:
-                state["failures"][key] = fails
-            elif result == "failed":
-                state["done"] += settled
-                if not args.dry_run:
-                    marker = R.MARKER.format(head=pr["headRefOid"], mode=mode, verdict="error", round=0)
-                    note = f"{marker}\nThe review daemon could not review this head; comment `/review` to retry."
-                    R.sh(["gh", "pr", "comment", str(n), "-R", R.REPO_SLUG, "--body", note])
+    first_seen, running, restart = {}, {}, False
+    try:
+        while True:
+            restart = restart or update_checkout(args.repo)
+            if restart and not running:
+                sys.exit("review_daemon.py changed on main; exiting for the supervisor to restart it")
+            if args.board:  # fork id reservations
+                R.sh(["git", "pull", "-q", "--ff-only"], cwd=args.board.resolve().parent, timeout=300, check=False)
+            for old in args.out.glob("pr*-*/"):
+                if time.time() - old.stat().st_mtime > KEEP_DAYS * 86400:
+                    shutil.rmtree(old, ignore_errors=True)
+            prs = {pr["number"]: pr for pr in open_prs()}
+            for n, review in list(running.items()):
+                if review.p.poll() is not None:
+                    finish(args, state, running.pop(n))
+                elif prs.get(n, {}).get("headRefOid") != review.pr["headRefOid"]:  # new head, or closed
+                    running.pop(n).stop()
+                    note(args.out, f"PR #{n} {review.pr['headRefOid'][:8]} {review.mode}: stopped, the PR moved on")
+            jobs = []
+            for n, pr in prs.items():
+                thread = comments(n)
+                if n not in running and (ask := merge_request(thread, set(args.allow), set(state["done"]))):
+                    state["done"].append(f"cmd:{ask['id']}")
+                    state_file.write_text(json.dumps(state))
+                    merge(args, pr, thread, ask)  # one at a time: merges move main
+                    continue
+                if n in running or restart:
+                    continue
+                if want := decide(
+                    pr, thread, set(args.allow), set(state["done"]), time.time(), first_seen, args.settle
+                ):
+                    jobs.append((want[1] is None, n, pr, thread, *want))
+            for _, n, pr, thread, mode, command in sorted(jobs, key=lambda j: j[:2])[: args.parallel - len(running)]:
+                if command and not args.dry_run:
+                    R.sh(["gh", "api", "-X", "POST", f"repos/{R.REPO_SLUG}/issues/comments/{command['id']}/reactions",
+                          "-f", "content=eyes"], check=False)  # fmt: skip
+                reviews = [c for c in latest_first(thread, args.allow) if MARKER.match(c["body"])]
+                prior = None
+                if reviews:
+                    prior = args.out / f"pr{n}-prior.md"
+                    prior.write_text(reviews[0]["body"])
+                running[n] = Review(args, pr, mode, command, prior)
             state_file.write_text(json.dumps(state))
-        if args.once:
-            return
-        if not jobs:
+            beat(
+                args.out,
+                running=[r.info() for r in running.values()],
+                queue=[j[1] for j in jobs if j[1] not in running],
+            )
+            if args.once and not running:
+                return
             time.sleep(args.poll)
+    finally:  # a stop, a crash or a restart ends the reviews this daemon started
+        for review in running.values():
+            review.stop()
 
 
 if __name__ == "__main__":

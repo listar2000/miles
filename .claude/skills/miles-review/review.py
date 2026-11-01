@@ -589,7 +589,7 @@ def graphql(query, **variables):
 def resolve_old_threads(n, me):
     owner, name = REPO_SLUG.split("/")
     q = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-      reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"""
+      reviewThreads(last:100){nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"""
     threads = graphql(q, o=owner, r=name, n=n)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
     for t in threads:
         first = t["comments"]["nodes"][0] if t["comments"]["nodes"] else {}
