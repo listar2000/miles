@@ -32,8 +32,8 @@ It has two users:
   reports only: never push to the PR branch; its report reaches the PR as one
   comment posted by `review.py --post`; the PR's owner applies fixes.
 
-The independent reviewer is a fresh agent (Claude, Codex or another) started by
-`review.py`, which runs Setup and the Ledger, Lint and Extension-tests checks
+The independent reviewer is an agent (Claude, Codex or another) started by
+`review.py`, one session per PR that later rounds continue, which runs Setup and the Ledger, Lint and Extension-tests checks
 for it (not `tests/fast`); see "Supervised runs" at the end. This file is its whole guidance.
 
 The reviewer's job is workflow and best practice: comments, tests, PR hygiene
@@ -401,6 +401,13 @@ branches of this repository:
 | a ready PR has a head with no review (after `--settle` seconds, so quick pushes coalesce) | deep if labelled `deep-review` or the diff touches `miles/`, `miles_plugins/` or `train_async.py`, else normal |
 | a `/review` or `/review deep` comment after the last review, drafts too | as asked (or deep by the rule above) |
 
+A later round continues the last round's agent session, sending it the diff since the head it
+reviewed, so one judge follows the PR. It starts a fresh session with the full prompt when
+there is none to continue, the PR was rebased, the mode or this skill changed, the session
+cannot be resumed, or the comment is `/review full` (also `/review deep full`). The checks run
+once per pair of head and base trees: a round whose code did not change (a PR body fix)
+reuses them without a sandbox.
+
 **What a round posts** (`--post`): one summary comment per PR, edited in
 place each round, with the verdict first, the findings not on a diff line in
 full, checks folded unless worse than the base, and earlier rounds under
@@ -408,8 +415,10 @@ full, checks folded unless worse than the base, and earlier rounds under
 each finding on a changed line as a comment on that line (an exact suggestion
 as a GitHub suggestion). Earlier rounds' line threads are resolved, since the
 round repeats what is still open, and older summaries are collapsed. The
-summary carries the `<!-- miles-review ... round=N -->` marker the daemon and
-`/merge` read. Reviews post as the box's GitHub user, so they cannot approve
+summary carries the `<!-- miles-review ... round=N session=... -->` marker the daemon and
+`/merge` read, and each round sets the head's `codex-review` commit status: pending while it
+runs, success on "ready", failure otherwise, error if it did not finish. `/merge` sets success
+on the folded commit it pushes, so a branch rule on `main` can require the status. Reviews post as the box's GitHub user, so they cannot approve
 or request changes on that user's own PRs.
 
 The summary is the `--prior`. For a deep review the PR body can

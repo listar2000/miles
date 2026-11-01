@@ -31,6 +31,11 @@ every changed file at the head. Do not run commands. REVIEW.md (upstream's revie
 on purpose; .agents/rules is the same as .claude/rules, included when the PR touches miles/. Answer
 with the JSON object the skill describes.
 """
+FOLLOW_UP = """Round {round} of your review of PR #{pr}: the head moved from {prior} to {head} (merge base
+{base} unchanged). Below are the diff since {prior}, the files it changed at the new head, and the refreshed
+bundle (checks, commits, PR body). Re-check each finding of your last answer and anything the new diff adds,
+then answer with the same JSON for the whole PR at {head}, its `prior` listing each of your last findings.
+"""
 DEEP = """This is a deep review: do section 5 of the skill as well. The `head:` files include the
 --context files, and `evidence/` holds the logs and results behind the PR's numbers.
 """
@@ -45,37 +50,45 @@ CONTEXT_FILES = (
 MAX_PROMPT_CHARS = 900_000  # Codex rejects prompts over 1,048,576 characters
 TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*\.py$)")
 FIXUP = re.compile(r"^(fixup|amend|squash)! ", re.M)
-MARKER = "<!-- miles-review head={head} mode={mode} verdict={verdict} round={round} -->"
-ROUND = re.compile(r"<!-- miles-review head=\w+ mode=\w+ verdict=[\w-]+(?: round=(\d+))? -->")
+MARKER = (
+    "<!-- miles-review head={head} mode={mode} verdict={verdict} round={round} session={session} rules={rules} -->"
+)
+ROUND = re.compile(
+    r"<!-- miles-review head=(?P<head>\w+) mode=(?P<mode>\w+) verdict=[\w-]+(?: round=(?P<round>\d+))?"
+    r"(?: session=(?P<session>[\w-]+) rules=(?P<rules>\w+))? -->"
+)
 LINE_MARK = "<!-- miles-review-line -->"
 THIS_ROUND = re.compile(r"<!-- this-round: (.*) -->")
 CHECK_IMAGE = "docker.io/starlimobius/miles-mobius:main"
+STATUS = "codex-review"  # the commit status a branch rule on main can require
 EVIDENCE_VOLUMES = re.compile(r"(miles|mdev|rl)-[\w.-]+")  # ours; never another team's volume
 
 
-def codex(args, out):
+def codex(args, out, session=None):
+    """A saved session (no --ephemeral), so the next round can resume it; `resume` takes the sandbox as config."""
     return [
         "codex",
         "exec",
+        *(["resume"] if session else []),
         "-m",
         args.model,
         "-c",
         f"model_reasoning_effort={args.effort}",
-        "-s",
-        "read-only",
-        "--ephemeral",
+        "-c",
+        'sandbox_mode="read-only"',
         "--skip-git-repo-check",
         "--json",
         "--output-schema",
         str(SCHEMA),
         "-o",
         str(out),
+        *([session] if session else []),
         "-",
     ]
 
 
 # Each adapter returns the command that runs one agent non-interactively and read-only, with the prompt on stdin
-# and its final message written to `out`.
+# and its final message written to `out`; with `session`, it continues that saved session instead.
 AGENTS = {"codex": codex}
 DEFAULT_MODELS = {"codex": "gpt-6-astra"}
 VERDICT_FOR = {"blocking": "blocked", "should-fix": "ready after the should-fixes", None: "ready"}
@@ -378,39 +391,51 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "diff.patch").write_text(diff)
     (bundle / "diffstat.txt").write_text(git("diff", "--stat", base, head))
     (bundle / "files.txt").write_text("\n".join(files) + "\n")
-    runner = ModalRunner(tree, (head, base), work) if args.checks_on == "modal" else LocalRunner(tree, args.python)
-    try:  # a stopped review (SIGTERM) still ends its sandbox
-        (bundle / "ledger_list.txt").write_text(
-            runner.run([runner.python, "fork/tools/ledger.py", "list"], check=True).stdout
+    nodes = new_tests(diff)
+    # The checks depend on the two trees, the commit messages (the ledger reads trailers) and this script, so a
+    # round whose code and commits did not move (a PR body fix) reuses them.
+    trees = sh(["git", "rev-parse", f"{head}^{{tree}}", f"{base}^{{tree}}"], cwd=tree).stdout.split()
+    messages = git("log", "--format=%B", f"{base}..{head}")  # not the shas, which folding renews each round
+    where = [args.checks_on, CHECK_IMAGE if args.checks_on == "modal" else args.python]
+    key = hashlib.sha256("\n".join([*trees, messages, *where, Path(__file__).read_text()]).encode()).hexdigest()[:16]
+    cache = args.out / "checks-cache" / f"{key}.json"
+    if cached := cache.exists():
+        ran = json.loads(cache.read_text())
+    else:
+        runner = ModalRunner(tree, (head, base), work) if args.checks_on == "modal" else LocalRunner(tree, args.python)
+        try:  # a stopped review (SIGTERM) still ends its sandbox
+            ran = {"ledger_list": runner.run([runner.python, "fork/tools/ledger.py", "list"], check=True).stdout}
+            ran["checks"] = {"head": run_checks(runner, head, files), "base": run_checks(runner, base, files)}
+            runner.run(["git", "checkout", "-q", head], check=True)
+            ran["proofs"] = prove_tests(runner, base, files, nodes)
+        finally:
+            runner.close()
+        cache.parent.mkdir(exist_ok=True)
+        cache.write_text(json.dumps(ran))
+    checks, proofs = ran["checks"], ran["proofs"]
+    (bundle / "ledger_list.txt").write_text(ran["ledger_list"])
+    with repo_lock(args.repo):
+        sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
+    taken = sh(
+        [
+            "git",
+            "log",
+            "--remotes=origin",
+            "--format=%D %(trailers:key=Fork-Fix,key=Fork-Hook,key=Fork-Ext,valueonly,separator=%x20)",
+        ],
+        cwd=args.repo,
+    ).stdout
+    ids = sorted({i for i in re.findall(r"\b(?:fix|hook|ext)-\d{3}\b", taken)})
+    (bundle / "ids_on_branches.txt").write_text(
+        "ids in commits on any branch of origin, merged or not:\n" + " ".join(ids)
+    )
+    if args.board:
+        reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
+        (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
+    for name in ("ledger", "precommit", "pytest"):
+        (bundle / f"{name}.txt").write_text(
+            f"== head {head[:8]}\n{checks['head'][name]}\n\n== base {base[:8]}\n{checks['base'][name]}\n"
         )
-        with repo_lock(args.repo):
-            sh(["git", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], cwd=args.repo, check=False)
-        taken = sh(
-            [
-                "git",
-                "log",
-                "--remotes=origin",
-                "--format=%D %(trailers:key=Fork-Fix,key=Fork-Hook,key=Fork-Ext,valueonly,separator=%x20)",
-            ],
-            cwd=args.repo,
-        ).stdout
-        ids = sorted({i for i in re.findall(r"\b(?:fix|hook|ext)-\d{3}\b", taken)})
-        (bundle / "ids_on_branches.txt").write_text(
-            "ids in commits on any branch of origin, merged or not:\n" + " ".join(ids)
-        )
-        if args.board:
-            reserved = [line for line in args.board.read_text().splitlines() if re.search(r"reserv", line, re.I)]
-            (bundle / "reserved_ids.txt").write_text("\n".join(reserved) or "none")
-        checks = {"head": run_checks(runner, head, files), "base": run_checks(runner, base, files)}
-        runner.run(["git", "checkout", "-q", head], check=True)
-        for name in ("ledger", "precommit", "pytest"):
-            (bundle / f"{name}.txt").write_text(
-                f"== head {head[:8]}\n{checks['head'][name]}\n\n== base {base[:8]}\n{checks['base'][name]}\n"
-            )
-        nodes = new_tests(diff)
-        proofs = prove_tests(runner, base, files, nodes)
-    finally:
-        runner.close()
     (bundle / "test_proofs.txt").write_text(
         "\n".join(
             f"{n}: head {p['head'][0]} ({p['head'][1]} s), base {p['base'][0]} ({p['base'][1]} s)\n"
@@ -426,7 +451,7 @@ def build_bundle(args, work, meta, head, base, tree):
     (bundle / "attribution.txt").write_text("\n".join(hits) or "none")
     if args.prior:
         shutil.copy(args.prior, bundle / "prior_review.md")
-    return bundle, {"files": files, "checks": checks, "attribution": hits, "proofs": proofs}
+    return bundle, {"files": files, "checks": checks, "attribution": hits, "proofs": proofs, "cached": cached}
 
 
 def build_prompt(args, tree, head, base, bundle, files):
@@ -452,6 +477,56 @@ def build_prompt(args, tree, head, base, bundle, files):
             f"{MAX_PROMPT_CHARS}; narrow them, split the PR or review it by hand"
         )
     return PROMPT.format(pr=args.pr, head=head, base=base) + (DEEP if args.deep else "") + body
+
+
+def rules_hash(tree):
+    """What a resumed session was told (the skill, the rules the prompt inlines, the prompts); when any of it
+    changes, the next round starts a fresh session."""
+    docs = [
+        HERE / "SKILL.md",
+        SCHEMA,
+        *(tree / f for f in CONTEXT_FILES[1:]),
+        *sorted((tree / ".claude/rules").glob("*.md")),
+    ]
+    text = b"".join(d.read_bytes() for d in docs if d.is_file()) + (PROMPT + FOLLOW_UP + DEEP).encode()
+    return hashlib.sha256(text).hexdigest()[:12]
+
+
+def follow_up(args, tree, meta, base, bundle, last):
+    """The prompt that continues the last round's session with what changed since; None for a fresh round."""
+    if args.fresh or not last or last["session"] in (None, "none") or last["rules"] != meta["rules"]:
+        return None
+    if last["mode"] != ("deep" if args.deep else "normal"):
+        return None
+    prior, head = last["head"], meta["headRefOid"]
+    if sh(["git", "cat-file", "-e", f"{prior}^{{commit}}"], cwd=tree, check=False).returncode:
+        url = sh(["git", "remote", "get-url", "origin"], cwd=args.repo).stdout.strip()
+        sh(["git", "fetch", "-q", url, prior], cwd=tree, check=False)
+    if sh(["git", "merge-base", "--is-ancestor", base, prior], cwd=tree, check=False).returncode:
+        return None  # rebased (or the old head is gone): the diff since would carry main's changes
+    delta = sh(["git", "diff", prior, head], cwd=tree).stdout
+    changed = sh(["git", "diff", "--name-only", prior, head], cwd=tree).stdout.split()
+    sections = [("delta.patch", delta or "(no code change)")]
+    sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in changed if (tree / f).is_file()]
+    sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())
+                 if b.name not in ("diff.patch", "prior_review.md")]  # fmt: skip
+    if args.deep:  # the PR body may name new context or evidence since the last round
+        sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in context_files(args, tree, changed)]
+        sections += [(f"evidence/{name}", text) for name, text in evidence(args)]
+    body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
+    if len(body) > MAX_PROMPT_CHARS:
+        return None
+    rnd = int(last["round"] or 1) + 1
+    return FOLLOW_UP.format(round=rnd, pr=args.pr, prior=prior[:8], head=head[:8], base=base[:8]) + body
+
+
+def set_status(meta, state, text, url=None):
+    """The PR head's `codex-review` commit status; best effort (the token needs Commit statuses: write)."""
+    try:
+        gh_api("-X", "POST", f"repos/{REPO_SLUG}/statuses/{meta['headRefOid']}", "-f", f"state={state}",
+               "-f", f"context={STATUS}", "-f", f"description={text[:140]}", "-f", f"target_url={url or meta['url']}")  # fmt: skip
+    except SystemExit as e:
+        print(f"could not set the {STATUS} status: {e}", file=sys.stderr)
 
 
 def context_files(args, tree, files):
@@ -530,7 +605,7 @@ def line_comment(f):
     return c | {"body": body + suggestion_md(f) + "\n" + LINE_MARK}
 
 
-def post(meta, r, verdict, deep, summary_for):
+def post(meta, r, verdict, deep, summary_for, session):
     """Update the summary and post findings inline; summary_for(inline) returns (round, summary)."""
     n, head = meta["number"], meta["headRefOid"]
     me = gh_api("user")["login"]
@@ -549,7 +624,14 @@ def post(meta, r, verdict, deep, summary_for):
 
     inline = [i for i, f in enumerate(r["findings"]) if on_diff(f)]
     rnd, summary = summary_for(inline)
-    marker = MARKER.format(head=head, mode="deep" if deep else "normal", verdict=verdict.replace(" ", "-"), round=rnd)
+    marker = MARKER.format(
+        head=head,
+        mode="deep" if deep else "normal",
+        verdict=verdict.replace(" ", "-"),
+        round=rnd,
+        session=session or "none",
+        rules=meta["rules"],
+    )
     body = f"{marker}\n{summary}"
     if ours:
         summary_c = gh_api(
@@ -557,6 +639,7 @@ def post(meta, r, verdict, deep, summary_for):
         )
     else:
         summary_c = gh_api("-X", "POST", f"repos/{REPO_SLUG}/issues/{n}/comments", "-F", "body=@-", input=body)
+    set_status(meta, "success" if verdict == "ready" else "failure", f"round {rnd}: {verdict}", summary_c["html_url"])
     try:  # tidying earlier rounds is best effort: the round itself is already posted
         resolve_old_threads(n, me)
     except SystemExit as e:
@@ -614,9 +697,10 @@ def resolve_old_threads(n, me):
             graphql("mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){clientMutationId}}", id=t["id"])
 
 
-def run_agent(args, work, prompt, tag):
+def run_agent(args, work, prompt, tag, session=None):
+    """One agent turn, in `session` if given; returns (answer, usage, the session it ran in)."""
     out, events = work / f"{args.agent}-{tag}.json", work / f"{args.agent}-{tag}.jsonl"
-    cmd = AGENTS[args.agent](args, out)
+    cmd = AGENTS[args.agent](args, out, session)
     t0 = time.time()
     try:
         p = sh(cmd, timeout=args.timeout, check=False, input=prompt)
@@ -626,6 +710,8 @@ def run_agent(args, work, prompt, tag):
     usage = {}
     for line in p.stdout.splitlines():
         ev = json.loads(line) if line.startswith("{") else {}
+        if ev.get("type") == "thread.started":
+            session = ev["thread_id"]
         if ev.get("type") == "turn.completed":
             usage = ev.get("usage", {})
         if ev.get("type") == "turn.failed":
@@ -633,7 +719,8 @@ def run_agent(args, work, prompt, tag):
     if not out.exists():
         sys.exit(f"{args.agent} wrote no result; see {events}\n{p.stderr[-1500:]}")
     text = out.read_text()
-    return json.loads(text[text.index("{") : text.rindex("}") + 1]), {"seconds": round(time.time() - t0), **usage}
+    answer = json.loads(text[text.index("{") : text.rindex("}") + 1])
+    return answer, {"seconds": round(time.time() - t0), **usage}, session
 
 
 def validate(r, ctx, tree):
@@ -710,7 +797,7 @@ def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
     history = []
     if prior:
         m = ROUND.search(prior)
-        rnd = int(m.group(1) or 1) + 1 if m else 2
+        rnd = int(m["round"] or 1) + 1 if m else 2
         history = re.findall(r"^- Round \d+ .*$", prior, re.M)
         history += [f"- {t.group(1)}" for t in [THIS_ROUND.search(prior)] if t]
     head, proofs, checks = meta["headRefOid"], ctx["proofs"], ctx["checks"]
@@ -768,13 +855,15 @@ def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
     lines += [
         f"<sub>{run_info['agent']} `{run_info['model']}` effort {run_info['effort']}, protocol `{run_info['protocol']}`, "
         f"{run_info['seconds']} s, {run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out "
-        f"tokens, attempt {run_info['attempt']}; base `{base[:8]}`{folded}</sub>"
+        f"tokens ({run_info.get('cached_input_tokens', 0)} cached), attempt {run_info['attempt']}, "
+        f"{run_info.get('session', 'new')} session{', checks reused' if run_info.get('checks_reused') else ''}; "
+        f"base `{base[:8]}`{folded}</sub>"
     ]
     return rnd, "\n".join(lines) + "\n"
 
 
 def main():
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit("stopped"))  # finally blocks then end the sandbox
+    signal.signal(signal.SIGTERM, stop)  # finally blocks then end the sandbox
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pr", type=int)
     ap.add_argument(
@@ -785,7 +874,8 @@ def main():
     ap.add_argument("--model", help="the agent's model; each adapter has a default")
     ap.add_argument("--effort", default="high")
     ap.add_argument("--python", default=sys.executable, help="interpreter with pytest for miles_ext/tests")
-    ap.add_argument("--prior", type=Path, help="an earlier review of this PR")
+    ap.add_argument("--prior", type=Path, help="an earlier review of this PR; its session is resumed when it can be")
+    ap.add_argument("--fresh", action="store_true", help="a full round in a new session, even if one could resume")
     ap.add_argument("--board", type=Path, help="coordination board whose 'reserved' lines hold fork id reservations")
     ap.add_argument("--head", help="review this commit instead of the PR's current head (it must be in --repo)")
     ap.add_argument("--body", type=Path, help="use this file as the PR body instead of the live one")
@@ -813,15 +903,29 @@ def main():
     work.mkdir(parents=True, exist_ok=True)
     args.evidence = fetch_evidence(args.evidence, work)
     meta, head, base, tree = prepare(args, work)
+    if args.post:
+        set_status(meta, "pending", "reviewing")
+    posted = False
+    try:  # a crash or a stop leaves an error status, not a pending one
+        posted = review(args, work, meta, head, base, tree)
+    finally:
+        if args.post and not posted:
+            set_status(meta, "error", "the review did not finish; /review retries")
+
+
+def review(args, work, meta, head, base, tree):
+    """Checks, the agent (resuming the last round's session when it can) and the report; True once posted."""
     bundle, ctx = build_bundle(args, work, meta, head, base, tree)
     if args.bundle_only:
         print(f"bundle: {bundle}")
-        return
-
+        return False
     if args.deep:
         ctx["context"] = context_files(args, tree, ctx["files"])
-    prompt = build_prompt(args, tree, head, base, bundle, ctx["files"])
-    (work / "prompt.txt").write_text(prompt)
+    prior = args.prior.read_text() if args.prior else None
+    last = m.groupdict() if prior and (m := ROUND.search(prior)) else None
+    meta["rules"] = rules_hash(tree)
+    resume = follow_up(args, tree, meta, base, bundle, last)
+    full = None
     protocol = (HERE / "SKILL.md").read_text() + SCHEMA.read_text() + PROMPT + Path(__file__).read_text()
     version = sh([args.agent, "--version"], check=False).stdout.strip().split()
     run_info = {
@@ -830,38 +934,64 @@ def main():
         "effort": args.effort,
         "deep": args.deep,
         "protocol": hashlib.sha256(protocol.encode()).hexdigest()[:12],
+        "checks_reused": ctx["cached"],
     }
-    violations = []
+    violations, session, resumed = [], None, False
     for attempt in (1, 2):
-        if violations:
-            prompt += "\n\nA previous attempt broke these protocol rules; fix every one:\n" + "\n".join(
-                f"- {v}" for v in violations
-            )
+        retry = "\n\nA previous attempt broke these protocol rules; fix every one:\n" + "\n".join(
+            f"- {v}" for v in violations
+        )
         if args.result and attempt == 1:
             result, usage = json.loads(args.result.read_text()), {"seconds": 0}
-        else:
-            result, usage = run_agent(args, work, prompt, f"a{attempt}")
+            violations, resume = validate(result, ctx, tree), None  # a break gets one real, fresh retry
+            if not violations:
+                break
+            continue
+        # attempt 2 continues attempt 1's session; attempt 1 continues the last round's when follow_up allows
+        text, into = (retry.lstrip(), session) if session else (resume, last["session"]) if resume else (None, None)
+        if text is not None:
+            try:
+                result, usage, session = run_agent(args, work, text, f"a{attempt}", into)
+                resumed = resumed or bool(last) and into == last["session"]
+            except SystemExit as e:
+                print(f"could not continue session {into}: {e}; starting a fresh one", file=sys.stderr)
+                text = None
+        if text is None:
+            full = full or build_prompt(args, tree, head, base, bundle, ctx["files"])
+            text = full + (retry if violations else "")
+            result, usage, session = run_agent(args, work, text, f"a{attempt}")
+        (work / f"prompt-a{attempt}.txt").write_text(text)
+        resume = None
         violations = validate(result, ctx, tree)
         if not violations:
             break
         print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
-    run_info.update(usage, attempt=attempt)
+    run_info.update(usage, attempt=attempt, session="resumed" if resumed else "new")
     report = work / "review.md"
-    prior = args.prior.read_text() if args.prior else None
     summary_for = lambda inline: render(result, meta, base, run_info, violations, ctx, prior, inline)  # noqa: E731
     report.write_text(summary_for(())[1])
     (work / "review.json").write_text(json.dumps({"run": run_info, "violations": violations, **result}, indent=2))
-    if args.post:
-        post(
-            meta, result, "protocol failed" if violations else result["verdict"], args.deep, summary_for
-        )  # /merge needs "ready"
+    if args.post:  # /merge needs "ready"
+        post(meta, result, "protocol failed" if violations else result["verdict"], args.deep, summary_for, session)
     if not args.keep:
         shutil.rmtree(tree)
     counts = {s: sum(f["severity"] == s for f in result["findings"]) for s in SEVERITY_ORDER}
     print(f"PR #{args.pr} {head[:8]}: {result['verdict']}; " + ", ".join(f"{n} {s}" for s, n in counts.items()))
     print(f"protocol: {'ok' if not violations else 'VIOLATIONS: ' + '; '.join(violations)}")
     print(f"report: {report}")
+    return args.post
+
+
+class Stopped(BaseException):
+    """SIGTERM: unlike a failed resume (SystemExit), nothing may start another agent."""
+
+
+def stop(*_):
+    raise Stopped
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Stopped:
+        sys.exit("stopped")

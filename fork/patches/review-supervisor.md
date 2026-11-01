@@ -62,7 +62,12 @@ Each round edits one summary comment in place and posts a "Comment" review whose
 comments carry the findings on changed lines (exact ones as GitHub suggestions); fixes are
 recommendations the author decides on. The summary is the newest-created review comment
 (collapsing older ones as outdated bumps their edit time, so edit time cannot pick it); a
-`/review` counts as answered once the summary was edited after it. Approve and Request changes are not used: the box
+`/review` counts as answered once the summary was edited after it. Later rounds continue the PR's Codex session with
+the diff since the reviewed head (a fresh full round on a rebase, a protocol change or
+`/review full`), so one judge carries its reasoning across rounds; check results are cached by
+the head and base trees. Each round sets a `codex-review` commit status, which a branch rule
+on `main` can require. Rejected: always-fresh sessions with the prior summary only, which
+repeated the whole read each round and lost the reasoning behind earlier points. Approve and Request changes are not used: the box
 posts as the PR author, and GitHub refuses both on one's own PR (a reviewer GitHub App
 would allow them).
 Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT

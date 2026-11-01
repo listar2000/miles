@@ -19,8 +19,10 @@ from zoneinfo import ZoneInfo
 import review as R
 
 HERE = Path(__file__).resolve().parent
-MARKER = re.compile(r"<!-- miles-review head=(\w+) mode=(\w+) verdict=([\w-]+)(?: round=\d+)? -->")
-COMMAND = re.compile(r"/review( deep)?")
+MARKER = re.compile(
+    r"<!-- miles-review head=(\w+) mode=(\w+) verdict=([\w-]+)(?: round=\d+)?(?: session=\S+ rules=\w+)? -->"
+)
+COMMAND = re.compile(r"/review( deep)?( full)?")
 MERGE = re.compile(r"/merge")
 MERGE_MARKER = re.compile(r"<!-- miles-merge result=(\w+) -->")
 TRAINER = re.compile(r"^(miles/|miles_plugins/|train_async\.py$)")
@@ -36,7 +38,7 @@ def gh(*args):
 
 
 def open_prs():
-    fields = "number,headRefOid,headRefName,baseRefName,isDraft,author,labels,isCrossRepository,files,body"
+    fields = "number,headRefOid,headRefName,baseRefName,isDraft,author,labels,isCrossRepository,files,body,url"
     return gh("pr", "list", "-R", R.REPO_SLUG, "--state", "open", "--limit", "100", "--json", fields)
 
 
@@ -150,6 +152,8 @@ def land(args, pr, by):
             time.sleep(5)
         else:
             return False, "GitHub did not show the folded head on the PR; the branch holds it, main is unchanged"
+        # the folded commit is the reviewed change on main, so it carries the review's status
+        R.set_status({"headRefOid": folded, "url": pr["url"]}, "success", f"ready at {head[:8]}, folded for /merge")
         if (push := git("push", "-q", "origin", f"{folded}:refs/heads/{target}")).returncode:
             return False, f"main moved; the branch now holds the folded commits:\n```\n{R.tail(push, 10)}\n```"
         for _ in range(30):
@@ -169,12 +173,13 @@ def body_list(pr, key):
     return [x for x in items if x.startswith("modal://")] if key == "evidence" else items
 
 
-def review_argv(args, pr, mode, prior):
+def review_argv(args, pr, mode, prior, fresh=False):
     argv = [args.python, str(HERE / "review.py"), str(pr["number"]), "--python", args.python, "--out", str(args.out)]
     argv += ["--checks-on", args.checks_on, "--repo", str(args.repo)]
     argv += [] if args.dry_run else ["--post"]
     argv += ["--board", str(args.board)] if args.board else []
     argv += ["--prior", str(prior)] if prior else []
+    argv += ["--fresh"] if fresh else []
     if mode == "deep":
         argv.append("--deep")
         for key in ("context", "evidence"):
@@ -193,7 +198,8 @@ class Review:
         logs = args.out / "logs"
         logs.mkdir(exist_ok=True)
         with (logs / f"pr{pr['number']}-{pr['headRefOid'][:8]}-{mode}.log").open("w") as f:
-            argv = review_argv(args, pr, mode, prior)
+            fresh = bool(command and COMMAND.fullmatch(command["body"].strip()).group(2))  # `/review full`
+            argv = review_argv(args, pr, mode, prior, fresh)
             self.p = subprocess.Popen(argv, stdout=f, stderr=subprocess.STDOUT, cwd=args.repo, start_new_session=True)
         note(args.out, f"=== {self.since:.0f} PR #{pr['number']} {pr['headRefOid'][:8]} {mode}")
 
@@ -223,7 +229,9 @@ def finish(args, state, review):
     else:
         state["done"] += review.settled
         if not args.dry_run:
-            marker = R.MARKER.format(head=pr["headRefOid"], mode=review.mode, verdict="error", round=0)
+            marker = R.MARKER.format(
+                head=pr["headRefOid"], mode=review.mode, verdict="error", round=0, session="none", rules="none"
+            )
             body = f"{marker}\nThe review daemon could not review this head; comment `/review` to retry."
             R.sh(["gh", "pr", "comment", str(pr["number"]), "-R", R.REPO_SLUG, "--body", body], check=False)
 

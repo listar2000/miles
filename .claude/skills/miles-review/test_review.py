@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -41,3 +42,36 @@ def test_regressions_count_failures_not_wording():
     assert not R.regressed("pytest", "435 passed, 1 error", "437 passed, 1 error")
     assert R.regressed("precommit", "failed: isort, Black", "failed: isort")
     assert not R.regressed("ledger", "ledger check: ok", "ledger check: ok")
+
+
+def test_marker_round_trips_the_session_for_both_readers():
+    import review_daemon as D
+
+    m = R.MARKER.format(head="a" * 40, mode="deep", verdict="ready", round=2, session="01a1-9f", rules="c" * 12)
+    assert R.ROUND.search(m).groupdict() == {"head": "a" * 40, "mode": "deep", "round": "2", "session": "01a1-9f",
+                                             "rules": "c" * 12}  # fmt: skip
+    assert D.MARKER.match(m) and D.MARKER.match("<!-- miles-review head=aa mode=normal verdict=ready -->")
+
+
+def test_follow_up_resumes_only_on_the_same_base_rules_and_mode(tmp_path):
+    def git(*a):
+        return R.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=tmp_path).stdout.strip()
+
+    git("init", "-q")
+    for name in ("base", "prior", "head"):
+        (tmp_path / "f.py").write_text(f"{name}\n")
+        git("add", "f.py")
+        git("commit", "-qm", name)
+    revs = git("log", "--format=%H").split()[::-1]
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "pytest.txt").write_text("435 passed")
+    args = SimpleNamespace(fresh=False, deep=False, pr=7, repo=tmp_path)
+    last = {"head": revs[1], "mode": "normal", "round": "2", "session": "s1", "rules": "r1"}
+    meta = {"headRefOid": revs[2], "rules": "r1"}
+    prompt = R.follow_up(args, tmp_path, meta, revs[0], bundle, last)
+    assert "Round 3 of your review" in prompt and "-prior\n+head" in prompt and "435 passed" in prompt
+    assert R.follow_up(args, tmp_path, meta, revs[2], bundle, last) is None  # rebased: base not under the old head
+    assert R.follow_up(args, tmp_path, meta, revs[0], bundle, {**last, "rules": "old"}) is None
+    assert R.follow_up(args, tmp_path, meta, revs[0], bundle, {**last, "mode": "deep"}) is None
+    assert R.follow_up(SimpleNamespace(**{**vars(args), "fresh": True}), tmp_path, meta, revs[0], bundle, last) is None
