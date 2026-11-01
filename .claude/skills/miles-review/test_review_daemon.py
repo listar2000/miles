@@ -24,12 +24,13 @@ def _pr(draft=False, files=("miles_ext/x.py",), labels=(), author="listar2000", 
     }
 
 
-def _c(body, user="listar2000", id=1):
-    return {"id": id, "user": {"login": user}, "body": body}
+def _c(body, user="listar2000", id=1, edited=None):
+    t = f"2026-01-01T00:00:{id:02d}Z"
+    return {"id": id, "user": {"login": user}, "body": body, "created_at": t, "updated_at": edited or t}
 
 
-def _review(head, mode="normal"):
-    return _c(f"<!-- miles-review head={head} mode={mode} verdict=ready -->\nreport")
+def _review(head, mode="normal", id=1, edited=None, verdict="ready"):
+    return _c(f"<!-- miles-review head={head} mode={mode} verdict={verdict} round=1 -->\nreport", id=id, edited=edited)
 
 
 def _decide(pr, thread=(), done=(), settled=True):
@@ -49,7 +50,10 @@ def test_drafts_and_unsettled_heads_wait_but_a_command_runs_at_once():
     assert _decide(_pr(draft=True)) is None
     assert _decide(_pr(), settled=False) is None
     assert _decide(_pr(draft=True), [_review("h1"), command]) == ("normal", command)
-    assert _decide(_pr(draft=True), [command, _review("h1")]) is None  # already answered
+    assert _decide(_pr(draft=True), [command, _review("h1", id=10)]) is None  # already answered
+    assert (
+        _decide(_pr(draft=True), [_review("h1", edited="2026-01-01T00:00:20Z"), command]) is None
+    )  # summary edited after it
     assert _decide(_pr(draft=True), [_review("h1"), command], done=["cmd:9"]) is None  # answered in a dry run
 
 
@@ -74,8 +78,11 @@ def test_merge_needs_a_ready_review_at_the_head_and_answers_once():
     assert D.merge_refusal(pr, [_review("h1")], ME) is None
     assert "no Codex review" in D.merge_refusal({**pr, "headRefOid": "h2"}, [_review("h1")], ME)
     assert "stacked" in D.merge_refusal({**pr, "baseRefName": "topic"}, [_review("h1")], ME)
-    blocked = _c("<!-- miles-review head=h1 mode=normal verdict=blocked -->")
-    assert "blocked" in D.merge_refusal(pr, [_review("h1"), blocked], ME)
+    assert "blocked" in D.merge_refusal(pr, [_review("h1"), _review("h1", id=2, verdict="blocked")], ME)
+    assert (
+        D.merge_refusal(pr, [_review("h1", edited="2026-01-01T00:00:30Z"), _review("h1", id=2, verdict="blocked")], ME)
+        is None
+    )
     assert "deep" in D.merge_refusal({**pr, "files": [{"path": "miles/x.py"}]}, [_review("h1")], ME)
 
 

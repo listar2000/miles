@@ -1,31 +1,127 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "summary", "findings", "handoffs"],
+  "required": [
+    "verdict",
+    "summary",
+    "findings",
+    "prior",
+    "handoffs"
+  ],
   "properties": {
-    "verdict": {"type": "string", "enum": ["ready", "ready after the should-fixes", "blocked"]},
-    "summary": {"type": "string"},
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "ready after the should-fixes",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["severity", "rule", "title", "location", "line", "evidence", "fix"],
+        "required": [
+          "severity",
+          "rule",
+          "title",
+          "location",
+          "line",
+          "end_line",
+          "evidence",
+          "suggestion",
+          "exact"
+        ],
         "properties": {
-          "severity": {"type": "string", "enum": ["blocking", "should-fix", "nit"]},
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocking",
+              "should-fix",
+              "nit"
+            ]
+          },
           "rule": {
             "type": "string",
             "enum": [
-              "ledger", "lint", "fits-fork", "one-commit", "ledger-shape", "ids", "upstream-edit",
-              "extension", "vendored", "patch-page", "evidence", "contract", "comment", "test",
-              "pr-body", "attribution", "claim", "secret", "measurement", "technical"
+              "ledger",
+              "lint",
+              "fits-fork",
+              "one-commit",
+              "ledger-shape",
+              "ids",
+              "upstream-edit",
+              "extension",
+              "vendored",
+              "patch-page",
+              "evidence",
+              "contract",
+              "comment",
+              "test",
+              "pr-body",
+              "attribution",
+              "claim",
+              "secret",
+              "measurement",
+              "technical"
             ]
           },
-          "title": {"type": "string"},
-          "location": {"type": "string", "description": "A repo path from the diff, or 'PR body' or 'commit <sha8>'."},
-          "line": {"type": "integer", "description": "1-based line at the PR head; 0 for a whole file, the PR body or a commit."},
-          "evidence": {"type": "string", "description": "The quoted text, or the bundle file and lines it comes from."},
-          "fix": {"type": "string", "description": "Exact replacement text or a unified diff."}
+          "title": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "description": "A repo path from the diff, or 'PR body' or 'commit <sha8>'."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based first line at the PR head; 0 for a whole file, the PR body or a commit."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "Last line of the range `suggestion` replaces when `exact`; else equal to `line`."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "The quoted text, or the bundle file and lines it comes from."
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "The recommended fix; the author decides. Exact text only when `exact`."
+          },
+          "exact": {
+            "type": "boolean",
+            "description": "True only when `suggestion` is the exact replacement of lines line..end_line of a changed file."
+          }
+        }
+      }
+    },
+    "prior": {
+      "type": "array",
+      "description": "Each finding of prior_review.md, in order; empty without one.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "status"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "open",
+              "dropped"
+            ]
+          }
         }
       }
     },
@@ -34,10 +130,17 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["owner", "note"],
+        "required": [
+          "owner",
+          "note"
+        ],
         "properties": {
-          "owner": {"type": "string"},
-          "note": {"type": "string"}
+          "owner": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     }

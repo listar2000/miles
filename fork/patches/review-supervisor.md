@@ -51,6 +51,11 @@ box that holds the Codex and GitHub logins, which also tests it in the image.
 `/merge` lands a single ready PR the merge desk's way (fold, same-code check, ledger,
 push of the branch, then `main`), so landing needs no Claude thread either; stacks
 and tags stay with the desk.
+Each round edits one summary comment in place and posts a "Comment" review whose line
+comments carry the findings on changed lines (exact ones as GitHub suggestions); fixes are
+recommendations the author decides on. Approve and Request changes are not used: the box
+posts as the PR author, and GitHub refuses both on one's own PR (a reviewer GitHub App
+would allow them).
 Rejected: Codex cloud review (no choice of model or effort) and GitHub Actions (ChatGPT
 logins are not for public-repository CI; an API key costs about $1.20 per review).
 

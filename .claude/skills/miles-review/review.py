@@ -43,7 +43,10 @@ CONTEXT_FILES = (
 MAX_PROMPT_CHARS = 900_000  # Codex rejects prompts over 1,048,576 characters
 TEST_FILE = re.compile(r"(^|/)(tests?/|test_[^/]*\.py$)")
 FIXUP = re.compile(r"^(fixup|amend|squash)! ", re.M)
-MARKER = "<!-- miles-review head={head} mode={mode} verdict={verdict} -->"
+MARKER = "<!-- miles-review head={head} mode={mode} verdict={verdict} round={round} -->"
+ROUND = re.compile(r"<!-- miles-review head=\w+ mode=\w+ verdict=[\w-]+(?: round=(\d+))? -->")
+LINE_MARK = "<!-- miles-review-line -->"
+THIS_ROUND = re.compile(r"<!-- this-round: (.*) -->")
 CHECK_IMAGE = "docker.io/starlimobius/miles-mobius:main"
 EVIDENCE_VOLUMES = re.compile(r"(miles|mdev|rl)-[\w.-]+")  # ours; never another team's volume
 
@@ -485,15 +488,120 @@ def fetch_evidence(items, work):
     return out
 
 
-def post(meta, report, verdict, deep):
-    """The review as a PR comment, under the marker the review daemon reads back."""
-    marker = MARKER.format(
-        head=meta["headRefOid"], mode="deep" if deep else "normal", verdict=verdict.replace(" ", "-")
+def gh_api(*args, input=None):
+    out = sh(["gh", "api", *args], input=input).stdout
+    return json.loads(out) if out.strip() else None
+
+
+def diff_lines(n):
+    """{path: lines a review comment may anchor to}: the head-side lines of each file's hunks on GitHub."""
+    out = {}
+    for page in gh_api("--paginate", "--slurp", f"repos/{REPO_SLUG}/pulls/{n}/files"):
+        for f in page:
+            lines, right = set(), 0
+            for ln in (f.get("patch") or "").splitlines():
+                if m := re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", ln):
+                    right = int(m.group(1))
+                elif not ln.startswith("-"):
+                    lines.add(right)
+                    right += 1
+            out[f["filename"]] = lines
+    return out
+
+
+def line_comment(f):
+    body = f"**{f['severity'].capitalize()}** · {f['title']}\n\n{f['evidence'].strip()}\n\n"
+    c = {"path": f["location"], "line": f["end_line"] if f["exact"] else f["line"], "side": "RIGHT"}
+    if f["exact"] and f["end_line"] > f["line"]:
+        c |= {"start_line": f["line"], "start_side": "RIGHT"}
+    return c | {"body": body + suggestion_md(f) + "\n" + LINE_MARK}
+
+
+def post(meta, r, verdict, deep, summary_for):
+    """Post one round: edit the PR's summary comment in place (or start it), and submit the round as a
+    GitHub "Comment" review carrying the line comments. Earlier rounds' line threads are resolved (the
+    current round repeats what is still open) and older summaries are collapsed as outdated.
+    `summary_for(inline)` renders the summary given the findings posted on lines; returns the round."""
+    n, head = meta["number"], meta["headRefOid"]
+    me = gh_api("user")["login"]
+    ours = [
+        c
+        for page in gh_api("--paginate", "--slurp", f"repos/{REPO_SLUG}/issues/{n}/comments")
+        for c in page
+        if c["user"]["login"] == me and ROUND.search(c["body"])
+    ]
+    ours.sort(key=lambda c: c["updated_at"])
+    lines = diff_lines(n)
+
+    def on_diff(f):
+        span = range(f["line"], (f["end_line"] if f["exact"] else f["line"]) + 1)
+        return f["line"] > 0 and all(x in lines.get(f["location"], ()) for x in span)
+
+    inline = [i for i, f in enumerate(r["findings"]) if on_diff(f)]
+    rnd, summary = summary_for(inline)
+    marker = MARKER.format(head=head, mode="deep" if deep else "normal", verdict=verdict.replace(" ", "-"), round=rnd)
+    body = f"{marker}\n{summary}"
+    if ours:
+        summary_c = gh_api(
+            "-X", "PATCH", f"repos/{REPO_SLUG}/issues/comments/{ours[-1]['id']}", "-F", "body=@-", input=body
+        )
+    else:
+        summary_c = gh_api("-X", "POST", f"repos/{REPO_SLUG}/issues/{n}/comments", "-F", "body=@-", input=body)
+    try:  # tidying earlier rounds is best effort: the round itself is already posted
+        resolve_old_threads(n, me)
+    except SystemExit as e:
+        print(f"could not resolve earlier line threads: {e}", file=sys.stderr)
+    note = (
+        f"**Codex review, round {rnd}** at `{head[:8]}`: {verdict} ({counts(r)}). [Summary]({summary_c['html_url']})"
     )
-    body = f"{marker}\n**Independent review (Codex, run by the review daemon)**\n\n{report.read_text()}"
-    body_file = report.with_suffix(".comment.md")
-    body_file.write_text(body)
-    sh(["gh", "pr", "comment", str(meta["number"]), "-R", REPO_SLUG, "--body-file", str(body_file)])
+    review = {"commit_id": head, "event": "COMMENT", "body": note}
+    comments = [line_comment(r["findings"][i]) for i in inline]
+    try:
+        gh_api(
+            "-X",
+            "POST",
+            f"repos/{REPO_SLUG}/pulls/{n}/reviews",
+            "--input",
+            "-",
+            input=json.dumps(review | {"comments": comments}),
+        )
+    except SystemExit:  # GitHub refused a line; the summary then carries every finding in full
+        rnd, summary = summary_for([])
+        gh_api(
+            "-X",
+            "PATCH",
+            f"repos/{REPO_SLUG}/issues/comments/{summary_c['id']}",
+            "-F",
+            "body=@-",
+            input=f"{marker}\n{summary}",
+        )
+        gh_api("-X", "POST", f"repos/{REPO_SLUG}/pulls/{n}/reviews", "--input", "-", input=json.dumps(review))
+    for c in ours[:-1]:
+        q = "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){clientMutationId}}"
+        try:
+            graphql(q, id=c["node_id"])
+        except SystemExit as e:
+            print(f"could not collapse an earlier summary: {e}", file=sys.stderr)
+
+
+def graphql(query, **variables):
+    args = ["graphql", "-f", f"query={query}"] + [f"-F{k}={v}" for k, v in variables.items()]
+    return gh_api(*args)
+
+
+def resolve_old_threads(n, me):
+    owner, name = REPO_SLUG.split("/")
+    q = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
+      reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"""
+    threads = graphql(q, o=owner, r=name, n=n)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    for t in threads:
+        first = t["comments"]["nodes"][0] if t["comments"]["nodes"] else {}
+        if (
+            not t["isResolved"]
+            and (first.get("author") or {}).get("login") == me
+            and LINE_MARK in first.get("body", "")
+        ):
+            graphql("mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){clientMutationId}}", id=t["id"])
 
 
 def run_agent(args, work, prompt, tag):
@@ -532,10 +640,10 @@ def validate(r, ctx, tree):
                 bad.append(f"finding {i}: {loc}:{f['line']} is past the end of the file")
         elif loc != "PR body" and not re.fullmatch(r"commit [0-9a-f]{7,40}", loc):
             bad.append(f"finding {i}: location '{loc}' is not a changed file, 'PR body' or 'commit <sha>'")
-        if not f["evidence"].strip() or not f["fix"].strip():
-            bad.append(f"finding {i}: evidence and fix must both be filled")
-        if re.match(r"\s*(consider|maybe|you could)\b", f["fix"], re.I):
-            bad.append(f"finding {i}: fix must be exact text or a diff, not advice")
+        if not f["evidence"].strip() or not f["suggestion"].strip():
+            bad.append(f"finding {i}: evidence and suggestion must both be filled")
+        if f["exact"] and (loc not in ctx["files"] or not 0 < f["line"] <= f["end_line"]):
+            bad.append(f"finding {i}: an exact suggestion needs a changed file and 0 < line <= end_line")
     rules = {(f["rule"], f["severity"]) for f in r["findings"]}
     if "ledger check: ok" not in ctx["checks"]["head"]["ledger"] and ("ledger", "blocking") not in rules:
         bad.append("ledger check fails on the head but there is no blocking 'ledger' finding")
@@ -543,25 +651,50 @@ def validate(r, ctx, tree):
         bad.append(f"attribution lines present ({ctx['attribution'][0]!r}) but no 'attribution' finding")
     for node, p in ctx["proofs"].items():
         name = node.rsplit("::", 1)[-1]
-        named = any(f["rule"] == "test" and name in f["title"] + f["evidence"] + f["fix"] for f in r["findings"])
+        named = any(
+            f["rule"] == "test" and name in f["title"] + f["evidence"] + f["suggestion"] for f in r["findings"]
+        )
         if p["head"][0] == "pass" and p["base"][0] == "pass" and not named:
             bad.append(f"{name} passes on the base, so it cannot go red, but no 'test' finding names it")
     return bad
 
 
-def render(r, meta, base, run_info, violations, proofs, checks):
-    folded = f" ({meta['folded']})" if meta["folded"] else ""
+def brief(name, text):
+    if name == "precommit":
+        failed = re.findall(r"^(.+?)\.{3,}Failed$", text, re.M)
+        return f"failed: {', '.join(failed)}" if failed else "all hooks pass"
+    return text.strip().splitlines()[-1].strip("= ") if text.strip() else "-"
+
+
+def counts(r):
+    n = {s: sum(f["severity"] == s for f in r["findings"]) for s in SEVERITY_ORDER}
+    return ", ".join(f"{v} {k}" for k, v in n.items() if v) or "no findings"
+
+
+def suggestion_md(f):
+    if f["exact"]:
+        return f"```suggestion\n{f['suggestion'].rstrip()}\n```"
+    return f"Suggested (your call): {f['suggestion'].strip()}"
+
+
+def render(r, meta, base, run_info, violations, ctx, prior=None, inline=()):
+    """The review summary: verdict first, findings not on a diff line in full, the rest folded away.
+    `prior` is the previous summary (for the round and history); `inline` holds the indexes of findings
+    posted as line comments, which the summary only lists."""
+    rnd = 1
+    history = []
+    if prior:
+        m = ROUND.search(prior)
+        rnd = int(m.group(1) or 1) + 1 if m else 2
+        history = re.findall(r"^- Round \d+ .*$", prior, re.M)
+        history += [f"- {t.group(1)}" for t in [THIS_ROUND.search(prior)] if t]
+    head, proofs, checks = meta["headRefOid"], ctx["proofs"], ctx["checks"]
+    this = f"Round {rnd} at `{head[:8]}`: {r['verdict']} ({counts(r)})"
+    url = f"https://github.com/{REPO_SLUG}/blob/{head}/"
     lines = [
-        f"{r['verdict'].capitalize()}.",
-        "",
-        f"# PR #{meta['number']} review: {meta['title']}",
-        "",
-        f"Head `{meta['headRefOid'][:10]}`{folded}, base `{base[:10]}`. "
-        f"Reviewer: {run_info['agent']} `{run_info['model']}` "
-        f"(effort {run_info['effort']}{', deep review' if run_info.get('deep') else ''}), "
-        f"protocol `{run_info['protocol']}`, {run_info['seconds']} s, "
-        f"{run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out tokens, "
-        f"attempt {run_info['attempt']}.",
+        f"### Codex review · {r['verdict'].capitalize()}",
+        f"Round {rnd} at `{head[:8]}`{' · deep' if run_info.get('deep') else ''} · {counts(r)}",
+        f"<!-- this-round: {this} -->",
         "",
         r["summary"],
         "",
@@ -573,45 +706,42 @@ def render(r, meta, base, run_info, violations, proofs, checks):
             "",
         ]
     for sev in SEVERITY_ORDER:
-        items = [f for f in r["findings"] if f["severity"] == sev]
-        if not items:
-            continue
-        lines += [f"## {sev.capitalize()}", ""]
-        for f in items:
+        items = [(i, f) for i, f in enumerate(r["findings"]) if f["severity"] == sev]
+        if items:
+            lines += [f"**{sev.capitalize()}**", ""]
+        for i, f in items:
             where = f["location"] + (f":{f['line']}" if f["line"] else "")
-            lines += [
-                f"### {f['title']}",
-                "",
-                f"`{where}` ({f['rule']})",
-                "",
-                f["evidence"],
-                "",
-                "Fix:",
-                "",
-                "```",
-                f["fix"].rstrip(),
-                "```",
-                "",
-            ]
-    if proofs:
-        lines += ["## Test proofs (run by the supervisor)", "", "| Test | Head | Base |", "| --- | --- | --- |"]
-        lines += [
-            f"| `{n}` | {p['head'][0]} ({p['head'][1]} s) | {p['base'][0]} ({p['base'][1]} s) |"
-            for n, p in proofs.items()
-        ]
-        lines.append("")
-
-    def brief(name, text):
-        if name == "precommit":
-            failed = re.findall(r"^(.+?)\.{3,}Failed$", text, re.M)
-            return f"failed: {', '.join(failed)}" if failed else "all hooks pass"
-        return text.strip().splitlines()[-1].strip("= ") if text.strip() else "-"
-
-    lines += ["## Checks (run by the supervisor)", "", "| Check | Head | Base |", "| --- | --- | --- |"]
-    lines += [f"| {k} | {brief(k, checks['head'][k])} | {brief(k, checks['base'][k])} |" for k in checks["head"]]
+            anchor = f"#L{f['line']}" if f["line"] else ""
+            link = f"[`{where}`]({url}{f['location']}{anchor})" if f["location"] in ctx["files"] else f"`{where}`"
+            if i in inline:
+                lines += [f"- **{f['title']}** at {link} (comment on the line)", ""]
+                continue
+            lines += [f"- **{f['title']}** at {link} ({f['rule']})", "", f"  {f['evidence'].strip()}", ""]
+            lines += ["  " + ln for ln in suggestion_md({**f, "exact": False}).splitlines()] + [""]
+    fixed = [p["title"] for p in r.get("prior", ()) if p["status"] == "fixed"]
+    if fixed:
+        lines += [f"Fixed since round {rnd - 1}: {len(fixed)} ({'; '.join(fixed)})", ""]
     if r["handoffs"]:
-        lines += ["", "## Handoffs", ""] + [f"- **{h['owner']}**: {h['note']}" for h in r["handoffs"]]
-    return "\n".join(lines) + "\n"
+        lines += ["**For a human**", ""] + [f"- {h['owner']}: {h['note']}" for h in r["handoffs"]] + [""]
+    rows = [(k, brief(k, checks["head"][k]), brief(k, checks["base"][k])) for k in ("ledger", "precommit", "pytest")]
+    worse = [row for row in rows if row[1] != row[2] and "ok" not in row[1] and "pass" not in row[1]]
+    table = ["| Check | Head | Base |", "| --- | --- | --- |"] + [f"| {k} | {h} | {b} |" for k, h, b in rows]
+    if proofs:
+        table += [""] + ["| New test | Head | Base |", "| --- | --- | --- |"]
+        table += [f"| `{n}` | {p['head'][0]} | {p['base'][0]} |" for n, p in proofs.items()]
+    if worse:
+        lines += ["**Checks that differ from the base**", ""] + table + [""]
+    else:
+        lines += ["<details><summary>Checks (none worse than the base)</summary>", "", *table, "", "</details>", ""]
+    if history:
+        lines += ["<details><summary>History</summary>", "", *history, "", "</details>", ""]
+    folded = f"; {meta['folded']}" if meta["folded"] else ""
+    lines += [
+        f"<sub>{run_info['agent']} `{run_info['model']}` effort {run_info['effort']}, protocol `{run_info['protocol']}`, "
+        f"{run_info['seconds']} s, {run_info.get('input_tokens', '?')} in / {run_info.get('output_tokens', '?')} out "
+        f"tokens, attempt {run_info['attempt']}; base `{base[:8]}`{folded}</sub>"
+    ]
+    return rnd, "\n".join(lines) + "\n"
 
 
 def main():
@@ -688,10 +818,14 @@ def main():
         print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
     run_info.update(usage, attempt=attempt)
     report = work / "review.md"
-    report.write_text(render(result, meta, base, run_info, violations, ctx["proofs"], ctx["checks"]))
+    prior = args.prior.read_text() if args.prior else None
+    summary_for = lambda inline: render(result, meta, base, run_info, violations, ctx, prior, inline)  # noqa: E731
+    report.write_text(summary_for(())[1])
     (work / "review.json").write_text(json.dumps({"run": run_info, "violations": violations, **result}, indent=2))
     if args.post:
-        post(meta, report, "protocol failed" if violations else result["verdict"], args.deep)  # /merge needs "ready"
+        post(
+            meta, result, "protocol failed" if violations else result["verdict"], args.deep, summary_for
+        )  # /merge needs "ready"
     if not args.keep:
         shutil.rmtree(tree)
     counts = {s: sum(f["severity"] == s for f in result["findings"]) for s in SEVERITY_ORDER}
