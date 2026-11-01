@@ -1,9 +1,9 @@
 # RFC 0002: SFT data tokenized the way the model sees it when served
 
 Status: accepted 2026-11-01; implemented in `miles_ext/sft/` (ext-048) and
-`TITOTokenizer.tokenize_completion` (hook-017). A later RFC covers the adapters
-that build SFT records (Harbor ATIF, rejection sampling of rollouts) and
-launching SFT on Modal.
+`TITOTokenizer.tokenize_completion` (hook-017). Connectors that build SFT records
+from other formats, Harbor ATIF first, are [RFC 0003](0003-sft-record-connectors.md);
+rejection sampling of rollouts and launching SFT on Modal are later work.
 
 ## What is decided
 

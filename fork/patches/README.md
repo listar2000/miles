@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-049 | Ext | SFT record connectors: `write_records` validates and reports; the ATIF connector turns Harbor trial dirs (continuations, `context_management`, subagents) into records by the spec alone | active; remove when upstream Miles reads ATIF into session-server-shaped SFT data | [ext-049-sft-connectors.md](ext-049-sft-connectors.md) |
 | ext-048 | Ext | SFT records (OpenAI messages plus each call's context) tokenized with session server v2's own attach rule and TITO, offline into shards a rollout function serves; `thinking_retention` `all` or `template` | active; remove when upstream tokenizes SFT through the session server's rules | [ext-048-sft-tokenization.md](ext-048-sft-tokenization.md) |
 | hook-017 | Hook | `TITOTokenizer.tokenize_completion`: an assistant message as the tokens the engine samples (default: template diff minus one trailing token; families override) | active; not filed upstream | [hook-017-tito-tokenize-completion.md](hook-017-tito-tokenize-completion.md) |
 | ext-047 | Ext | Harnesses move to `miles_ext/harnesses/<harness>/` and sandbox providers to `miles_ext/sandboxes/`; `miles_ext/harbor/` keeps the trial runner; old Sail/Modal import paths re-exported | active; aliases go after the next stable version | [ext-047-harness-layout.md](ext-047-harness-layout.md) |
