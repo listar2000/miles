@@ -25,7 +25,10 @@ MARKER = re.compile(
 COMMAND = re.compile(r"/review( deep)?( full)?")
 MERGE = re.compile(r"/merge")
 MERGE_MARKER = re.compile(r"<!-- miles-merge result=(\w+) -->")
-TRAINER = re.compile(r"^(miles/|miles_plugins/|train_async\.py$)")
+# code that runs in training or serving: the trainer, SGLang patches, and fix/hook/port patch pages
+RUNTIME = re.compile(
+    r"^(miles/|miles_plugins/|train_async\.py$|fork/deps/sglang/.*\.patch$|fork/patches/(fix|hook|port)-)"
+)
 DEEP_LABEL = "deep-review"
 BODY_LIST = {"context": re.compile(r"^Review context:(.*)$", re.M), "evidence": re.compile(r"^Evidence:(.*)$", re.M)}
 MAX_FAILURES = 2
@@ -59,10 +62,10 @@ def decide(pr, thread, allowed, done, now, first_seen, settle):
     last = next((c["updated_at"] for c in latest_first(ours, allowed) if MARKER.match(c["body"])), "")
     for c in [c for c in ours if c["created_at"] > last][::-1]:
         if (m := COMMAND.fullmatch(c["body"].strip())) and f"cmd:{c['id']}" not in done:
-            return ("deep" if m.group(1) or auto_deep(pr) else "normal"), c
+            return ("deep" if m.group(1) or auto_deep(pr, ours) else "normal"), c
     if pr["isDraft"] or now - first_seen.setdefault(head, now) < settle:
         return None
-    mode = "deep" if auto_deep(pr) else "normal"
+    mode = "deep" if auto_deep(pr, ours) else "normal"
     reviewed = done | {f"{m.group(1)}:{m.group(2)}" for c in ours if (m := MARKER.match(c["body"]))}
     return None if {f"{head}:{mode}", f"{head}:deep"} & reviewed else (mode, None)
 
@@ -72,8 +75,11 @@ def latest_first(thread, allowed):
     return sorted((c for c in thread if c["user"]["login"] in allowed), key=lambda c: c["created_at"], reverse=True)
 
 
-def auto_deep(pr):
-    return any(lb["name"] == DEEP_LABEL for lb in pr["labels"]) or any(TRAINER.match(f["path"]) for f in pr["files"])
+def auto_deep(pr, thread):
+    """Deep when labelled, when the PR changes runtime code, or once any round was deep (its session goes on)."""
+    if any(lb["name"] == DEEP_LABEL for lb in pr["labels"]) or any(RUNTIME.match(f["path"]) for f in pr["files"]):
+        return True
+    return any((m := MARKER.match(c["body"])) and m.group(2) == "deep" for c in thread)
 
 
 def merge_request(thread, allowed, done):
@@ -98,7 +104,7 @@ def merge_refusal(pr, thread, allowed):
         return f"no Codex review at the current head {pr['headRefOid'][:8]}; comment `/review` first"
     if reviews[-1].group(3) != "ready":
         return f"the latest Codex verdict is \"{reviews[-1].group(3).replace('-', ' ')}\", not \"ready\""
-    if auto_deep(pr) and reviews[-1].group(2) != "deep":
+    if auto_deep(pr, [c for c in thread if c["user"]["login"] in allowed]) and reviews[-1].group(2) != "deep":
         return "this PR needs a deep review; comment `/review deep`"
     return None
 

@@ -62,6 +62,10 @@ def test_deep_from_command_label_or_trainer_paths():
     assert _decide(_pr(labels=["deep-review"])) == ("deep", None)
     assert _decide(_pr(files=["miles/rollout/x.py"])) == ("deep", None)
     assert _decide(_pr(labels=["deep-review"]), [_review("h1", "normal")]) == ("deep", None)
+    assert _decide(_pr(files=["fork/deps/sglang/port-001-x.patch"])) == ("deep", None)
+    assert _decide(_pr(files=["fork/patches/hook-018-x.md"])) == ("deep", None)
+    assert _decide(_pr(files=["fork/patches/ext-050-x.md"])) == ("normal", None)
+    assert _decide(_pr(head="h2"), [_review("h1", "deep")]) == ("deep", None)  # once deep, its session goes on
 
 
 def test_only_allowed_users_trigger_or_mark_reviews():
