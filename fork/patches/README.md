@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| port-002 | Port | Miles GPU-delta weight sync (radixark/miles#3894): `--update-weight-transfer-mode gpu-delta`, trainer-side XOR + GPU compression, publication and receiver coordination | active; remove when the PR is merged and synced | [port-002-miles-gpu-delta.md](port-002-miles-gpu-delta.md) |
 | fix-079 | Fix | GPU-delta stages its decompression input through device memory when gVisor refuses the host mapping with CUDA_ERROR_OUT_OF_MEMORY (`GPU_DELTA_DEVICE_ARENA=1` forces it) | active; remove when the PR offers a device-staged arena | [fix-079-gpu-delta-device-arena.md](fix-079-gpu-delta-device-arena.md) |
 | fix-074 | Fix | GPU-delta host arenas fall back to HOST pinned memory when gVisor refuses HOST_NUMA `cuMemCreate` (Modal B300) | active; remove when the PR stops requiring HOST_NUMA | [fix-074-gpu-delta-host-pinned.md](fix-074-gpu-delta-host-pinned.md) |
 | port-001 | Port | SGLang GPU-delta receiver (sgl-project/sglang#42210): hardware-decompressed XOR deltas applied in place, `/update_weights_from_gpu_delta` | active; remove when the PR is in our pinned `sglang-miles` | [port-001-sglang-gpu-delta.md](port-001-sglang-gpu-delta.md) |
