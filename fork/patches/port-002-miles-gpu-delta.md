@@ -25,13 +25,16 @@ teleportation"): PP-local owners XOR old and new canonical weights, compress on 
   so on the results volume restarted engines would not see them; it now runs the hook and its collective check.
   Verified by `tests/fast/backends/training_utils/weight_update/gpu_delta/test_gpu_delta_recovery_visibility.py`
   (2 passed; 2 failed without the fix). Retire it with port-002 once #3894 has the same boundary.
+- fix-077 (from the overnight GLM run): the receiver plan names tensors as the checkpoint does, and GLM-5.3-Flash's
+  multimodal checkpoint nests the text model under `model.language_model.`; Megatron's export emits `model.*`. Exporter
+  names now map onto those plan names, and a baseline capture that still meets unplanned tensors fails once with the list.
 
 ## How it is applied
 Opt-in: `--update-weight-transfer-mode gpu-delta` (plus `--update-weight-disk-dir`, a local HF checkpoint, Megatron
 raw exporter, `retract` pause, no LoRA; `miles/utils/gpu_delta/admission.py`). Nothing changes for other modes.
 Verify: the PR's fast tests on CPU in our image (`tests/fast/{backends/megatron_utils,backends/training_utils/weight_update,utils}/gpu_delta`),
 gate E0 for the native path. On a sync: if upstream merged #3894, take upstream's side of every file listed in
-`Touches:` and retire port-002, fix-075 and fix-076; if the PR head moved and we want it, refresh in one commit.
+`Touches:` and retire port-002, fix-075, fix-076 and fix-077; if the PR head moved and we want it, refresh in one commit.
 
 ## Remove when
 radixark/miles#3894 is merged and our main has synced past it; upstream status: open draft PR (2026-11-03).
