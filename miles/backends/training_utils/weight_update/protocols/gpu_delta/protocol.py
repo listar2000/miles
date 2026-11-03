@@ -536,7 +536,18 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
                 owner["metadata"].update(provenance)
             return gpu_delta_publication.seal_publication(directory, shards)
 
-        return _on_root(seal)
+        descriptor = _on_root(seal)
+        # [fork fix-076] a recovery publication goes through the same visibility boundary as publish():
+        # restarted engines read it right after, and on a non-POSIX filesystem (a Modal volume) they see
+        # nothing until the post-write hook has run
+        error = None
+        try:
+            if self._post_write_hook is not None:
+                self._post_write_hook(self.args, str(directory), list(self.rollout_engines))
+        except Exception as caught:
+            error = caught
+        _collective_check(error, "recovery publication visibility")
+        return descriptor
 
     def _recovery_descriptor(self):
         # A repeated model/step can reuse compressed bytes, but fresh receivers
