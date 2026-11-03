@@ -32,6 +32,7 @@ option, and Docker inside a Modal Sandbox could not mount the 117-layer base
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -100,12 +101,15 @@ def _pycs() -> list[str]:
 
 def _patched_sglang(src: str) -> tuple[list[str], list[str]]:
     """Absolute (present, deleted) paths of the SGLang files the fork's patches change."""
-    patches = sorted(str(p.resolve()) for p in Path(PATCHES_IN_IMAGE).glob("*.patch"))
-    if not patches:
+    # apply.py's order, one patch at a time: a fix or hook may edit a file a port adds
+    spec = importlib.util.spec_from_file_location("sglang_patches", f"{PATCHES_IN_IMAGE}/apply.py")
+    apply = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(apply)
+    if not apply.PATCHES:
         return [], []
     with tempfile.TemporaryDirectory() as tmp:  # a scratch index: the checkout's own index plays no part
         env = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, "index")}
-        for args in (["read-tree", "HEAD"], ["apply", "--cached", *patches]):
+        for args in (["read-tree", "HEAD"], *(["apply", "--cached", str(p)] for p in apply.PATCHES)):
             subprocess.run(["git", "-C", src, *args], env=env, check=True, capture_output=True)
         out = subprocess.run(["git", "-C", src, "diff", "--cached", "HEAD", "--name-status", "--no-renames", "-z"],
                              env=env, check=True, capture_output=True).stdout
