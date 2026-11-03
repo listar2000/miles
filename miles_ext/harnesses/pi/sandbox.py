@@ -52,16 +52,20 @@ AGENT_INSTALL = (
 )
 
 
-def models_json(base_url: str, model: str, context_window: int, max_output: int) -> dict[str, Any]:
-    """Pi's provider for Miles' session server. Pi's own compat defaults for an OpenAI-style server: no strict
-    tool schemas and no thinking parameters, so the chat template decides reasoning."""
+def models_json(base_url: str, model: str, context_window: int, max_output: int, strict_tools: bool) -> dict[str, Any]:
+    """Pi's provider for Miles' session server. Pi's own compat defaults for an OpenAI-style server: no thinking
+    parameters, so the chat template decides reasoning, and plain tool schemas unless ``strict_tools`` (Pi then
+    makes every argument required, optional ones nullable, and sends ``strict: true``, as for Z.ai)."""
+    entry: dict[str, Any] = {"id": model, "contextWindow": context_window, "maxTokens": max_output}
+    if strict_tools:
+        entry["compat"] = {"supportsStrictMode": True}
     return {
         "providers": {
             PROVIDER: {
                 "baseUrl": base_url,
                 "apiKey": API_KEY_ENV,
                 "api": "openai-completions",
-                "models": [{"id": model, "contextWindow": context_window, "maxTokens": max_output}],
+                "models": [entry],
             }
         }
     }
@@ -92,11 +96,10 @@ def outcome(events: str, reply_cap: int) -> str | Exception | None:
     """From Pi's last reply: None (completed), ContextExhausted (the window filled), or the exception to raise."""
     from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
-    last = None
-    for last in _assistant_ends(events):
-        pass
-    if last is None:
+    replies = list(_assistant_ends(events))
+    if not replies:
         return NonZeroAgentExitCodeError("pi ended without a reply")
+    last = replies[-1]
     reason = last.get("stopReason")
     if reason == "stop":
         return None
@@ -128,17 +131,18 @@ class SandboxPi(common.PublicSetup, BaseInstalledAgent):
         base_url: str,
         model_info: dict[str, Any] | None = None,
         max_seq_len: int | None = None,
+        strict_tools: bool = False,
         **kwargs,
     ):
         """``base_url``: the session's OpenAI root (``.../v1``). ``model_info``: Miles' ``max_input_tokens`` (Pi's
         context window) and ``max_output_tokens`` (its reply cap). ``max_seq_len`` is what Miles passes every
-        harness; Pi does not use it."""
+        harness; Pi does not use it. ``strict_tools``: recipe ``agent.strict_tool_schemas``."""
         super().__init__(*args, **kwargs)
         info = model_info or {}
         window, self._reply_cap = int(info["max_input_tokens"]), int(info["max_output_tokens"])
         # Harbor names the model openai/<name>; the session server takes the bare name
         self._model = self.model_name.rpartition("/")[2]
-        self._models = models_json(base_url, self._model, window, self._reply_cap)
+        self._models = models_json(base_url, self._model, window, self._reply_cap, strict_tools)
 
     @staticmethod
     def name() -> str:

@@ -46,6 +46,8 @@ HARNESSES = (
 IN_SANDBOX_HARNESSES = (HARNESS_SANDBOX, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX, HARNESS_PI_SANDBOX)
 # compact their context at agent.compact_at_tokens
 COMPACTING_HARNESSES = (HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
+# pi-sandbox's agent.strict_tool_schemas, read by the agent function
+PI_STRICT_TOOLS_ENV = "MILES_EXT_PI_STRICT_TOOLS"
 # take their context window and reply cap from the recipe
 WINDOWED_HARNESSES = (*COMPACTING_HARNESSES, HARNESS_PI_SANDBOX)
 # deepseek-sandbox's compaction keeps this share of (max_seq_len - max_response_len) verbatim (dsh's default)
@@ -129,6 +131,9 @@ DEFAULTS: dict[str, Any] = {
         # terminus-2-sandbox, deepseek-sandbox: summarize the context once it holds this many tokens
         # (ext-045, ext-046; runs session server v2)
         "compact_at_tokens": None,
+        # pi-sandbox: send tool schemas in strict form (Pi's compat.supportsStrictMode), as its Z.ai provider does,
+        # for evals that must match traces recorded that way (ext-055)
+        "strict_tool_schemas": False,
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -475,6 +480,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
             raise ValueError("taskset.prompts is required")
     elif local_inputs and (not (taskset["tasks_dir"] or taskset["tasks_volume"]) or not taskset["prompts"]):
         raise ValueError("taskset.prompts and one of taskset.tasks_dir, taskset.tasks_volume are required")
+    if recipe["agent"]["strict_tool_schemas"] and taskset["harness"] != HARNESS_PI_SANDBOX:
+        raise ValueError(f"agent.strict_tool_schemas needs taskset.harness {HARNESS_PI_SANDBOX}")
     if (compact_at := recipe["agent"]["compact_at_tokens"]) is not None:
         if taskset["harness"] not in COMPACTING_HARNESSES:
             raise ValueError(f"agent.compact_at_tokens needs taskset.harness in {COMPACTING_HARNESSES}")
@@ -854,6 +861,8 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         env["HARBOR_ENV_BUILD_TIMEOUT_MULTIPLIER"] = str(multiplier)
     if agent["cwd"]:
         env["MSWEA_CWD"] = agent["cwd"]
+    if agent["strict_tool_schemas"]:
+        env[PI_STRICT_TOOLS_ENV] = "1"
     if agent["context_exhausted_scores_zero"]:
         env["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] = "1"
     if recipe["taskset"]["harness"] in WINDOWED_HARNESSES:

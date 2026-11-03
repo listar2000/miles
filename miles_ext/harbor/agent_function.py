@@ -37,6 +37,8 @@ pi-sandbox
     Pi, pinned and configured as the Mobius platform runs it, inside the task
     sandbox (``harnesses.pi.sandbox.SandboxPi``, ext-055); it calls the session
     server's chat completions route through the tunnel and never compacts.
+    ``MILES_EXT_PI_STRICT_TOOLS`` (recipe ``agent.strict_tool_schemas``) sends its
+    tool schemas in strict form.
 
 Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
 
@@ -176,10 +178,13 @@ hf.HARNESS_BINDINGS[TERMINUS_SANDBOX_HARNESS] = hf.HarnessBinding(
     kwargs=_terminus_sandbox_kwargs, env=hf.HARNESS_BINDINGS["terminus-2"].env
 )
 hf.HARNESS_BINDINGS[DEEPSEEK_SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_deepseek_sandbox_kwargs, env=_deepseek_env)
-# Pi reads its endpoint from models.json, not the environment; its window and reply cap come from model_info
-hf.HARNESS_BINDINGS[PI_SANDBOX_HARNESS] = hf.HarnessBinding(
-    kwargs=lambda session_url, *_: {"base_url": session_url}, env=lambda url, key: {}
-)
+def _pi_sandbox_kwargs(session_url, api_key, sampling_params, model, max_seq_len) -> dict[str, Any]:
+    """SandboxPi's kwargs: Pi reads its endpoint from models.json, not the environment; its window and reply cap
+    come from the ``model_info`` upstream adds."""
+    return {"base_url": session_url, "strict_tools": os.getenv(R.PI_STRICT_TOOLS_ENV) == "1"}
+
+
+hf.HARNESS_BINDINGS[PI_SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_pi_sandbox_kwargs, env=lambda url, key: {})
 # harnesses that run inside the sandbox and reach the model through the session tunnel
 _IN_SANDBOX = R.IN_SANDBOX_HARNESSES
 

@@ -18,10 +18,11 @@ so it cannot be vendored verbatim.
   session is still saved under the trial's agent logs; no turn cap (Mobius sets none); `agent.timeout` applies.
 - **The model** is a custom `openai-completions` provider in Pi's `models.json` pointing at the session's
   OpenAI root through the tunnel (ext-009), with the recipe's window and reply cap. Pi's own compat defaults for
-  such a server stay: no strict tool schemas and no thinking parameters (the chat template decides reasoning).
-  - Rejected: `compat.supportsStrictMode: true` to reproduce the GLM traces' tool schemas. Z.ai's provider
-    entry turns it on, which rewrites optional arguments as required-and-nullable; copying it would tune the
-    harness to one provider. The SFT data swaps in the plain tool definitions instead.
+  such a server stay: no thinking parameters (the chat template decides reasoning) and plain tool schemas, unless:
+  - **`agent.strict_tool_schemas`** (default false) turns on Pi's `compat.supportsStrictMode`, which Pi's
+    Z.ai entry sets: every tool argument becomes required (optional ones nullable) and `strict: true` is sent.
+    An eval of a model trained on traces recorded that way (the GLM-5.3-Flash Pi traces) sets it, so the tool
+    definitions match the training data; the harness default stays provider-neutral.
 - **Same prompt text as the traces**: Pi's system prompt names its install path, so Node is pinned to the
   22.23.4 the traces ran on and Pi is installed globally under nvm, as Harbor's Pi does. The task goes on argv
   as Harbor and Mobius pass it, since Pi trims a prompt read from stdin; a task command `pkill -f <task text>`
@@ -36,7 +37,7 @@ so it cannot be vendored verbatim.
 
 ## How it is applied
 `miles_ext/harnesses/pi/sandbox.py`; `agent_function.py` (binding: `base_url` = the tunnelled session URL);
-`recipe.py` (`HARNESS_PI_SANDBOX`, `WINDOWED_HARNESSES` for `AGENT_MAX_INPUT_TOKENS`/`AGENT_MAX_OUTPUT_TOKENS`);
+`recipe.py` (`HARNESS_PI_SANDBOX`, `agent.strict_tool_schemas`, `WINDOWED_HARNESSES` for `AGENT_MAX_INPUT_TOKENS`/`AGENT_MAX_OUTPUT_TOKENS`);
 tests in `miles_ext/tests/test_pi_sandbox.py`. Each trial leaves `pi.jsonl` (events without `message_update`),
 `pi.stderr.txt` and `pi/sessions/` in its agent log dir. Verify with a smoke run: trials reach `Submitted`, the
 first request's system prompt and tools equal a Mobius Pi trace's apart from the cwd. On a Pi bump: recheck the
