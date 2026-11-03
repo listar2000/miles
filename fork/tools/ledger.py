@@ -367,7 +367,8 @@ def cmd_check(base: str, merge: bool = False) -> int:
                     continue
                 if own(f):
                     problems.append(f"{c.sha} {c.fork_id}: a {c.kind.lower()} must not touch fork paths ({f})")
-                elif f not in touches:
+                elif f not in touches and not (c.kind == "Port" and only_removes(c.sha, f, base)):
+                    # a port refresh may restore a file the PR no longer edits; it drops out of Touches
                     problems.append(f"{c.sha} {c.fork_id}: edits {f} but Touches: does not list it")
             sglang_touches = {t.removeprefix(SGLANG) for t in touches if t.startswith(SGLANG)}
             if sglang_touches:

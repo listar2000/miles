@@ -37,7 +37,7 @@ def _check(tmp_path, monkeypatch, series, changed=(), patch=None):
     monkeypatch.setattr(ledger, "ROOT", root)
     monkeypatch.setattr(ledger, "commits", lambda base: series)
     monkeypatch.setattr(ledger, "git", lambda *args: "\n".join(changed))
-    monkeypatch.setattr(ledger, "in_base", lambda base, path: False)
+    monkeypatch.setattr(ledger, "in_base", lambda base, path: False, raising=False)
     return ledger.cmd_check("v0")
 
 
@@ -134,7 +134,7 @@ def test_miles_port_new_files_need_no_marker_but_edited_ones_do(tmp_path, monkey
     (root / "miles").mkdir(parents=True)
     (root / "miles/new.py").write_text("x = 1\n")
     (root / "miles/old.py").write_text("y = 1  # [fork port-002]\n")
-    monkeypatch.setattr(ledger, "in_base", lambda base, path: path == "miles/old.py")
+    monkeypatch.setattr(ledger, "in_base", lambda base, path: path == "miles/old.py", raising=False)
     monkeypatch.setattr(ledger, "ROOT", root)
     (root / ledger.SGLANG_PATCHES).mkdir(parents=True)
     monkeypatch.setattr(ledger, "commits", lambda base: [port])
@@ -157,3 +157,34 @@ def test_image_check_requires_a_ports_new_files_to_exist(tmp_path, monkeypatch):
     (src / ADDED).parent.mkdir(parents=True)
     (src / ADDED).write_text("z\n")
     assert ledger.sglang_marker_problems() == []
+
+
+def test_a_miles_refresh_may_restore_a_file_the_pr_no_longer_edits(tmp_path, monkeypatch):
+    first = _commit(
+        "a1",
+        "Port",
+        "port-002",
+        ["miles/kept.py", "miles/dropped.py"],
+        Touches="miles/kept.py, miles/dropped.py",
+        Upstream_PR=PR,
+        Remove_When="merged",
+    )
+    refresh = _commit(
+        "a2",
+        "Port",
+        "port-002",
+        ["miles/kept.py", "miles/dropped.py"],
+        Touches="miles/kept.py",
+        Upstream_PR=PR,
+        Remove_When="merged",
+    )
+    root = tmp_path / "repo"
+    (root / "miles").mkdir(parents=True)
+    (root / "miles/kept.py").write_text("y = 1  # [fork port-002]\n")
+    (root / ledger.SGLANG_PATCHES).mkdir(parents=True)
+    monkeypatch.setattr(ledger, "ROOT", root)
+    monkeypatch.setattr(ledger, "commits", lambda base: [first, refresh])
+    monkeypatch.setattr(ledger, "git", lambda *args: "miles/kept.py")  # dropped.py is back to the base
+    monkeypatch.setattr(ledger, "in_base", lambda base, path: True, raising=False)
+    monkeypatch.setattr(ledger, "only_removes", lambda sha, path, base: sha == "a2" and path == "miles/dropped.py")
+    assert ledger.cmd_check("v0") == 0

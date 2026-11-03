@@ -21,8 +21,8 @@ smallest edit, and SGLang patches were capped at about 30 lines with no features
   would wait on others); vendoring under `miles_ext/` (does not import); one huge Fix (hides that it is upstream's code).
 
 ## How it is applied
-`fork/tools/ledger.py` (kind, id format, trailers, refresh, marker exemption, image check), `fork/deps/sglang/apply.py`
-(ports first, one patch at a time, all or none), `fork/README.md` "Kinds of change" and "SGLang patches",
+`fork/tools/ledger.py` (kind, id format, trailers, refresh, marker exemption, image check), `fork/README.md`
+"Kinds of change" and "SGLang patches",
 `.claude/skills/miles-fork/SKILL.md`. Tests: `miles_ext/tests/test_ledger_port.py`.
 
 ## Remove when
