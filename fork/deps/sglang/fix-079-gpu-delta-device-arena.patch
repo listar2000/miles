@@ -1,0 +1,233 @@
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/codec.py b/python/sglang/srt/weight_sync/gpu_delta/codec.py
+index 7a567cdc9e..ec5483f082 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/codec.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/codec.py
+@@ -280,7 +280,7 @@ class NvcompDecoder:
+         from sglang.srt.weight_sync.gpu_delta.memory import device_empty
+ 
+         if (
+-            host_input.device.type != "cpu"
++            host_input.device.type not in ("cpu", "cuda")  # [fork fix-079] or its device-staged image
+             or host_input.dtype != torch.uint8
+             or not host_input.is_contiguous()
+         ):
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/host.py b/python/sglang/srt/weight_sync/gpu_delta/host.py
+index 4308010726..41a4507e98 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/host.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/host.py
+@@ -20,6 +20,7 @@ or copies plain LZ4 into its own original CUDA HOST_NUMA allocation.
+ import fcntl
+ import hashlib
+ import json
++import logging  # [fork fix-079]
+ import mmap
+ import os
+ import re
+@@ -35,7 +36,12 @@ import numpy as np
+ import orjson
+ 
+ from sglang.srt.weight_sync.gpu_delta import profiling
+-from sglang.srt.weight_sync.gpu_delta.memory import HostAllocation
++from sglang.srt.weight_sync.gpu_delta.memory import (  # [fork fix-079]
++    DeviceStagedArena,
++    HostAllocation,
++)
++
++logger = logging.getLogger(__name__)  # [fork fix-079]
+ 
+ 
+ def validate_codec(manifest):
+@@ -419,6 +425,7 @@ class HostArena:
+         self.engine_id, self.device = engine_id, device
+         self.allocation = self.mapping = self.tensor = None
+         self.capacity = None
++        self.used = 0  # [fork fix-079]
+         self.directory = None
+         self.tensor_order = None
+ 
+@@ -440,7 +447,20 @@ class HostArena:
+             * _CAPACITY_ALIGNMENT
+         )
+         started = time.perf_counter()
+-        allocation = HostAllocation(capacity, self.device) if capacity else None
++        allocation = None
++        # [fork fix-079] gVisor (Modal) refuses large HW-decompress host mappings with
++        # CUDA_ERROR_OUT_OF_MEMORY (2): stage through device memory instead.
++        staged = capacity and os.environ.get("GPU_DELTA_DEVICE_ARENA") == "1"
++        if capacity and not staged:
++            try:
++                allocation = HostAllocation(capacity, self.device)
++            except RuntimeError as error:
++                if getattr(error, "cuda_code", None) != 2:
++                    raise
++                logger.warning("GPU-delta host arena of %d bytes refused (%s); staging through device memory", capacity, error)
++                staged = True
++        if staged:
++            allocation = DeviceStagedArena(capacity, self.device)
+         self.close()
+         self.allocation = allocation
+         self.mapping = allocation.view if allocation is not None else None
+@@ -663,7 +683,9 @@ class HostArena:
+             index["publication"]["codec"],
+         )
+         metrics["host_rank_prepare_call_s"] = time.perf_counter() - prepare_started
++        self.used = size  # [fork fix-079] the extent a device-staged arena copies
+         metrics.update(
++            host_rank_device_staged=int(isinstance(self.allocation, DeviceStagedArena)),
+             host_rank_arena_bytes=size,
+             host_rank_capacity_bytes=self.capacity["capacity"],
+             host_rank_capacity_generation=self.capacity["generation"],
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/memory.py b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+index 2d987f36fc..af9d817e7f 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/memory.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+@@ -33,7 +33,9 @@ def _driver():
+ def _check(result, operation):
+     code = result[0]
+     if code:
+-        raise RuntimeError(f"GPU-delta allocation {operation} failed: CUDA {code}")
++        error = RuntimeError(f"GPU-delta allocation {operation} failed: CUDA {code}")
++        error.cuda_code = int(code)  # [fork fix-079] callers branch on the code
++        raise error
+     return result[1] if len(result) > 1 else None
+ 
+ 
+@@ -282,3 +284,35 @@ class HostAllocation:
+         if int(self.handle):
+             _check(self.driver.cuMemRelease(self.handle), "cuMemRelease")
+             self.handle = 0
++
++
++class DeviceStagedArena:
++    """[fork fix-079] Host arena fallback where the HW-decompress host mapping is refused.
++
++    CPU workers fill an ordinary host buffer; before the pause the receiver copies it into
++    a DE-capable device buffer of the same size, which the decoder reads instead.
++    """
++
++    def __init__(self, capacity, device):
++        import torch
++
++        self.capacity, self.device = capacity, device
++        self.host = torch.empty(capacity, dtype=torch.uint8)
++        self.view = memoryview(self.host.numpy()).cast("B")
++        self._device_tensor = None
++
++    def device_image(self):
++        """The DE-capable device copy, allocated on first use from a thread with the CUDA context."""
++        import torch
++
++        if self._device_tensor is None:
++            device = torch.device("cuda", self.device)
++            torch.cuda.set_device(device)
++            torch.empty(0, device=device)  # make the primary context current in this thread
++            self._device_tensor = device_empty((self.capacity,), torch.uint8, device)
++        return self._device_tensor
++
++    def close(self):
++        if self.view is not None:
++            self.view.release()
++        self.view = self.host = self._device_tensor = None
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/receiver.py b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
+index 5025bd68c3..d1542f523a 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/receiver.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
+@@ -442,15 +442,23 @@ class PreparedDelta:
+             )
+             self._prepare_apply_bindings()
+         self.workspace = self.decode_plan = None
++        staging_bytes = staged_capacity = 0  # [fork fix-079]
+         if self.static_plans:
+             inner_codec = self.codec.removesuffix("-zstd")
+             if inner_codec not in backend.decoders:
+                 backend.decoders[inner_codec] = NvcompDecoder(self.device, inner_codec)
+             decoder = backend.decoders[inner_codec]
++            decode_input = backend.host_arena.tensor
++            if hasattr(backend.host_arena.allocation, "device_image"):  # [fork fix-079]
++                # Copy the rank's filled inner payload (after outer Zstd) into the DE-capable image.
++                staged, staging_bytes = backend.host_arena.allocation.device_image(), backend.host_arena.used
++                with torch.cuda.stream(self.de_stream):
++                    staged[:staging_bytes].copy_(decode_input[:staging_bytes])
++                decode_input, staged_capacity = staged[: decode_input.numel()], staged.numel()
+             self.decode_plan = decoder.prepare_batches(
+                 frame_table,
+                 frame_counts,
+-                backend.host_arena.tensor,
++                decode_input,
+                 self.de_stream,
+             )
+             self.decode_plan.record_stream(self.stream)
+@@ -477,6 +485,8 @@ class PreparedDelta:
+             host_metadata_prepare_s=time.perf_counter() - started,
+             host_metadata_wait_s=time.perf_counter() - waiting,
+             decoder_metadata_h2d_bytes=frame_table.nbytes,
++            arena_staging_h2d_bytes=staging_bytes,  # [fork fix-079]
++            device_staged_arena_bytes=staged_capacity,
+             decoder_workspace_bytes=(
+                 self.workspace.temporary.numel() if self.workspace else 0
+             ),
+@@ -606,6 +616,7 @@ class PreparedDelta:
+                 "raw_h2d_bytes",
+                 "decoder_metadata_h2d_bytes",
+                 "apply_metadata_h2d_bytes",
++                "arena_staging_h2d_bytes",  # [fork fix-079]
+             )
+         )
+ 
+diff --git a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py
+index 1a5c4aaaf4..f5caafef26 100644
+--- a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py
++++ b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py
+@@ -786,6 +786,52 @@ class TestHostSnapshot(unittest.TestCase):
+                 metadata(4),
+             )
+ 
++    def test_out_of_memory_host_mapping_stages_through_device_memory(self):
++        # [fork fix-079] the error HostAllocation raises when gVisor refuses the mapping
++        from sglang.srt.weight_sync.gpu_delta import memory
++
++        def refuse(code):
++            def allocate(capacity, device):
++                memory._check((code,), "cuMemSetAccess")
++
++            return allocate
++
++        path, digest, manifest, expected = fixture(self.root)
++        entries = local_entries(manifest, expected)
++        with patch.dict(os.environ, {}, clear=False), patch.object(
++            host, "HostAllocation", refuse(1)
++        ):
++            os.environ.pop("GPU_DELTA_DEVICE_ARENA", None)
++            with self.assertRaisesRegex(RuntimeError, "cuMemSetAccess failed: CUDA 1"):
++                prepare_snapshot(
++                    self.arena("b"), path, digest, manifest, entries, self.pool, {}, metadata(engine="b")
++                )
++            host.HostAllocation = refuse(2)
++            arena, cold, warm = self.arena(), {}, {}
++            first = prepare_snapshot(
++                arena, path, digest, manifest, entries, self.pool, cold, metadata()
++            )
++            self.assertIsInstance(arena.allocation, memory.DeviceStagedArena)
++            self.assertEqual(cold["host_rank_device_staged"], 1)
++            self.assertEqual(arena.used, cold["host_rank_arena_bytes"])
++            self.assertEqual(
++                {
++                    name: bytes(arena.mapping[row["offset"] : row["offset"] + row["nbytes"]])
++                    for name, row in first.records.items()
++                },
++                expected,
++            )
++            first.mark_reusable()
++            first.close()
++            prepare_snapshot(
++                arena, path, digest, manifest, entries, self.pool, warm, metadata(2)
++            ).close()
++            self.assertEqual(warm["host_rank_mapping_reused"], 1)
++            self.assertEqual(warm["host_rank_device_staged"], 1)
++            staged = arena.allocation
++            arena.close()
++            self.assertIsNone(staged.host)
++
+ 
+ def decode_fixture(codec):
+     blob, entries, expected = bytearray(), [], {}
