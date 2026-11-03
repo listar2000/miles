@@ -66,9 +66,7 @@ def kpool_select_rows(
     # [fork fix-070] Indexer replay requires one whole-sequence selection per call.
     chunk = num_tokens if indexer_replay_manager.enabled else _QUERY_CHUNK
     starts = range(0, num_tokens, chunk)
-    # [fork fix-071] the ranks of split_group hold the same queries: each scores every world-th of world-times
-    # smaller chunks (round-robin, so the causal cost stays balanced). Not with indexer replay, which records and
-    # replays one whole-sequence top-k per rank.
+    # [fork fix-071] Round-robin chunks balance causal work across ranks holding identical queries.
     world = 1 if split_group is None or indexer_replay_manager.enabled else dist.get_world_size(split_group)
     if world > 1:
         chunk = -(-chunk // (world * SPARSE_MLA_BLOCK)) * SPARSE_MLA_BLOCK  # aligned chunk starts
