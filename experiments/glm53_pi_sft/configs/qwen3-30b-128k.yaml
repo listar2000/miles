@@ -1,0 +1,20 @@
+# Qwen3-30B-A3B-Thinking-2507 on the GLM-5.3-Flash Pi traces (README.md), 128K, the tmax Qwen3-30B schedule.
+#   MILES_SFT_CONFIG=experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml modal run -m miles_ext.sft.modal_prepare
+#   MILES_SFT_CONFIG=experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml modal run --detach -m miles_ext.sft.modal_train --run-id <id>
+model: qwen3-30b-a3b-thinking-2507
+image: docker.io/starlimobius/miles-mobius@sha256:844c70f7a07a31c98f598dd12f9c0b5f41f1a22e2a504ae9482e17911e7528e8  # main@261d7f4f0a
+data:
+  volume: miles-rl-datasets
+  records: sft/tb2-pi-glm53flash/records
+  shards: sft/tb2-pi-glm53flash/qwen3-30b-128k
+  max_tokens: 131072
+train:
+  epochs: 2
+  batch: 128
+  lr: 2.0e-5
+  decay: linear
+  warmup: 0.03
+  cp: 4
+  saves_per_epoch: 1
+val: {interval: 10, rows: 0}
+tracking: {wandb_project: miles-sft}
