@@ -59,10 +59,10 @@ index 4308010726..64fac99f36 100644
          self.allocation = allocation
          self.mapping = allocation.view if allocation is not None else None
 diff --git a/python/sglang/srt/weight_sync/gpu_delta/memory.py b/python/sglang/srt/weight_sync/gpu_delta/memory.py
-index 2d987f36fc..f24698a7f3 100644
+index 2d987f36fc..8b1b3d17e1 100644
 --- a/python/sglang/srt/weight_sync/gpu_delta/memory.py
 +++ b/python/sglang/srt/weight_sync/gpu_delta/memory.py
-@@ -282,3 +282,24 @@ class HostAllocation:
+@@ -282,3 +282,35 @@ class HostAllocation:
          if int(self.handle):
              _check(self.driver.cuMemRelease(self.handle), "cuMemRelease")
              self.handle = 0
@@ -78,25 +78,37 @@ index 2d987f36fc..f24698a7f3 100644
 +    def __init__(self, capacity, device):
 +        import torch
 +
-+        self.capacity = capacity
++        self.capacity, self.device = capacity, device
 +        self.host = torch.empty(capacity, dtype=torch.uint8)
 +        self.view = memoryview(self.host.numpy()).cast("B")
-+        self.device_tensor = device_empty((capacity,), torch.uint8, torch.device("cuda", device))
++        self._device_tensor = None
++
++    def device_image(self):
++        """The DE-capable device copy, allocated on first use from a thread with the CUDA context."""
++        import torch
++
++        if self._device_tensor is None:
++            device = torch.device("cuda", self.device)
++            torch.cuda.set_device(device)
++            torch.empty(0, device=device)  # make the primary context current in this thread
++            self._device_tensor = device_empty((self.capacity,), torch.uint8, device)
++        return self._device_tensor
 +
 +    def close(self):
 +        if self.view is not None:
 +            self.view.release()
-+        self.view = self.host = self.device_tensor = None
++        self.view = self.host = self._device_tensor = None
 diff --git a/python/sglang/srt/weight_sync/gpu_delta/receiver.py b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
-index 5025bd68c3..f0098e33d5 100644
+index 5025bd68c3..61b6187a46 100644
 --- a/python/sglang/srt/weight_sync/gpu_delta/receiver.py
 +++ b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
-@@ -447,10 +447,16 @@ class PreparedDelta:
+@@ -447,10 +447,17 @@ class PreparedDelta:
              if inner_codec not in backend.decoders:
                  backend.decoders[inner_codec] = NvcompDecoder(self.device, inner_codec)
              decoder = backend.decoders[inner_codec]
 +            decode_input = backend.host_arena.tensor
-+            staged = getattr(backend.host_arena.allocation, "device_tensor", None)
++            allocation = backend.host_arena.allocation
++            staged = allocation.device_image() if hasattr(allocation, "device_image") else None
 +            if staged is not None:  # [fork fix-079] copy the filled host arena into its DE-capable device image
 +                with torch.cuda.stream(self.de_stream):
 +                    staged[: decode_input.numel()].copy_(decode_input)
