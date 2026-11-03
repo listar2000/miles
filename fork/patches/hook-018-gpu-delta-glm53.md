@@ -41,7 +41,9 @@ Result (2026-11-03, one EP8 engine with data-parallel attention, snappy-zstd, ha
 `--validate-final-target`): PASS. The final text, token ids and full input/output logprobs equal a freshly
 loaded target checkpoint on every route. Pause per update 3850.8 ms (first, kernel compilation), 58.1 ms,
 55.7 ms; 0.26 GiB payload per version at the benchmark's synthetic mutation rate. The image's build log lists
-`hook-018-gpu-delta-glm53.patch` among the applied SGLang patches.
+`hook-018-gpu-delta-glm53.patch` among the applied SGLang patches. The same benchmark with only this patch removed
+from the patch set fails at the first `/get_gpu_delta_info` with HTTP 409, "unsupported GPU delta model mapping:
+Glm5NextForConditionalGeneration".
 
 ## Remove when
 SGLang's GPU-delta receiver maps glm5_next itself; upstream status: not filed, to be offered on
