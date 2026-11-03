@@ -1,9 +1,14 @@
-"""Serve prepared SFT samples from the shards beside ``--prompt-data`` to ``--debug-train-only`` training."""
+"""Serve prepared SFT samples from the shards beside ``--prompt-data`` to ``--debug-train-only`` training.
+
+Rollout ids at or above ``VAL_BASE`` are validation passes (the driver, ``miles_ext.sft.train``): they get the
+held-out samples of ``MILES_SFT_VAL_DIR`` (also a ``prepare`` output), the first ``MILES_SFT_VAL_ROWS`` of them
+(0: all). Both variables are set by the launcher (``miles_ext.sft.modal_train``), not by users."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from functools import cache
 from pathlib import Path
 
@@ -11,9 +16,15 @@ import numpy as np
 
 from miles.utils.types import Sample
 
-__all__ = ["generate_rollout"]
+__all__ = ["VAL_BASE", "generate_rollout", "is_val"]
 
 logger = logging.getLogger(__name__)
+
+VAL_BASE = 1_000_000
+
+
+def is_val(rollout_id: int) -> bool:
+    return rollout_id >= VAL_BASE
 
 
 @cache
@@ -46,8 +57,26 @@ def fill_sample(sample: Sample, directory: str) -> Sample:
     return sample
 
 
+@cache
+def _val_ids(directory: str, rows: int) -> list[int]:
+    ids = sorted(_index(directory))
+    return ids[:rows] if rows else ids
+
+
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     assert not evaluation, "SFT samples have no evaluation rollout"
+    if is_val(rollout_id):
+        directory = os.environ["MILES_SFT_VAL_DIR"]
+        ids = _val_ids(directory, int(os.environ.get("MILES_SFT_VAL_ROWS", "0")))
+        groups = [
+            [fill_sample(Sample(group_index=i, index=i, prompt=str(sid)), directory)] for i, sid in enumerate(ids)
+        ]
+        # Miles trims a rollout to a multiple of --global-batch-size; pad with untrained copies so none is cut
+        for i in range(len(ids), -(-len(ids) // args.global_batch_size) * args.global_batch_size):
+            pad = fill_sample(Sample(group_index=i, index=i, prompt=str(ids[i % len(ids)])), directory)
+            pad.loss_mask = [0] * len(pad.loss_mask)
+            groups.append([pad])
+        return groups
     directory = str(Path(args.prompt_data).parent)
     groups = data_buffer.get_samples(args.rollout_batch_size)
     for group in groups:

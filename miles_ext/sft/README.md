@@ -16,6 +16,19 @@ the record format is in its "The record" section and in `record.py`.
 | `prepare.py` | the offline CLI: records to token shards, `prompts.jsonl`, `samples.jsonl`, `manifest.json` |
 | `rollout.py` | `--rollout-function-path miles_ext.sft.rollout.generate_rollout`: prepared samples for `--debug-train-only` training |
 | `parity.py` | `compare`: a served sample against the render of the same record |
+| `config.py` | the SFT run config (YAML): preset, pinned image, records and shards on a volume, schedule; the Miles argv |
+| `train.py` | the driver (`python -m miles_ext.sft.train <Miles args>`): Miles' loop for `--debug-train-only`, plus held-out NLL |
+| `val.py` | `SftTrainRayActor`: validation ids run forward-only and log `val/nll` |
+| `modal_prepare.py`, `modal_train.py` | the config's records to shards on a Modal CPU container, then SFT on one H200:8 node |
+
+From records to a trained model, with a run config (an example:
+[experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml](../../experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml)):
+
+```bash
+export MILES_SFT_CONFIG=<config.yaml> MILES_WEIGHTS_VOLUME=... MILES_RESULTS_VOLUME=... MILES_DOTENV_DIR=<dir with .env>
+python -m modal run -m miles_ext.sft.modal_prepare            # records/*.jsonl -> shards/train, *.val.jsonl -> shards/val
+python -m modal run --detach -m miles_ext.sft.modal_train --run-id <id>   # same id again resumes
+```
 
 ```bash
 python -m miles_ext.sft.prepare --input data.jsonl --output /data/sft-run \
@@ -53,9 +66,9 @@ python -m miles_ext.sft.connectors.atif --input /jobs/my-harbor-job --output /da
 models stay in the context untrained. `--token-ids` copies ATIF `completion_token_ids`; use it
 only when the trajectories were sampled by a model with the trained model's tokenizer.
 
-Not here yet: other connectors (Nemotron-style datasets, Miles rollout dumps), and launching
-SFT through the fork's recipes on Modal.
+Not here yet: other connectors (Nemotron-style datasets, Miles rollout dumps), multi-node SFT,
+and evaluating an SFT export (serve `hf/iter_*` with an RL recipe's eval).
 
 Tests: `python -m pytest miles_ext/tests/test_sft_record.py miles_ext/tests/test_sft_render.py
-miles_ext/tests/test_sft_prepare.py miles_ext/tests/test_sft_connector_atif.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
+miles_ext/tests/test_sft_prepare.py miles_ext/tests/test_sft_connector_atif.py miles_ext/tests/test_sft_config.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
 Hub for the real Qwen3 and DeepSeek V4.1 tokenizers.
