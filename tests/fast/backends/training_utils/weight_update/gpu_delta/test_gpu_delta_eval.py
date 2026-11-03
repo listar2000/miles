@@ -99,7 +99,10 @@ def make_dispatcher(mode="gpu-delta"):
     args = SimpleNamespace(
         update_weight_transfer_mode=mode,
         eval_uses_snapshots=True,
-        sglang=SimpleNamespace(models=[SimpleNamespace(name="eval")]),
+        # [fork fix-075] our base: an eval fleet is --eval-num-gpus; EvalDispatcher reads the in-flight cap
+        eval_num_gpus=4,
+        eval_max_in_flight=1,
+        eval_overflow_policy="wait",
     )
     info = SimpleNamespace(receiver_pool="eval", snapshot_cell_id_to_hashes={"eval-cell": "incarnation"})
     controller = SimpleNamespace(
