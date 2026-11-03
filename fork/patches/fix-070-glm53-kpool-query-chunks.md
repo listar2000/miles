@@ -19,7 +19,7 @@ dense path). Alternatives that lost:
 `miles_plugins/models/glm5_next/ops/kpool_indexer.py`: `kpool_select_topk` loops over row chunks and
 `_select_rows` holds upstream's scoring and selection for one chunk; marked `[fork fix-070]`. Verify:
 `tests/fast/miles_plugins/models/glm5_next/ops/test_kpool_query_chunks.py` (CPU reference scorer and selector,
-chunks of 1 to 121 rows against one call). On GPU (one B200, the `miles-mobius:main` image with this branch
+chunks of 1 to 121 rows against one call). On GPU (`fork/probes/glm53_kpool/modal_check.py`: one B200, the `miles-mobius:main` image with this branch
 overlaid, GLM-5.3 indexer shape: 32 heads x 128, top-k 2048, kpool 4, random inputs): token ids bit-identical
 to the single call for packs of 16k, 32k (one and three sequences) and 64k tokens and for one 256k sequence;
 peak above inputs 4.13 GiB chunked vs 67.57 GiB whole at 256k (2.06 GiB of it is the `[T, 2112]` int32
