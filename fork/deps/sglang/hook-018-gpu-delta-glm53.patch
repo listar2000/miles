@@ -1,0 +1,258 @@
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/models.py b/python/sglang/srt/weight_sync/gpu_delta/models.py
+index c685cd2a7f..0e16a33afe 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/models.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/models.py
+@@ -9,15 +9,18 @@
+ 
+ from __future__ import annotations
+ 
++import math  # [fork hook-018]
+ import re
+ 
+ import torch
+ 
+-from sglang.srt.weight_sync.gpu_delta.bindings import (
++from sglang.srt.weight_sync.gpu_delta.bindings import (  # [fork hook-018] + _TORCH_DTYPES, _direct_binding
++    _TORCH_DTYPES,
+     ConsumerSnapshot,
+     DerivedImage,
+     ParameterBindings,
+     TensorBinding,
++    _direct_binding,
+     _full_slices,
+     dense_target,
+ )
+@@ -187,3 +190,233 @@ def model_mapping(model):
+     if architecture not in _MODEL_MAPPINGS:
+         raise ValueError(f"unsupported GPU delta model mapping: {architecture}")
+     return _MODEL_MAPPINGS[architecture](model)
++
++
++# [fork hook-018] GLM-5.3-Flash (glm5_next): KDA + DSA layers, mHC, triton FP8 experts.
++# Served with block-FP8 weights and FP32 block scales as checkpointed (SGLANG_ENABLE_JIT_DEEPGEMM=0, so
++# dense FP8 layers keep the checkpoint's scale layout and no weight is requantized at load).
++
++
++class Glm5NextMapping:
++    """glm5_next canonical checkpoint names onto live SGLang parameters, all as byte bindings."""
++
++    _KDA_COLUMN = ("q_proj", "k_proj", "v_proj")
++    _KDA_REPEATED = ("b_proj", "f_a_proj", "g_a_proj")
++    _CASTS = re.compile(
++        r"model\.layers\.\d+\.(hc_(attn|ffn)_fn|self_attn\.indexer\.(weights_proj\.weight|k_norm\.(weight|bias)"
++        r"|index_kpool_compress_ape))"
++    )
++
++    def __init__(self, model):
++        self.model = model
++        self.config = model.config
++        self.parameters = ParameterBindings(model)
++        self.params = self.parameters.params
++        self.modules = self.parameters.modules
++        self.mla_layers = {}
++        self.derived = []
++        self.consumers = []
++        self.groups = {}  # binding name -> live storage group, for alias admission
++        self.n_routed = self.config.n_routed_experts
++        self._topology_checked = False
++
++    # ---- helpers ---------------------------------------------------------------------------
++    def _tp(self, module):
++        from sglang.srt.distributed.utils import get_group_rank_size
++
++        group = getattr(module, "tp_group", None)
++        return get_group_rank_size(group) if group is not None else (0, 1)
++
++    def _direct(self, name, meta, target, group, raw=False):
++        """Bit-exact byte binding, or a complete-value cast (raw) for small tensors the loader casts."""
++        self.groups[name] = group
++        slices = _full_slices(meta["shape"])
++        if raw or _TORCH_DTYPES[meta["dtype"]] != target.dtype:
++            if math.prod(meta["shape"]) != target.numel():
++                raise ValueError(f"cast tensor shape mismatch for {name}")
++            meta["encoding"] = "raw_bytes"  # complete values on the wire, like UE8M0 scales
++            return TensorBinding(name, meta["dtype"], tuple(meta["shape"]), slices, (target,), encoding="raw_bytes")
++        return _direct_binding(name, meta, target, slices)
++
++    def _dense(self, name, meta, target_name, target):
++        """An ordinary (or block-FP8) parameter, TP-sliced like the loader slices it."""
++        module = self.modules[target_name.rsplit(".", 1)[0]]
++        slices = _full_slices(meta["shape"])
++        if type(getattr(module, "quant_method", None)).__name__ in {
++            "NoneType",
++            "UnquantizedLinearMethod",
++            "UnquantizedEmbeddingMethod",
++        }:  # the PR's own TP/vocab slicing for unquantized modules
++            target, slices = dense_target(name, meta, module, target, slices)
++            self.groups[name] = target_name
++            return _direct_binding(name, meta, target, slices)
++        if getattr(self.params.get(target_name), "format_ue8m0", False) or (
++            target_name.endswith("weight_scale_inv") and target.dtype != torch.float32
++        ):
++            raise ValueError(
++                f"GLM GPU delta needs checkpoint FP32 block scales; {target_name} was requantized to UE8M0 at load "
++                "(run the engines with SGLANG_ENABLE_JIT_DEEPGEMM=0)"
++            )
++        if tuple(target.shape) != tuple(meta["shape"]):
++            rank, size = self._tp(module)
++            dims = [i for i, (a, b) in enumerate(zip(target.shape, meta["shape"])) if a != b]
++            if len(dims) != 1 or len(target.shape) != len(meta["shape"]) or size == 1:
++                raise ValueError(f"unclassified tensor-parallel mapping: {name}")
++            dim, local = dims[0], target.shape[dims[0]]
++            slices[dim] = [rank * local, (rank + 1) * local]
++        self.groups[name] = target_name
++        return _direct_binding(name, meta, target, slices)
++
++    # ---- binding ---------------------------------------------------------------------------
++    def bind(self, name, meta):
++        if name.startswith("model.visual.") or ".visual." in name:
++            self.parameters.excluded[name] = "static vision tower"
++            return None
++        live = name.replace("model.language_model.", "model.", 1)
++        layer_id = re.search(r"(?:^|\.)layers\.(\d+)\.", live)
++        if layer_id and int(layer_id[1]) >= self.config.num_hidden_layers:
++            self.parameters.excluded[name] = "static bundled draft"
++            return None
++        if live.endswith("rotary_emb.inv_freq") or "hc_head" in live:
++            self.parameters.excluded[name] = "loader ignores this tensor"
++            return None
++        if getattr(self.model, "num_fused_shared_experts", 0) and ".mlp.shared_experts." in live:
++            live = live.replace(".mlp.shared_experts.", f".mlp.experts.{self.n_routed}.")
++        expert = re.fullmatch(r"(.+\.mlp\.experts)\.(\d+)\.(gate|up|down)_proj\.(weight|weight_scale_inv)", live)
++        if expert:
++            return self._expert(name, meta, *expert.groups())
++        if self._CASTS.fullmatch(live):
++            return self._direct(name, meta, self.params[live], live, raw=True)
++        kda = re.fullmatch(r"(.+\.self_attn)\.(q|k|v|b|f_a|g_a|f_b|g_b)_proj\.weight", live)
++        if kda and (live.rsplit(".", 2)[0] + ".fused_fg_b_proj.weight") in self.params:
++            return self._kda_proj(name, meta, kda[1], kda[2])
++        conv = re.fullmatch(r"(.+\.self_attn)\.(q|k|v)_conv1d\.weight", live)
++        if conv:
++            return self._kda_conv(name, meta, conv[1], conv[2])
++        alog = re.fullmatch(r"(.+\.self_attn)\.(A_log|dt_bias)", live)
++        if alog:
++            return self._kda_scalar(name, meta, alog[1], alog[2])
++        mla = re.fullmatch(r"(.+\.self_attn)\.(q_a_proj|kv_a_proj_with_mqa)\.(weight|weight_scale_inv)", live)
++        if mla:
++            return self._fused_qkv_a(name, meta, mla[1], mla[2], mla[3])
++        dense_mlp = re.fullmatch(r"(.+\.(?:mlp|shared_experts))\.(gate|up)_proj\.(weight|weight_scale_inv)", live)
++        if dense_mlp:
++            return self._gate_up(name, meta, *dense_mlp.groups())
++        target = self.params.get(live)
++        if target is None:
++            raise ValueError(f"unclassified canonical tensor: {name}")
++        binding = self._dense(name, meta, live, target)
++        if live.endswith(".kv_b_proj.weight"):
++            prefix = live.rsplit(".kv_b_proj.weight", 1)[0]
++            self.mla_layers[prefix] = self.modules[prefix]
++        return binding
++
++    def _expert(self, name, meta, prefix, expert, projection, suffix):
++        layer = self.modules[prefix]
++        if layer.moe_tp_size != 1 or getattr(layer, "use_presharded_weights", False):
++            raise ValueError("GPU delta requires expert TP=1 and an unsharded canonical checkpoint")
++        runner = getattr(layer.quant_method, "runner", None)
++        backend = getattr(getattr(runner, "runner_backend", None), "value", getattr(runner, "runner_backend", None))
++        if type(layer.quant_method).__name__ != "Fp8MoEMethod" or backend != "triton":
++            raise ValueError(f"GLM GPU delta admits triton block-FP8 experts only: {prefix}")
++        if not self._topology_checked:
++            from sglang.srt.runtime_context import get_exec
++
++            moe = get_exec().moe
++            if (
++                moe.enable_eplb
++                or moe.elastic_ep_backend is not None
++                or moe.init_expert_location != "trivial"
++                or moe.ep_num_redundant_experts != 0
++            ):
++                raise ValueError("direct GPU deltas require fixed trivial EP, no redundant experts or EPLB")
++            self._topology_checked = True
++        local = layer._map_global_expert_id_to_local_expert_id(int(expert))
++        if local < 0:
++            self.parameters.excluded[name] = "expert owned by another EP rank"
++            return None
++        stem = "w2" if projection == "down" else "w13"
++        live = self.params[f"{prefix}.{stem}_{suffix}"][local]
++        if projection != "down":  # w13 rows: gate then up
++            half = live.shape[0] // 2
++            live = live.narrow(0, 0 if projection == "gate" else half, half)
++        if tuple(live.shape) != tuple(meta["shape"]):
++            raise ValueError(f"triton expert shape mismatch for {name}: {tuple(live.shape)} vs {meta['shape']}")
++        self.groups[name] = f"{prefix}.{stem}_{suffix}"
++        return _direct_binding(name, meta, live)
++
++    def _kda_proj(self, name, meta, prefix, proj):
++        attn = self.modules[prefix]
++        if proj in ("f_b", "g_b"):
++            target = self.params[f"{prefix}.fused_fg_b_proj.weight"][0 if proj == "f_b" else 1]
++            return self._dense(name, meta, f"{prefix}.fused_fg_b_proj.weight", target)
++        fused = f"{prefix}.fused_qkvbfg_a_proj.weight"
++        if fused not in self.params:
++            raise ValueError(f"unsupported unfused KDA projection layout: {name}")
++        module = self.modules[f"{prefix}.fused_qkvbfg_a_proj"]
++        rank, size = self._tp(module)
++        sizes = list(module.output_partition_sizes)  # column shards (per TP rank), then repeated ones
++        index = (self._KDA_COLUMN + self._KDA_REPEATED).index(f"{proj}_proj")
++        start = sum(sizes[:index])
++        target = self.params[fused].narrow(0, start, sizes[index])
++        slices = _full_slices(meta["shape"])
++        if index < module.num_column_parallel and size > 1:
++            slices[0] = [rank * sizes[index], (rank + 1) * sizes[index]]
++        self.groups[name] = fused
++        return _direct_binding(name, meta, target, slices)
++
++    def _kda_conv(self, name, meta, prefix, which):
++        fused = self.params[f"{prefix}.qkv_conv1d.weight"]
++        rank, size = self._tp(self.modules[f"{prefix}.qkv_conv1d"])
++        if size != 1:
++            raise ValueError("GLM GPU delta conv1d casts require attention TP=1 for now")
++        rows = fused.shape[0] // 3
++        target = fused.narrow(0, "qkv".index(which) * rows, rows)
++        return self._direct(name, meta, target, f"{prefix}.qkv_conv1d.weight", raw=True)
++
++    def _kda_scalar(self, name, meta, prefix, field):
++        targets = [self.params[f"{prefix}.{field}"]]
++        twin = self.params.get(f"{prefix}.attn.{field}")
++        if twin is not None and twin.untyped_storage().data_ptr() != targets[0].untyped_storage().data_ptr():
++            targets.append(twin)  # the attention backend keeps its own copy; both get the value
++        if any(t.numel() != math.prod(meta["shape"]) for t in targets):
++            raise ValueError(f"KDA scalar shape mismatch for {name}")
++        self.groups[name] = f"{prefix}.{field}"
++        meta["encoding"] = "raw_bytes"
++        return TensorBinding(
++            name, meta["dtype"], tuple(meta["shape"]), _full_slices(meta["shape"]), tuple(targets), encoding="raw_bytes"
++        )
++
++    def _fused_qkv_a(self, name, meta, prefix, proj, suffix):
++        fused = f"{prefix}.fused_qkv_a_proj_with_mqa.{suffix}"
++        target = self.params[fused]
++        q_rows = self.config.q_lora_rank
++        if suffix == "weight_scale_inv":
++            q_rows = (q_rows + 127) // 128
++        start, rows = (0, q_rows) if proj == "q_a_proj" else (q_rows, target.shape[0] - q_rows)
++        target = target.narrow(0, start, rows)
++        if tuple(target.shape) != tuple(meta["shape"]):
++            raise ValueError(f"fused q/kv a-projection shape mismatch for {name}")
++        self.groups[name] = fused
++        return _direct_binding(name, meta, target)
++
++    def _gate_up(self, name, meta, prefix, proj, suffix):
++        fused = f"{prefix}.gate_up_proj.{suffix}"
++        target = self.params[fused]
++        half = target.shape[0] // 2
++        target = target.narrow(0, 0 if proj == "gate" else half, half)
++        return self._dense(name, meta, fused, target)
++
++    # ---- after binding ---------------------------------------------------------------------
++    def finish(self):
++        for prefix, attn in self.mla_layers.items():
++            DeepSeekMlaMapping._add_derived(self, prefix, attn)
++            self.consumers.append(ConsumerSnapshot(lambda attn=attn: (attn.w_kc, attn.w_vc)))
++
++    def aliases(self, a, b):
++        group = self.groups.get(a)
++        return group is not None and group == self.groups.get(b)
++
++
++_MODEL_MAPPINGS["Glm5NextForConditionalGeneration"] = Glm5NextMapping
++_MODEL_MAPPINGS["Glm5NextForCausalLM"] = Glm5NextMapping
