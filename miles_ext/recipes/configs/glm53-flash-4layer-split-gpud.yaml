@@ -1,0 +1,53 @@
+# GLM-5.3-Flash, full-parameter RL in split placement with GPU-delta weight sync (ext-053), on upstream's
+# 4-layer BF16 slice: a plumbing smoke. One B300:8 trainer node (TP8 EP8 PP1) and one engine container (two TP4
+# BF16 engines); each sync is a compressed XOR delta through the results volume. Single-turn STAK prompts.
+# Checks: startup and the initial HF-base sync, two synced steps with saves, a resume, R3 rows, the log-prob gap.
+name: glm53-flash-4layer-split-gpud
+model:
+  preset: glm-5.3-flash-4layer
+  revision: 7fb7883207fe73ea04430ac392f6ffe2b9f936c4
+cluster:
+  gpu: B300
+  nodes: 1
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 512
+  timeout_hours: 1
+  placement: split
+parallel:
+  tp: 8
+  pp: 1
+  cp: 1
+  ep: 8
+rollout:
+  gpus_per_engine: 4
+  context_length: 32768
+  max_running_requests: 128
+  weight_sync: gpu-delta
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 2
+  rollout_batch_size: 32
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 2048
+  max_seq_len: 8192
+  max_tokens_per_gpu: 8192
+  lr: 1.0e-6
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+async:
+  max_concurrent_samples: 256
+  pause_generation: retract
+checkpoint:
+  save_interval: 1
+  keep: 1
+  save_optimizer: true
+  save_rollout_data: false
+tracking:
+  wandb_project: miles-smoke
+  wandb_entity: mobiuslab
