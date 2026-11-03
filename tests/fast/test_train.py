@@ -42,6 +42,9 @@ def _make_args(**overrides: Any) -> SimpleNamespace:
         save_trigger_sentinel=None,
         skip_eval_before_train=False,
         start_rollout_id=0,
+        # [fork port-002] GPU-delta weight sync (radixark/miles#3894)
+        sglang=SimpleNamespace(models=[]),
+        update_weight_transfer_mode="broadcast",
         use_critic=False,
     )
     for key, value in overrides.items():

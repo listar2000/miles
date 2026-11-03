@@ -76,6 +76,15 @@ def get_hf_weight_iterator(
         "raw": HfWeightIteratorDirect,
         "bridge": HfWeightIteratorBridge,
     }[args.megatron_to_hf_mode]
+    # [fork port-002] GPU-delta weight sync (radixark/miles#3894)
+    if (
+        args.megatron_to_hf_mode == "raw"
+        and args.update_weight_transfer_mode == "gpu-delta"
+        and not required_placement.gather_pp
+    ):
+        from miles.backends.megatron_utils.update_weight.gpu_delta.export import HfWeightIteratorGpuDelta
+
+        cls = HfWeightIteratorGpuDelta
 
     return cls.build(
         args,

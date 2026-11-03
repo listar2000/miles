@@ -1,10 +1,15 @@
 import json
 import os
+import shlex
 from pathlib import Path
 
 from tests.ci.ci_register import register_cuda_ci
 
 from miles.utils.external_utils import command_utils
+from miles.utils.test_utils.fault_injector.actions.cell import RestartRolloutCellAction
+from miles.utils.test_utils.fault_injector.models import FaultHookName, FaultHookRequest
+from miles.utils.test_utils.fault_injector.static_source import compute_fault_hooks_arg
+from miles.utils.workers.naming import compute_cell_id
 
 register_cuda_ci(
     est_time=1000, suite="stage-c-8-gpu-b200", labels=["megatron", "model-scripts"], hardware=["blackwell"], num_gpus=8
@@ -132,25 +137,224 @@ def prepare():
     )
 
 
+# [fork port-002] GPU-delta weight sync (radixark/miles#3894)
+def _gpu_delta_env():
+    # Ray jobs receive an explicit environment, not every variable in this shell.
+    from miles.utils.gpu_delta.publication import configured_codec
+
+    return {
+        "GPU_DELTA_CODEC": configured_codec(),
+        "GPU_DELTA_INITIAL_SYNC_CODEC": configured_codec(initial_sync=True),
+        "GPU_DELTA_SORT_BEFORE_HW_DECOMPRESS": os.environ.get("GPU_DELTA_SORT_BEFORE_HW_DECOMPRESS", "0"),
+        "GPU_DELTA_SKIP_PAYLOAD_HASH": os.environ.get("GPU_DELTA_SKIP_PAYLOAD_HASH", "0"),
+        "SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN": "0",
+    }
+
+
+def _install_gpu_delta_performance_check(args):
+    from miles.backends.training_utils.weight_update.protocols.gpu_delta import session
+
+    activate = session.activate_publication
+    ordinary_codec = _gpu_delta_env()["GPU_DELTA_CODEC"]
+    seen, engines, updates = set(), {}, []
+    encoding_seen, encoding_updates = set(), {}
+    report_path = Path(args.update_weight_disk_dir) / "ci-performance.json"
+
+    async def checked_activate(clients, cohort, publication, session_id=None, weight_version=None):
+        result = await activate(clients, cohort, publication, session_id, weight_version)
+        expected = {identity["rank_id"] for group in cohort.participants for identity in group}
+        receipts = result["resumed_receipts"]
+        assert len(receipts) == len(expected) and {r["identity"]["rank_id"] for r in receipts} == expected
+        codec, version = publication["codec"], publication["target_version"]
+        for group in cohort.participants:
+            engines[group[0]["engine_id"]] = {"ranks": [r["rank_id"] for r in group], "version": version}
+        warm = []
+        for receipt in receipts:
+            rank = receipt["identity"]["rank_id"]
+            timing = receipt["result"]["timings"]
+            # No-op publications do not warm the DE path or satisfy its performance gate.
+            if timing["compressed_batches"] > 0 and timing["de_host_input_bytes"] > 0:
+                key = rank, codec
+                if key in seen and version > 1:
+                    scheduler = receipt["scheduler_timing"]
+                    warm.append(
+                        {
+                            "rank": rank,
+                            "prepare_s": timing["host_prepare_s"],
+                            "pause_s": (scheduler["resumed_ns"] - scheduler["pause_started_ns"]) / 1e9,
+                        }
+                    )
+                seen.add(key)
+        if warm:
+            updates.append({"version": version, "codec": codec, "ranks": warm})
+        if (
+            codec == ordinary_codec
+            and version > 1
+            and version not in encoding_updates
+            and "producer_metrics" in publication
+        ):
+            owners = []
+            for owner in publication["producer_metrics"]:
+                key = owner["owner_rank"], codec
+                nonempty = (
+                    owner["encoder_batches"] > 0 and owner["changed_bytes"] > 0 and owner["matrix_payload_bytes"] > 0
+                )
+                owners.append(
+                    {
+                        "owner_rank": owner["owner_rank"],
+                        "nonempty": nonempty,
+                        "warm": nonempty and key in encoding_seen,
+                        # Sequential measured stages, not pure compressor time. Includes
+                        # H2D/XOR, metadata waits (including export dependencies), and final D2H.
+                        "encoding_stage_wall_s": owner["encode_tensor_wall_sum_s"] + owner["finalize_wall_s"],
+                    }
+                )
+                if nonempty:
+                    encoding_seen.add(key)
+            encoding_updates[version] = {"codec": codec, "owners": owners}
+        # This runs after every engine in the cohort resumed, outside measured prepare/pause.
+        report_path.write_text(
+            json.dumps(
+                {
+                    "last_version": args.num_rollout,
+                    "engines": engines,
+                    "ordinary_codec": ordinary_codec,
+                    "updates": updates,
+                    "encoding_updates": encoding_updates,
+                },
+                allow_nan=False,
+            )
+        )
+        return result
+
+    # The protocol resolves this module function at activation time. Install only in this CI trainer.
+    session.activate_publication = checked_activate
+
+
+def _assert_gpu_delta_performance(report_path):
+    report = json.loads(Path(report_path).read_text())
+    engines = report["engines"]
+    assert len(engines) == ROLLOUT_NUM_GPUS // ROLLOUT_GPUS_PER_ENGINE
+    current_ranks = set()
+    for engine in engines.values():
+        assert engine["version"] == report["last_version"]
+        assert len(engine["ranks"]) == ROLLOUT_GPUS_PER_ENGINE
+        current_ranks.update(engine["ranks"])
+    assert len(current_ranks) == ROLLOUT_NUM_GPUS
+    missing = current_ranks - {
+        rank["rank"]
+        for update in report["updates"]
+        if update["codec"] == report["ordinary_codec"]
+        for rank in update["ranks"]
+    }
+    assert not missing, f"GPU-delta CI has no nonempty warm ordinary-codec update for {len(missing)} current ranks"
+    warm = [rank for update in report["updates"] for rank in update["ranks"]]
+    assert warm, "GPU-delta CI did not validate any nonempty warm update"
+    # Provisional five-layer CI limits: allow CPU headroom over the full-model <5s prepare proxy.
+    for name, limit in (("prepare_s", 6.0), ("pause_s", 0.3)):
+        failures = [rank[name] for rank in warm if not 0 <= rank[name] < limit]
+        assert not failures, f"GPU-delta CI warm {name} must be <{limit}s; violations={failures}"
+    owners = [owner for update in report["encoding_updates"].values() for owner in update["owners"]]
+    nonempty_owners = {owner["owner_rank"] for owner in owners if owner["nonempty"]}
+    warm_owners = [owner for owner in owners if owner["warm"]]
+    assert nonempty_owners and nonempty_owners == {
+        owner["owner_rank"] for owner in warm_owners
+    }, "GPU-delta CI requires nonempty warm ordinary encoding for every matrix-producing owner"
+    # Provisional budget from full-model measured encoding stages, not pure compression.
+    # Actual five-layer timings are not yet calibrated.
+    encoding_limit_s = 6.0
+    failures = [
+        owner["encoding_stage_wall_s"]
+        for owner in warm_owners
+        if not 0 <= owner["encoding_stage_wall_s"] < encoding_limit_s
+    ]
+    assert not failures, f"GPU-delta CI warm encoding_stage_wall_s must be <{encoding_limit_s}s; violations={failures}"
+    print(
+        f"GPU-delta CI warm ranks={len(current_ranks)} checks={len(warm)} "
+        f"prepare_max_s={max(rank['prepare_s'] for rank in warm)} "
+        f"scheduler_pause_max_s={max(rank['pause_s'] for rank in warm)} "
+        f"encoding_owners={len(nonempty_owners)} "
+        f"encoding_stage_wall_max_s={max(owner['encoding_stage_wall_s'] for owner in warm_owners)}",
+        flush=True,
+    )
+
+
+def _assert_gpu_delta_weights_changed(args, version_dir, _rollout_engines):
+    """Reject a successful-looking E2E whose learned publications were all no-ops."""
+    import torch.distributed as dist
+
+    if dist.get_rank() != 0:
+        return
+    version_dir = Path(version_dir)
+    current = json.loads((version_dir / "manifest.json").read_text())
+    if current["target_version"] == 1:
+        _install_gpu_delta_performance_check(args)
+    # This E2E publishes once at startup and between rollouts, independently of optimizer steps.
+    startup_publications = 1
+    last_version = startup_publications + args.num_rollout - 1
+    if current["target_version"] != last_version:
+        return
+    codecs = _gpu_delta_env()
+    changed_bytes = []
+    for version in range(1, last_version + 1):
+        manifest = json.loads((version_dir.parent / f"weight_v{version:06d}/manifest.json").read_text())
+        assert manifest["stream_id"] == current["stream_id"]
+        assert manifest["base_version"] == version - 1 and manifest["target_version"] == version
+        codec_key = "GPU_DELTA_INITIAL_SYNC_CODEC" if version <= startup_publications else "GPU_DELTA_CODEC"
+        assert manifest["codec"] == codecs[codec_key], "E2E publication codec differs from configured phase codec"
+        raw_tensors = [tensor for tensor in manifest["tensors"] if len(tensor["shape"]) <= 1]
+        assert raw_tensors, "E2E must exercise direct scalar/vector targets"
+        for tensor in manifest["tensors"]:
+            direct = len(tensor["shape"]) <= 1
+            assert tensor["encoding"] == (
+                "raw_bytes" if direct else "xor_bytes"
+            ), "E2E tensor encoding differs from its shape"
+            if direct:
+                assert not tensor["frames"] and "outer" not in tensor
+                assert tensor.get("raw", {}).get("encoded_bytes", 0) == (
+                    tensor["nbytes"] if tensor["changed_bytes"] else 0
+                ), "E2E direct target is incomplete"
+        if version > startup_publications:
+            changed_bytes.append(sum(tensor["changed_bytes"] for tensor in manifest["tensors"]))
+    assert any(count > 0 for count in changed_bytes), (
+        f"GPU-delta E2E produced only no-op learned publications: {changed_bytes}. "
+        "Version changes alone do not exercise a learned weight delta."
+    )
+    print(f"GPU-delta E2E learned publication changed bytes: {changed_bytes}", flush=True)
+
+
 def execute():
     U = command_utils.default_config().create_backend()
+    weight_transfer_args = (
+        "--update-weight-transfer-mode gpu-delta "
+        f"--update-weight-disk-dir /root/delta-updates/{RUN_ID}/gpu_delta "
+        "--custom-update-weight-post-write-path "
+        "tests.e2e.megatron.test_glm5_2_744b_a40b_5layer_nvfp4_w4a16._assert_gpu_delta_weights_changed "
+    )
+    delta_env = _gpu_delta_env()
+
     os.environ.update(NVFP4_ENV)
     os.environ.update(GLM5_ENV)
+    os.environ.update(delta_env)
     os.environ.setdefault("RAY_TMPDIR", "/tmp/ray")
     te_precision_config_path = command_utils.encode_pseudo_file(TE_PRECISION_CONFIG)
 
     ckpt_args = (
-        f"--hf-checkpoint {MODEL_DIR}/{NVFP4_MODEL_NAME}/ " f"--ref-load {MODEL_DIR}/{MEGATRON_MODEL_NAME}_torch_dist "
+        f"--hf-checkpoint {MODEL_DIR}/{NVFP4_MODEL_NAME}/ "
+        f"--ref-load {MODEL_DIR}/{MEGATRON_MODEL_NAME}_torch_dist "
+        f"--save /root/shared_data/{RUN_ID}/checkpoints --save-interval 2 "
     )
 
+    # Exercise learned deltas despite this pruned model's zero math score.
     rollout_args = (
         f"--prompt-data {DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type deepscaler "
-        "--num-rollout 2 "
+        "--rm-type deterministic_random "
+        # Give restarted ranks two ordinary-codec updates so their second apply is warm.
+        "--num-rollout 5 "
         "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 100 "
@@ -159,11 +363,13 @@ def execute():
     )
 
     perf_args = (
-        "--tensor-model-parallel-size 1 "
+        "--tensor-model-parallel-size 2 "
+        # Native AbsorbedMLA requires sequence parallelism with tensor parallelism.
+        "--sequence-parallel "
         # Let the STE propagate gradients to the original expert parameters.
         "--no-gradient-accumulation-fusion "
         "--pipeline-model-parallel-size 1 "
-        f"--context-parallel-size {ACTOR_NUM_GPUS} "
+        "--context-parallel-size 2 "
         f"--expert-model-parallel-size {ACTOR_NUM_GPUS} "
         "--expert-tensor-parallel-size 1 "
         "--recompute-granularity full "
@@ -224,7 +430,21 @@ def execute():
         "--sglang-watchdog-timeout 3600 "
     )
 
-    ci_args = "--ci-test --ci-disable-logprobs-checker --ci-disable-weight-update-checker --ci-disable-kl-checker "
+    ci_args = (
+        "--ci-test --ci-disable-logprobs-checker --ci-disable-weight-update-checker --ci-disable-kl-checker "
+        "--use-fault-tolerance --ft-components rollout "
+        + compute_fault_hooks_arg(
+            [
+                FaultHookRequest(
+                    hook_name=FaultHookName.ORCHESTRATOR_STEP_END,
+                    rollout_id=1,
+                    action=RestartRolloutCellAction(
+                        cell_id=compute_cell_id(pool_id="inference-engine-all-0-0", cell_index=1),
+                    ),
+                ),
+            ]
+        )
+    )
 
     mixed_precision_args = (
         "--transformer-impl transformer_engine "
@@ -248,7 +468,6 @@ def execute():
         "--attention-backend flash "
         "--cp-comm-type allgather "
         "--miles-dsa-topk-backend flashinfer "
-        "--update-weight-transfer-mode broadcast_packed "
         f"--update-weight-buffer-size {2 * 1024 ** 3} "
         "--actor-num-nodes 1 "
         f"--actor-num-gpus-per-node {ACTOR_NUM_GPUS} "
@@ -273,6 +492,7 @@ def execute():
         f"{ci_args} "
         f"{mixed_precision_args} "
         f"{misc_args} "
+        f"{weight_transfer_args} "
     )
 
     U.execute_train(
@@ -280,8 +500,13 @@ def execute():
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
         megatron_path=MEGATRON_PATH,
-        extra_env_vars={**NVFP4_ENV, **GLM5_ENV},
+        extra_env_vars={**NVFP4_ENV, **GLM5_ENV, **delta_env},
     )
+    check = (
+        "from tests.e2e.megatron.test_glm5_2_744b_a40b_5layer_nvfp4_w4a16 import _assert_gpu_delta_performance; "
+        f"_assert_gpu_delta_performance('/root/delta-updates/{RUN_ID}/gpu_delta/ci-performance.json')"
+    )
+    U.exec_command_cpu(f"python -c {shlex.quote(check)}")
 
 
 if __name__ == "__main__":
