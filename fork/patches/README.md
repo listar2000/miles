@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| port-001 | Port | SGLang GPU-delta receiver (sgl-project/sglang#42210): hardware-decompressed XOR deltas applied in place, `/update_weights_from_gpu_delta` | active; remove when the PR is in our pinned `sglang-miles` | [port-001-sglang-gpu-delta.md](port-001-sglang-gpu-delta.md) |
 | port-kind | Infra | The Port kind (open upstream PRs carried byte for byte) and SGLang changes as patch files only | active | [port-kind.md](port-kind.md) |
 | ext-050 | Ext | Monitor: SFT runs (kind `sft`) show loss, validation NLL, LR, throughput, checkpoints; an eval names the run and step it evaluates and the run lists those evals with pass@k | active; remove when the monitor is retired | [ext-050-monitor-sft-runs.md](ext-050-monitor-sft-runs.md) |
 | ext-049 | Ext | SFT record connectors: `write_records` validates and reports; the ATIF connector turns Harbor trial dirs (continuations, `context_management`, subagents) into records by the spec alone | active; remove when upstream Miles reads ATIF into session-server-shaped SFT data | [ext-049-sft-connectors.md](ext-049-sft-connectors.md) |
