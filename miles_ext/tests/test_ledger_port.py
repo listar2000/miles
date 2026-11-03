@@ -188,3 +188,53 @@ def test_a_miles_refresh_may_restore_a_file_the_pr_no_longer_edits(tmp_path, mon
     monkeypatch.setattr(ledger, "in_base", lambda base, path: True, raising=False)
     monkeypatch.setattr(ledger, "only_removes", lambda sha, path, base: sha == "a2" and path == "miles/dropped.py")
     assert ledger.cmd_check("v0") == 0
+
+
+DELETED = "python/sglang/srt/old_receiver.py"
+
+
+def _deleting_patch():
+    return _patch(new_file=False) + (
+        f"diff --git a/{DELETED} b/{DELETED}\ndeleted file mode 100644\n--- a/{DELETED}\n+++ /dev/null\n@@ -1 +0,0 @@\n-z\n"
+    )
+
+
+def test_an_sglang_port_may_delete_a_file(tmp_path, monkeypatch):
+    port = _commit(
+        "a1",
+        "Port",
+        "port-001",
+        ["fork/deps/sglang/port-001-gpu-delta.patch"],
+        Touches=f"sglang:{EDITED}, sglang:{DELETED}",
+        Upstream_PR=PR,
+        Remove_When="merged",
+    )
+    assert ledger.patch_files(_deleting_patch(), "port-001") == {EDITED: True, DELETED: True}
+    assert _check(tmp_path, monkeypatch, [port], patch=_deleting_patch()) == 0
+
+
+def test_image_check_requires_a_ports_deleted_files_to_be_gone(tmp_path, monkeypatch):
+    root, src = tmp_path / "repo", tmp_path / "sglang"
+    (root / ledger.SGLANG_PATCHES).mkdir(parents=True)
+    (root / ledger.SGLANG_PATCHES / "port-001-gpu-delta.patch").write_text(_deleting_patch())
+    (src / EDITED).parent.mkdir(parents=True)
+    (src / EDITED).write_text("# [fork port-001]\n")
+    (src / DELETED).write_text("z\n")
+    monkeypatch.setattr(ledger, "ROOT", root)
+    monkeypatch.setattr(ledger, "_stack_value", lambda name: str(src))
+    assert any("old_receiver.py: still present" in p for p in ledger.sglang_marker_problems())
+    (src / DELETED).unlink()
+    assert ledger.sglang_marker_problems() == []
+
+
+def test_a_miles_port_may_delete_a_file(tmp_path, monkeypatch):
+    port = _commit(
+        "a1", "Port", "port-002", ["miles/gone.py"], Touches="miles/gone.py", Upstream_PR=PR, Remove_When="merged"
+    )
+    root = tmp_path / "repo"
+    (root / ledger.SGLANG_PATCHES).mkdir(parents=True)
+    monkeypatch.setattr(ledger, "ROOT", root)
+    monkeypatch.setattr(ledger, "commits", lambda base: [port])
+    monkeypatch.setattr(ledger, "git", lambda *args: "miles/gone.py")
+    monkeypatch.setattr(ledger, "in_base", lambda base, path: True, raising=False)
+    assert ledger.cmd_check("v0") == 0

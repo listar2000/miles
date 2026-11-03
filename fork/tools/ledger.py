@@ -45,7 +45,8 @@ so the history is the record and nothing has to be kept in sync by hand.
      autosquash) refuses any that is left;
   9. a port follows the fix and hook rules, except that it may span several commits (a
      refresh to a newer PR head), and a file it adds (absent from the upstream base, or new
-     in its SGLang patch) needs no marker, so the file stays byte for byte the PR's.
+     in its SGLang patch) needs no marker, so the file stays byte for byte the PR's; nor
+     does a file it deletes.
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
@@ -142,20 +143,20 @@ def patch_files(text: str, fork_id: str) -> dict[str, bool]:
         if line.startswith("diff --git "):
             current = line.split(" b/", 1)[1]
             out[current] = False
-        elif current and line.startswith("new file mode") and fork_id.startswith("port-"):
+        elif current and line.startswith(("new file mode", "deleted file mode")) and fork_id.startswith("port-"):
             out[current] = True
         elif current and line.startswith("+") and not line.startswith("+++") and fork_id in MARKER.findall(line):
             out[current] = True
     return out
 
 
-def patch_new_files(text: str) -> set[str]:
-    """Files a unified diff creates."""
+def patch_new_files(text: str, mode: str = "new file mode") -> set[str]:
+    """Files a unified diff creates (or, with ``mode="deleted file mode"``, deletes)."""
     out, current = set(), None
     for line in text.splitlines():
         if line.startswith("diff --git "):
             current = line.split(" b/", 1)[1]
-        elif current and line.startswith("new file mode"):
+        elif current and line.startswith(mode):
             out.add(current)
     return out
 
@@ -415,8 +416,9 @@ def cmd_check(base: str, merge: bool = False) -> int:
         if f not in changed:
             problems.append(f"{f}: declared by {sorted(ids)} but identical to {base} (fix dropped? remove the commit)")
         missing = ids - markers_in(ROOT / f)
-        if missing and all(i.startswith("port-") for i in missing) and not in_base(base, f):
-            missing = set()  # a file a port adds stays byte for byte the PR's (rule 9)
+        port_only = missing and all(i.startswith("port-") for i in missing)
+        if port_only and (not in_base(base, f) or not (ROOT / f).exists()):
+            missing = set()  # a file a port adds stays byte for byte the PR's, one it deletes has nothing to mark
         if missing:
             problems.append(f"{f}: no [fork <id>] marker for {sorted(missing)}")
     patches: dict[str, Path] = {}
@@ -482,10 +484,12 @@ def sglang_marker_problems() -> list[str]:
         fid = sglang_patch_id(str(path.relative_to(ROOT)))
         text = path.read_text()
         added = patch_new_files(text) if fid.startswith("port-") else set()  # a port's new files carry no marker
+        deleted = patch_new_files(text, "deleted file mode") if fid.startswith("port-") else set()
         for f in patch_files(text, fid):
-            if f in added:
-                if not (src / f).is_file():
-                    problems.append(f"{src / f}: missing; {path.name} is not applied in this image")
+            if f in added or f in deleted:
+                if (src / f).is_file() != (f in added):
+                    state = "missing" if f in added else "still present"
+                    problems.append(f"{src / f}: {state}; {path.name} is not applied in this image")
                 continue
             if fid in markers_in(src / f):
                 print(f"{fid}: {src / f}")
