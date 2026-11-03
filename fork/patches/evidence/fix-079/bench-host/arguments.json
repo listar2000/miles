@@ -1,0 +1,34 @@
+{
+  "model": "/__modal/volumes/vo-kcRyhiPoFIJGHvtjJI72jY/gpudelta/GLM-5.3-Flash-fp8-4layer",
+  "output": "/tmp/bench/run",
+  "prepared_inputs": "/tmp/bench/inputs",
+  "reuse_fixtures": null,
+  "reuse_producer_spec": null,
+  "reuse_producer_spec_sha256": null,
+  "validate_final_target": true,
+  "codecs": [
+    "snappy-zstd"
+  ],
+  "frame_bytes": 1048576,
+  "sender_gpus": 8,
+  "hashing": [
+    "off"
+  ],
+  "versions": 3,
+  "profile_version": null,
+  "seed": 20261001,
+  "ratio": 0.002,
+  "ports": [
+    31000
+  ],
+  "startup_timeout": 3600,
+  "arms": [
+    {
+      "name": "snappy-zstd-hash-off",
+      "codec": "snappy-zstd",
+      "skip_payload_hash": true
+    }
+  ],
+  "mutation_rate": 0.0018986407089233398,
+  "input_cache_id": "03fc9d070b8a0e1c51a4804b8cfd61846b08e269888c569a018adca5adf5f3ee"
+}

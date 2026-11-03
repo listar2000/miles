@@ -1,0 +1,107 @@
+{
+  "status": "PASS",
+  "arms": [
+    {
+      "name": "snappy-zstd-hash-off",
+      "status": "PASS",
+      "routes": [
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 0,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 1,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 2,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 3,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 4,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 5,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 6,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        },
+        {
+          "engine_id": "engine-00000",
+          "dp_rank": 7,
+          "equal": {
+            "text": true,
+            "output_ids": true,
+            "prompt_tokens": true,
+            "input_token_logprobs": true,
+            "output_token_logprobs": true
+          },
+          "exact": true
+        }
+      ]
+    }
+  ]
+}

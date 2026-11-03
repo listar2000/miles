@@ -1,0 +1,11 @@
+# with fix-079 (this revision): SGLang pin 3a938213c1 + port-001 + fix-074 + fix-079, image starlimobius/miles-mobius:main
+$ python3 -m pytest -q test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_receiver.py
+......................................                              [100%]
+38 passed, 5 subtests passed in 25.22s
+
+# with the first revision of fix-079 (matched 'OUT_OF_MEMORY' in the error text, which a plain integer code lacks), same new test
+$ python3 -m pytest -q test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py
+...F.........                                                         [100%]
+E           RuntimeError: GPU-delta allocation cuMemSetAccess failed: CUDA 2
+FAILED test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_host.py::TestHostSnapshot::test_out_of_memory_host_mapping_stages_through_device_memory
+1 failed, 12 passed, 3 subtests passed in 15.60s

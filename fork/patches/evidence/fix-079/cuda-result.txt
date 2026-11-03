@@ -1,0 +1,3 @@
+# cuda.bindings in starlimobius/miles-mobius:main
+$ python3 -c "from cuda.bindings import driver; c = driver.CUresult.CUDA_ERROR_OUT_OF_MEMORY; print(f\"str={c} int={int(c)}\")"
+str=<CUresult.CUDA_ERROR_OUT_OF_MEMORY: 2> int=2

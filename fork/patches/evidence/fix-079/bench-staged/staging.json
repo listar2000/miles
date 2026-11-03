@@ -1,0 +1,170 @@
+[
+ {
+  "at": "/arms[0]/versions[0]/ranks[0]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320579904,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320579904
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[1]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320586016,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320586016
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[2]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320579248,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320579248
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[3]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320579104,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320579104
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[4]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320574768,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320574768
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[5]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320576400,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320576400
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[6]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320581840,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320581840
+ },
+ {
+  "at": "/arms[0]/versions[0]/ranks[7]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320575792,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320575792
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[0]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320576768,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320576768
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[1]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320570352,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320570352
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[2]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320577648,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320577648
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[3]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320580496,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320580496
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[4]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320579328,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320579328
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[5]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320577392,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320577392
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[6]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320577328,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320577328
+ },
+ {
+  "at": "/arms[0]/versions[1]/ranks[7]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320577408,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320577408
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[0]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320580544,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320580544
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[1]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320580928,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320580928
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[2]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320572864,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320572864
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[3]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320582192,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320582192
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[4]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320574832,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320574832
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[5]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320571264,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320571264
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[6]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320576176,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320576176
+ },
+ {
+  "at": "/arms[0]/versions[2]/ranks[7]/receipt/result/timings",
+  "host_rank_device_staged": 1,
+  "arena_staging_h2d_bytes": 320570800,
+  "device_staged_arena_bytes": 335544320,
+  "host_rank_arena_bytes": 320570800
+ }
+]
