@@ -13,8 +13,8 @@ smallest edit, and SGLang patches were capped at about 30 lines with no features
   `Remove-When:`. Conflicts are resolved toward our code and listed on the port's page; our adaptations are separate
   fix, hook or ext commits; the sync that brings the merged PR retires it.
 - A refresh to a newer PR head reuses the id; its `Touches:` replace the earlier ones (a refresh may drop a file).
-- Files a port adds need no marker (they stay the PR's bytes); files it edits do. In the image, `ledger.py markers`
-  still requires each added SGLang file to exist.
+- Files a port adds or deletes need no marker (added ones stay the PR's bytes); files it edits do. In the image, `ledger.py markers`
+  still requires each added SGLang file to exist and each deleted one to be gone.
 - A fix or hook on top of a port may exceed the ~30-line SGLang limit when the port's feature needs it (e.g. a model
   mapping), with the user's OK on its PR. No SGLang fork: patch files only, however many.
 - Rejected: a `listar2000/sglang` fork (a second sync per release); waiting for the upstream merges (our progress
