@@ -15,12 +15,12 @@ cluster:
   cpu: 64
   memory_gib: 2304
   disk_gib: 3072
-  timeout_hours: 3
+  timeout_hours: 4
   placement: split
   engine:
     memory_gib: 768
     disk_gib: 1024
-    timeout_hours: 3
+    timeout_hours: 4
     idle_minutes: 10
 parallel:
   tp: 8
@@ -70,3 +70,6 @@ extra_args:
   - --sglang-enable-dp-attention
   - --sglang-dp-size
   - "4"
+  # a full-model sync (capture ~5 min, then encode, seal, commit, engine apply) outlasts Miles' 600 s default
+  - --update-weights-timeout
+  - "5400"

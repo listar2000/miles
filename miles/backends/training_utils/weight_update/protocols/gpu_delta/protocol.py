@@ -476,6 +476,11 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             except Exception as error:
                 self._error = error
             self._encoding_tail_wait_s = time.monotonic() - started
+            # [fork fix-078] progress on long full-parameter syncs
+            logger.info(
+                "[gpu delta] rank %d encoded in %.1fs (export staging %.1fs), error=%s",
+                dist.get_rank(), self._encoding_tail_wait_s, self._export_staging_wait_s, self._error,
+            )
         if self._encoder_pool is not None:
             self._encoder_pool.shutdown(wait=True)
         if self._error is not None:
@@ -681,6 +686,11 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             "owner_seal_s": time.monotonic() - seal_started,
             **self._encoded_transfer_bytes,
         }
+        logger.info(  # [fork fix-078] progress on long full-parameter syncs
+            "[gpu delta] rank %d sealed: changed %d of %d bytes, wire %d bytes, seal %.1fs",
+            dist.get_rank(), self.publication_metrics["changed_bytes"], self.publication_metrics["canonical_bytes"],
+            self.publication_metrics["wire_bytes"], self.publication_metrics["owner_seal_s"],
+        )
         self.publication_metrics["raw_cpu_write_s"] = self._raw_cpu_write_s
         self.publication_metrics["raw_tail_wait_s"] = self._raw_tail_wait_s
         self.publication_metrics["raw_export_d2h_bytes"] = sum(
