@@ -27,8 +27,8 @@ engines as their own Modal function and reach them over the network.
 - The engine function outlives a failed trainer: a relaunch with the same run id reconnects to it.
   Modal refuses `nonpreemptible` for GPU functions, so a preempted engine ends the trainer's segment, as a
   lost gang node does today. It exits when the trainer reports success, or after `cluster.engine.idle_minutes`.
-- Split refuses what it cannot sync: merged LoRA, full-parameter training, PP > 1, more than one
-  trainer node.
+- Split refuses what it cannot sync: merged LoRA, full-parameter training (unless `rollout.weight_sync:
+  gpu-delta`, ext-053), PP > 1, more than one trainer node.
 
 ## How it is applied
 `miles_ext/recipes/recipe.py` (key, checks, `shape`, `_split_args`), `miles_ext/launch/modal_app.py`

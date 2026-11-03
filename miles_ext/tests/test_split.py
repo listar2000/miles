@@ -21,6 +21,8 @@ def test_split_argv_and_shape(monkeypatch):
     i = argv.index("--rollout-external-engine-addrs")
     assert argv[i + 1 : i + 3] == ["127.0.0.1:31000", "127.0.0.1:31001"]
     assert argv[argv.index("--custom-weight-transfer-protocol-path") + 1] == R.SPLIT_SYNC_PROTOCOL
+    assert "--update-weight-transfer-mode" not in argv  # tensor sync unless rollout.weight_sync says gpu-delta
+    assert "SGLANG_ENABLE_JIT_DEEPGEMM" not in R.trainer_env(recipe)
     assert argv[argv.index("--rollout-num-gpus") + 1] == "8"
     assert argv[argv.index("--actor-num-nodes") + 1] == "1"
     shape = R.shape(recipe)
@@ -31,7 +33,7 @@ def test_split_argv_and_shape(monkeypatch):
 @pytest.mark.parametrize(
     "overrides,message",
     [
-        ({"lora": {"rank": 0}}, "supports LoRA only"),
+        ({"lora": {"rank": 0}}, "supports LoRA, or full-parameter"),
         ({"cluster": {"nodes": 2}}, "one trainer node"),
         ({"cluster": {"train_gpus": 4}}, "whole node"),
     ],

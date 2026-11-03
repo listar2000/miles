@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-053 | Ext | Full-parameter split placement with GPU-delta weight sync through the results volume (`rollout.weight_sync: gpu-delta`) | active; remove with ext-036 | [ext-053-split-gpu-delta.md](ext-053-split-gpu-delta.md) |
 | hook-018 | Hook | GPU-delta receiver mapping for GLM-5.3-Flash: KDA, DSA/MLA, mHC, triton block-FP8 experts, dense FP8 with FP32 scales (DeepGEMM off) | active; remove when SGLang maps glm5_next itself | [hook-018-gpu-delta-glm53.md](hook-018-gpu-delta-glm53.md) |
 | port-002 | Port | Miles GPU-delta weight sync (radixark/miles#3894): `--update-weight-transfer-mode gpu-delta`, trainer-side XOR + GPU compression, publication and receiver coordination | active; remove when the PR is merged and synced | [port-002-miles-gpu-delta.md](port-002-miles-gpu-delta.md) |
 | fix-079 | Fix | GPU-delta stages its decompression input through device memory when gVisor refuses the host mapping with CUDA_ERROR_OUT_OF_MEMORY (`GPU_DELTA_DEVICE_ARENA=1` forces it) | active; remove when the PR offers a device-staged arena | [fix-079-gpu-delta-device-arena.md](fix-079-gpu-delta-device-arena.md) |

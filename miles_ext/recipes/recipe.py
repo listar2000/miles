@@ -183,7 +183,7 @@ DEFAULTS: dict[str, Any] = {
     # draft model when the served precision has one. A full-weight fp8_fp4 run always keeps the trainer's FP4
     # experts on the engine's grid (fix-006, see expert_qat)
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
-                "speculative": True},
+                "speculative": True, "weight_sync": "tensor"},
     # Megatron only: offload "disk" streams Adam's state to node-local disk; host_gib budgets pinned RAM per GPU for it
     # (leave room for other host users). moment_dtype sets the stored moments, grad_dtype the gradient accumulation.
     "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32", "host_gib": 0},
@@ -256,6 +256,10 @@ PLACEMENTS = (ONE_CLUSTER, SPLIT)
 # split: the trainer reaches engine i at 127.0.0.1:SPLIT_ENGINE_PORT + i (a relay to the engine container)
 SPLIT_ENGINE_PORT = 31000
 SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # ext-037, through hook-013
+# ext-053: GPU-delta through the results volume; models whose SGLang receiver mapping exists (hook-018)
+GPU_DELTA_POST_WRITE = "miles_ext.launch.split.volume_sync.gpu_delta_post_write"
+GPU_DELTA_PRESETS = ("glm-5.3-flash", "glm-5.3-flash-4layer")
+GPU_DELTA_ENV = {"SGLANG_ENABLE_JIT_DEEPGEMM": "0"}  # dense FP8 keeps the checkpoint's FP32 block scales
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
 # does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
@@ -334,6 +338,7 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.seed": {"type": "int", "nullable": True},
     "rollout.gpus_per_engine": {"type": "int", "min": 1, "max": 8},
     "rollout.precision": {"type": "str", "nullable": True},
+    "rollout.weight_sync": {"type": "str", "enum": ("tensor", "gpu-delta")},
     "rollout.context_length": {"type": "int", "nullable": True, "min": 1},
     "rollout.max_running_requests": {"type": "int", "nullable": True, "min": 1},
     "optimizer.offload": {"type": "str", "nullable": True, "enum": ("disk",)},
@@ -424,6 +429,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     if sandbox["provider"] == "sail" and not 1 <= int(sandbox["idle_secs"]) <= 3600:
         raise ValueError("sandbox.idle_secs must be 1..3600 for sail (Sail's auto-sleep window)")
     cluster = recipe["cluster"]
+    if gpu_delta(recipe) and not is_split(recipe):
+        raise ValueError("rollout.weight_sync gpu-delta needs cluster.placement split")
     if is_split(recipe):
         _validate_split(recipe)
     elif (
@@ -488,14 +495,26 @@ def is_split(recipe: dict) -> bool:
     return recipe["cluster"]["placement"] == SPLIT
 
 
+def gpu_delta(recipe: dict) -> bool:
+    return recipe["rollout"]["weight_sync"] == "gpu-delta"
+
+
 def _validate_split(recipe: dict) -> None:
     """Reject split recipes the volume sync or the one-node trainer cannot run."""
     cluster, lora = recipe["cluster"], recipe["lora"]
     if recipe["algorithm"]["mode"] != "fully_async":
         raise ValueError("cluster.placement split needs algorithm.mode fully_async")
-    if not int(lora["rank"]) > 0:
+    if gpu_delta(recipe):
+        if int(lora["rank"]) > 0:
+            raise ValueError("rollout.weight_sync gpu-delta is full-parameter only (lora.rank 0)")
+        if recipe["model"]["preset"] not in GPU_DELTA_PRESETS:
+            raise ValueError(f"rollout.weight_sync gpu-delta maps only {', '.join(GPU_DELTA_PRESETS)} in SGLang")
+        if recipe["async"]["pause_generation"] != "retract":
+            raise ValueError("rollout.weight_sync gpu-delta needs async.pause_generation retract (Miles admission)")
+    elif not int(lora["rank"]) > 0:
         raise ValueError(
-            "cluster.placement split supports LoRA only (full-parameter syncs are not carried over the volume)"
+            "cluster.placement split supports LoRA, or full-parameter with rollout.weight_sync gpu-delta "
+            "(a full sync is not carried over the volume)"
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
@@ -891,7 +910,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
         --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {GPUS_PER_NODE}
-        {_split_args(recipe)}
+        {_split_args(recipe, run_id)}
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
         --max-weight-staleness {algo["max_weight_staleness"]} --async-unused-samples-handler {aio["unused_samples"]}
@@ -975,11 +994,19 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     return args + [str(a) for a in recipe["extra_args"]]
 
 
-def _split_args(recipe: dict) -> str:
+def _split_args(recipe: dict, run_id: str) -> str:
     """Return the split argv: the engines' local relay addresses and the volume sync protocol."""
     if not is_split(recipe):
         return ""
     addrs = " ".join(f"127.0.0.1:{SPLIT_ENGINE_PORT + i}" for i in range(num_engines(recipe)))
+    if gpu_delta(recipe):
+        # the receiver binds whole tensors per rank: attention TP 1 (data-parallel attention), port-001
+        dp = recipe["rollout"]["gpus_per_engine"]
+        return f"""--rollout-external-engine-addrs {addrs}
+        --sglang-enable-dp-attention --sglang-dp-size {dp}
+        --update-weight-transfer-mode gpu-delta --update-weight-delta-encoding xor
+        --update-weight-disk-dir {RESULTS / run_id / "gpu_delta"}
+        --custom-update-weight-post-write-path {GPU_DELTA_POST_WRITE}"""
     return f"""--rollout-external-engine-addrs {addrs}
         --custom-weight-transfer-protocol-path {SPLIT_SYNC_PROTOCOL}"""
 
@@ -1021,6 +1048,8 @@ def trainer_env(recipe: dict) -> dict[str, str]:
     env = {**preset.env, **preset.precisions[rollout_precision(recipe)], "WANDB__DISABLE_STATS": "true"}
     if not recipe["lora"]["rank"]:
         env.update(preset.weight_sync_env)
+    if gpu_delta(recipe):
+        env.update(GPU_DELTA_ENV)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     return env
