@@ -21,6 +21,7 @@ cluster:
     memory_gib: 768
     disk_gib: 1024
     timeout_hours: 3
+    idle_minutes: 10
 parallel:
   tp: 8
   pp: 1
@@ -30,7 +31,7 @@ optimizer:
   offload: disk
   moment_dtype: bf16
   grad_dtype: bf16
-  host_gib: 80
+  host_gib: 40
 rollout:
   gpus_per_engine: 4
   context_length: 32768
