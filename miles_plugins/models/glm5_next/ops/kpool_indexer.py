@@ -63,9 +63,7 @@ def kpool_select_rows(
     local_positions = (token_ids - seq_token_base).to(torch.int32)
     eligible_pools = torch.div(local_positions + 1, kpool, rounding_mode="floor")
 
-    # [fork fix-070] score and select in query-row chunks: the whole [T, T_pool] score matrix was 64 GiB per call
-    # at 256k. Rows are independent, so the top-k is the same. Indexer replay records and replays one top-k per
-    # call, so it keeps a single chunk.
+    # [fork fix-070] Indexer replay requires one whole-sequence selection per call.
     chunk = num_tokens if indexer_replay_manager.enabled else _QUERY_CHUNK
     starts = range(0, num_tokens, chunk)
     # [fork fix-071] the ranks of split_group hold the same queries: each scores every world-th of world-times
