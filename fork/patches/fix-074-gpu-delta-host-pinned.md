@@ -21,13 +21,17 @@ KV cache and adds a copy, which the PR's design avoids).
 ## How it is applied
 `fork/deps/sglang/fix-074-gpu-delta-host-pinned.patch` edits port-001's `weight_sync/gpu_delta/memory.py` and its
 CPU unit test `test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py` (the test driver stub gains the
-`HOST` location and a `host_numa_refused` case). `apply.py` applies ports first, so this lands on top of port-001.
+`HOST` location, a `host_numa_refused` case, and checks the access descriptor against the chosen location). `apply.py` applies ports first, so this lands on top of port-001.
 
 Verification:
 - `python3 fork/deps/sglang/apply.py <SGLang checkout at 3a938213c1> 3a938213c1b349e1a8df0b5fdc57ef36a41c743b --check`:
   all 11 patches apply in order and revert.
-- CPU, in `starlimobius/miles-mobius:main` with the patched `weight_sync/` overlaid:
-  `python3 -m pytest test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py`: 16 passed.
+- CPU, in `starlimobius/miles-mobius:main` with the patched `weight_sync/` copied over the installed SGLang
+  (2026-11-03): `python3 -m pytest -q test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py`:
+  16 passed in 27 s. With this patch's test changes but port-001's original `memory.py`: 1 failed, 15 passed;
+  `test_original_host_vmm_admission_and_cleanup[host_numa_refused]` fails with
+  `GPU-delta allocation cuMemCreate failed: CUDA 1`. The stub's access-descriptor assertion follows the location the
+  allocation chose.
 - One Modal B300, upstream image `radixark/miles:dev-202611021910` with both PR heads, nvCOMP 6.0.0.12 and this
   patch: `test_codec.py` 4 passed, `test_apply_cuda.py` 7 passed, Miles' `tests/manual/gpu_delta/test_gpu_delta_nvcomp.py`
   PASS (zstd, snappy, lz4 round trips), `test_gpu_delta_encoder.py` 42 passed. `test_device_allocator_cuda.py` and
