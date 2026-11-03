@@ -4,7 +4,8 @@ Ordinary layers are consumed by their PP-local owners after TP reconstruction.
 ETP1 routed experts are consumed by their exporter owners before the usual gather.
 ETP>1 uses the direct exporter's gathered tensors, with one sender per PP stage.
 Ready owner batches compress during export. Owner-wide finalization optionally
-adds GPU Zstd, then packs the final payload for one D2H transfer.
+adds GPU Zstd, then copies each final payload into one pinned host slab
+(one D2H copy per payload; [fork fix-078]).
 """
 
 from __future__ import annotations

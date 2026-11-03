@@ -107,11 +107,32 @@ def _select_payloads(tensors, frames, owners, batch, sizes, counts):
     return descriptions, groups, changed
 
 
-def _copy_payload_slab(packed, transfer):
-    # Retain both slabs through the completion fence, including partial failure.
-    transfer["device"] = packed
-    transfer["host"] = torch.empty(packed.numel(), dtype=torch.uint8, device="cpu", pin_memory=True)
-    transfer["host"].copy_(packed, non_blocking=True)
+def _pack_host_arenas(groups, transfer):
+    """[fork fix-078] _pack_device_arenas' layout, copied piece by piece into one pinned host slab.
+
+    Returns (start, size) per group (None when empty) and the frame offsets. ``transfer`` keeps
+    the device sources and the host slab alive through the completion fence, including partial failure.
+    """
+    locations, frame_offsets, copies, total = [], [], [], 0
+    for group in groups:
+        offsets = []
+        if not group:
+            locations.append(None)
+            frame_offsets.append(offsets)
+            continue
+        start = total = (total + 15) // 16 * 16
+        for payload in group:
+            offset = (total + 15) // 16 * 16
+            copies.append((offset, payload))
+            offsets.append(offset - start)
+            total = offset + payload.numel()
+        locations.append((start, total - start) if total > start else None)
+        frame_offsets.append(offsets)
+    transfer["device"] = [payload for _, payload in copies]
+    transfer["host"] = torch.zeros(total, dtype=torch.uint8, device="cpu", pin_memory=True)
+    for offset, payload in copies:
+        transfer["host"][offset : offset + payload.numel()].copy_(payload, non_blocking=True)
+    return locations, frame_offsets
 
 
 def _tensor_metrics(tensors, batch_metrics):
@@ -331,6 +352,7 @@ class GpuBatchEncoder:
                 "outer_zstd_frames": 0,
                 "resident_inner_hbm_bytes": 0,
                 "final_payload_d2h_bytes": 0,
+                "final_payload_copied_bytes": 0,  # [fork fix-078]
                 "outer_zstd_wall_s": 0.0,
                 "pack_d2h_wall_s": 0.0,
             }
@@ -341,9 +363,9 @@ class GpuBatchEncoder:
             compression_wall = time.monotonic() - compression_started if wrapped else 0.0
             pack_started = time.monotonic()
             with torch.cuda.device(self.device), torch.cuda.stream(self.stream):
-                arenas, offsets, packed = _pack_device_arenas(encoded_groups, self._alignment_padding)
-                # Retain alignment and perform only one owner-wide D2H.
-                _copy_payload_slab(packed, transfer)
+                # [fork fix-078] Pack straight into the pinned host slab: a device-side concatenation
+                # doubles the owner's payload in HBM, which a full-parameter trainer does not have.
+                arenas, offsets = _pack_host_arenas(encoded_groups, transfer)
                 done = torch.cuda.Event()
                 done.record()
             waiting = time.monotonic()
@@ -360,6 +382,8 @@ class GpuBatchEncoder:
             "pack_d2h_wall_s": pack_wall,
             "resident_inner_hbm_bytes": sum(resident.values()),
             "final_payload_d2h_bytes": transfer["host"].numel(),
+            # [fork fix-078] the slab above includes alignment padding filled on the host; this many bytes cross D2H
+            "final_payload_copied_bytes": sum(payload.numel() for payload in transfer["device"]),
             "outer_zstd_metadata_wait_s": metadata_wait,
             "payload_d2h_wait_s": payload_wait,
         }
@@ -369,8 +393,8 @@ class GpuBatchEncoder:
 def _finished_results(tensors, groups, encoded_groups, arenas, offsets, transfer, wrapped):
     storage, cursor, results = memoryview(transfer["host"].numpy()), 0, []
     for item, inputs, outputs, arena, starts in zip(tensors, groups, encoded_groups, arenas, offsets, strict=True):
-        size = arena.numel() if arena is not None else 0
-        start = arena.data_ptr() - transfer["device"].data_ptr() if arena is not None else cursor
+        size = arena[1] if arena is not None else 0  # [fork fix-078] host (start, size)
+        start = arena[0] if arena is not None else cursor
         payload, outer = storage[start : start + size], None
         transfer_bytes = start + size - cursor
         cursor = start + size

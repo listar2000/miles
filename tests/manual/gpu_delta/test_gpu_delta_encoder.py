@@ -197,7 +197,7 @@ def test_failed_batch_status_drains_stream_and_keeps_snapshots(stage, codec, mon
 @pytest.mark.parametrize("codec", CODECS)
 def test_partial_payload_failure_drains_owned_slabs(codec, monkeypatch):
     encoder = gpu_delta_encoder.GpuBatchEncoder(torch.device("cuda", torch.cuda.current_device()), codec=codec)
-    copy_payloads, pending = gpu_delta_encoder._copy_payload_slab, torch.cuda.Event()
+    copy_payloads, pending = gpu_delta_encoder._pack_host_arenas, torch.cuda.Event()  # [fork fix-078]
 
     def fail_after_copy(*args):
         copy_payloads(*args)
@@ -205,7 +205,7 @@ def test_partial_payload_failure_drains_owned_slabs(codec, monkeypatch):
         pending.record()
         raise RuntimeError("injected partial payload failure")
 
-    monkeypatch.setattr(gpu_delta_encoder, "_copy_payload_slab", fail_after_copy)
+    monkeypatch.setattr(gpu_delta_encoder, "_pack_host_arenas", fail_after_copy)
     before, after = _pinned(np.zeros(139, dtype=np.uint8)), _pinned(np.arange(139, dtype=np.uint8))
     with pytest.raises(RuntimeError, match="partial payload"):
         encoder.finish_device(encoder.encode_device([(before, after)]))
@@ -220,19 +220,21 @@ def test_owner_wide_finalization_roundtrip_only_transfers_final_bytes(frame_byte
     encoder = gpu_delta_encoder.GpuBatchEncoder(
         torch.device("cuda", torch.cuda.current_device()), frame_bytes=frame_bytes, codec=codec
     )
-    original_copy = gpu_delta_encoder._copy_payload_slab
+    original_copy = gpu_delta_encoder._pack_host_arenas  # [fork fix-078] packing is the owner-wide D2H
     original_compress = encoder.outer_compressor.compress if encoder.outer_compressor is not None else None
-    copies, outer_calls = [], []
+    copies, copied, outer_calls = [], [], []
 
-    def copy(packed, transfer):
-        copies.append(packed.numel())
-        return original_copy(packed, transfer)
+    def copy(groups, transfer):
+        result = original_copy(groups, transfer)
+        copies.append(transfer["host"].numel())
+        copied.append(sum(payload.numel() for payload in transfer["device"]))
+        return result
 
     def compress(frames, stream, **kwargs):
         outer_calls.append([frame.numel() for frame in frames])
         return original_compress(frames, stream, **kwargs)
 
-    monkeypatch.setattr(gpu_delta_encoder, "_copy_payload_slab", copy)
+    monkeypatch.setattr(gpu_delta_encoder, "_pack_host_arenas", copy)
     if encoder.outer_compressor is not None:
         monkeypatch.setattr(encoder.outer_compressor, "compress", compress)
     before, after, snapshots = _snapshots(frame_bytes)
@@ -251,6 +253,8 @@ def test_owner_wide_finalization_roundtrip_only_transfers_final_bytes(frame_byte
     else:
         assert len(outer_calls) == 1 and max(outer_calls[0]) <= FRAME_BYTES
     assert len(copies) == 1 and copies[0] == sum(result[4]["encoded_d2h_bytes"] for result in results)
+    assert copies[0] == encoder.finalization_metrics["final_payload_d2h_bytes"]
+    assert copied[0] == encoder.finalization_metrics["final_payload_copied_bytes"] <= copies[0]  # [fork fix-078]
     writer = PublicationWriter(
         tmp_path,
         stream_id="s",
