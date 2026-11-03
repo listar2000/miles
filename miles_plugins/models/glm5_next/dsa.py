@@ -18,6 +18,14 @@ from miles_plugins.models.glm5_next.ops.kpool_indexer import gather_query_rows, 
 _SPARSE_MLA_TAIL_DIM = 64
 
 
+def _recompute_stash(config) -> deque | None:
+    """[fork fix-072] The forward-to-recompute stash, or None where its depth bound does not hold: indexer replay pops
+    its own top-k in the recompute, and an interleaved (virtual) pipeline keeps more forwards in flight per layer."""
+    if indexer_replay_manager.enabled or (getattr(config, "virtual_pipeline_model_parallel_size", None) or 1) > 1:
+        return None
+    return deque()
+
+
 class Glm5NextDSAAttention(DSAMLASelfAttention):
 
     def __init__(
@@ -60,9 +68,8 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
         if indexer_replay_manager.enabled:
             full_attn_layers = list(config.glm5_next_full_attn_layers)
             self.indexer_replay.stream_idx = full_attn_layers.index(self.layer_number - 1)
-        # [fork fix-072] this rank's selected rows of checkpointed forwards awaiting their recompute, oldest first;
-        # not with indexer replay, which pops its own top-k in the recompute
-        self._recompute_topk = None if indexer_replay_manager.enabled else deque()
+        # [fork fix-072] this rank's selected rows of checkpointed forwards awaiting their recompute, oldest first
+        self._recompute_topk = _recompute_stash(config)
 
     def get_absorb_query_key_value_tensors(
         self,

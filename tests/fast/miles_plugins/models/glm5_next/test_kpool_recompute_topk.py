@@ -56,7 +56,8 @@ class _Selector:
     def __init__(self):
         self.calls = 0
 
-    def __call__(self, step):
+    def __call__(self, *select_args):
+        step = select_args[-1]  # _index_rows passes packed_seq_params last
         self.calls += 1
         return SimpleNamespace(tokens=torch.full((4, 64), step, dtype=torch.int32))
 
@@ -106,3 +107,33 @@ def test_train_mode_drops_a_stale_stash(dsa):
     attn._recompute_topk.append("stale")  # a step that died before its recompute
     attn.train()
     assert not attn._recompute_topk and attn.training
+
+
+@pytest.mark.parametrize(("replay", "vpp", "on"), [(False, None, True), (True, None, False), (False, 2, False)])
+def test_stash_only_where_its_depth_bound_holds(dsa, monkeypatch, replay, vpp, on):
+    monkeypatch.setattr(dsa.indexer_replay_manager, "enabled", replay, raising=False)
+    stash = dsa._recompute_stash(SimpleNamespace(virtual_pipeline_model_parallel_size=vpp))
+    assert (stash is not None) == on
+
+
+def test_forward_and_its_recompute_select_once(dsa, monkeypatch):
+    """Through forward: the recompute attends with the forward's assembled rows, and selection runs once."""
+    t, heads, rank = 6, 2, 4
+    attn = _attention(dsa)
+    attn.config.kv_lora_rank = rank
+    attn.softmax_scale = 1.0
+    tensors = (torch.zeros(t, heads, rank), torch.zeros(t, rank), torch.zeros(heads, 3, rank), *(None,) * 4)
+    attn.get_absorb_query_key_value_tensors = lambda *a, **k: tensors
+    attn.linear_proj = lambda x: (x, None)
+    attended = []
+    monkeypatch.setattr(dsa, "gather_query_rows", lambda rows: rows.tokens)
+    monkeypatch.setattr(
+        dsa, "sparse_attention", lambda q, k, topk, scale, d_v: attended.append(topk) or torch.zeros(1, t, heads, d_v)
+    )
+    monkeypatch.setattr(dsa, "is_checkpointing", lambda: True)
+    with torch.no_grad():
+        attn.forward(None, None, packed_seq_params=1)  # checkpointed forward
+    with torch.enable_grad():
+        attn.forward(None, None, packed_seq_params=2)  # its recompute
+    assert attn._kpool_select.calls == 1 and not attn._recompute_topk
+    assert torch.equal(attended[0], attended[1])
