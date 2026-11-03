@@ -1,0 +1,65 @@
+# GLM-5.3-Flash (full FP8 release), full-parameter RL in split placement with GPU-delta weight sync (ext-053):
+# one B300:8 trainer node (TP8 EP8 PP1, host-memory Adam fix-073) and one engine container (two TP4 FP8 engines,
+# triton MoE for R3). Each sync is a compressed XOR delta of the served FP8 weights through the results volume.
+# Overnight goal run: two training steps, two gpu-delta syncs. Saves off (a weights save takes ~17 min).
+# host_gib is lower than glm53-flash-stak's 170: GPU-delta pins up to three host copies of the served model
+# (HF base, rolling, pending; ~330 GB each across the node) beside the Adam tier.
+name: glm53-flash-split-gpud
+model:
+  preset: glm-5.3-flash
+  revision: 46a050bec13002ad29ee795c16e61cf4fa3c4a9c
+cluster:
+  gpu: B300
+  nodes: 1
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 2304
+  disk_gib: 3072
+  timeout_hours: 3
+  placement: split
+  engine:
+    memory_gib: 768
+    disk_gib: 1024
+    timeout_hours: 3
+parallel:
+  tp: 8
+  pp: 1
+  cp: 1
+  ep: 8
+optimizer:
+  offload: disk
+  moment_dtype: bf16
+  grad_dtype: bf16
+  host_gib: 80
+rollout:
+  gpus_per_engine: 4
+  context_length: 32768
+  max_running_requests: 128
+  weight_sync: gpu-delta
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 2
+  rollout_batch_size: 16
+  n_samples: 4
+  temperature: 1.0
+  max_response_len: 2048
+  max_seq_len: 8192
+  max_tokens_per_gpu: 8192
+  lr: 1.0e-6
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+async:
+  max_concurrent_samples: 128
+  pause_generation: retract
+checkpoint:
+  save_interval: 100
+  keep: 1
+  save_optimizer: false
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-glm53
+  wandb_entity: mobiuslab
