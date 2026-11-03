@@ -58,7 +58,8 @@ def test_trial_config_loads_pi_and_points_it_at_the_tunnel(monkeypatch):
     config = af.build_trial_config({"instance_id": "x"}, SESSION, {})
     assert config.agent.import_path == "miles_ext.harnesses.pi.sandbox:SandboxPi"
     assert config.agent.extra_allowed_hosts == ["abc123.r9.modal.host"]
-    assert config.agent.kwargs == {"base_url": f"{PUBLIC}/30000/sessions/s/v1"}  # Pi appends /chat/completions
+    # Pi appends /chat/completions
+    assert config.agent.kwargs == {"base_url": f"{PUBLIC}/30000/sessions/s/v1", "strict_tools": False}
 
 
 def _end(stop_reason, output=10, error=None):
@@ -139,7 +140,8 @@ def test_run_is_a_plain_loop_without_compaction_on_the_session_server(tmp_path):
     assert "compat" not in provider["models"][0] and "reasoning" not in provider["models"][0]
     assert (provider["models"][0]["contextWindow"], provider["models"][0]["maxTokens"]) == (131072, CAP)
     launch, env = next((c, e) for c, e in sandbox.commands if "pi --print" in c)
-    for flag in pi.PLAIN_FLAGS.split():
+    # Mobius' launch: nothing discovered in the task, image or home (extensions, skills, templates, AGENTS.md, MCP)
+    for flag in ("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-mcp"):
         assert flag in launch
     assert "--tools read,write,edit,bash,grep,find,ls" in launch
     # argv as Mobius passes it: Pi trims a prompt read from stdin
@@ -154,8 +156,18 @@ def test_a_full_window_ends_the_run_for_the_verifier(tmp_path):
     assert context.metadata[pi.AGENT_EXIT_STATUS] == context_exit.EXIT_STATUS  # no raise: the verifier runs
 
 
-def test_install_pins_pi_and_the_node_of_the_traces(tmp_path):
-    sandbox = _Sandbox("")
-    asyncio.run(_agent(tmp_path).install(sandbox))
-    script = next(c for c, _ in sandbox.commands if "npm install" in c)
-    assert f"{pi.PI_PACKAGE}@{pi.PI_VERSION}" in script and f"nvm install {pi.NODE_VERSION}" in script
+def test_strict_tool_schemas_reach_pis_provider_compat(monkeypatch):
+    base = {
+        "model": {"preset": "qwen3.5-9b", "backend": "megatron"},
+        "tracking": {"wandb_project": "miles-test"},
+        "agent": {"strict_tool_schemas": True},
+    }
+    with pytest.raises(ValueError, match="strict_tool_schemas"):
+        R.validate(R.from_dict({**base, "taskset": {"harness": R.HARNESS_SANDBOX}}), local_inputs=False)
+    recipe = R.from_dict({**base, "taskset": {"harness": R.HARNESS_PI_SANDBOX}})
+    R.validate(recipe, local_inputs=False)
+    for key, value in R.harbor_env(recipe, "run1").items():
+        monkeypatch.setenv(key, value)
+    kwargs = af.hf.HARNESS_BINDINGS[af.PI_SANDBOX_HARNESS].kwargs(SESSION, "dummy", {}, "openai/model", None)
+    models = pi.models_json(kwargs["base_url"], "model", 131072, CAP, kwargs["strict_tools"])
+    assert models["providers"][pi.PROVIDER]["models"][0]["compat"] == {"supportsStrictMode": True}

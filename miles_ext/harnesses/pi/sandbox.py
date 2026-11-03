@@ -1,10 +1,4 @@
-"""`taskset.harness: pi-sandbox`: Pi (pi-coding-agent) inside the task sandbox (ext-055, see its patch page).
-
-Pi runs unpatched, configured as the Mobius platform runs it for evals (``MobiusPi`` in mobius-platform
-``programs/harbor-eval/patches/harness/pi.py`` on ``staging``): a plain tool-call loop that loads nothing a task,
-image or home directory could add, offers Pi's seven built-in tools and never compacts. The model is Miles'
-session server, as a custom OpenAI-completions provider in Pi's ``models.json``.
-"""
+"""Run Pi inside the task sandbox against Miles' session server: ``taskset.harness: pi-sandbox`` (ext-055)."""
 
 import json
 import shlex
@@ -40,28 +34,38 @@ AGENT_EXIT_STATUS = common.AGENT_EXIT_STATUS
 # what an over-long request's 400 says (SGLang's context-length check)
 _CONTEXT_ERRORS = ("context length", "context window", "maximum context")
 
-# agent user: Node and Pi as Harbor's Pi installs them (global npm under nvm); skips what is in place
+_USE_NODE = f"nvm use --silent {NODE_VERSION} >/dev/null; "
+# agent user: the pinned Node under nvm whatever the image has, then Pi installed globally into it (as Harbor's Pi);
+# skips what is in place
 AGENT_INSTALL = (
     "set -euo pipefail; "
     + common.LOAD_NVM
-    + f'if ! command -v pi >/dev/null 2>&1 || [ "$(pi --version 2>/dev/null | tail -n1)" != "{PI_VERSION}" ]; then '
-    + f"{nvm_node_install_snippet(NODE_VERSION)} && "
+    + f"if ! command -v nvm >/dev/null 2>&1 || ! nvm ls {NODE_VERSION} >/dev/null 2>&1; then "
+    + f"{nvm_node_install_snippet(NODE_VERSION)}; fi; "
+    + f"nvm alias default {NODE_VERSION} >/dev/null; "
+    + _USE_NODE
+    + 'if [ "$(command -v pi)" != "$(npm prefix -g)/bin/pi" ] '
+    + f'|| [ "$(pi --version 2>/dev/null | tail -n1)" != "{PI_VERSION}" ]; then '
     # --ignore-scripts: no native builds (task images have no compilers)
     + f"npm install -g --no-audit --no-fund --ignore-scripts {PI_PACKAGE}@{PI_VERSION} >/dev/null; fi; "
     + "pi --version"
 )
 
 
-def models_json(base_url: str, model: str, context_window: int, max_output: int) -> dict[str, Any]:
-    """Pi's provider for Miles' session server. Pi's own compat defaults for an OpenAI-style server: no strict
-    tool schemas and no thinking parameters, so the chat template decides reasoning."""
+def models_json(base_url: str, model: str, context_window: int, max_output: int, strict_tools: bool) -> dict[str, Any]:
+    """Pi's provider for Miles' session server. Pi's own compat defaults for an OpenAI-style server: no thinking
+    parameters, so the chat template decides reasoning, and plain tool schemas unless ``strict_tools`` (Pi then
+    makes every argument required, optional ones nullable, and sends ``strict: true``, as for Z.ai)."""
+    entry: dict[str, Any] = {"id": model, "contextWindow": context_window, "maxTokens": max_output}
+    if strict_tools:
+        entry["compat"] = {"supportsStrictMode": True}
     return {
         "providers": {
             PROVIDER: {
                 "baseUrl": base_url,
                 "apiKey": API_KEY_ENV,
                 "api": "openai-completions",
-                "models": [{"id": model, "contextWindow": context_window, "maxTokens": max_output}],
+                "models": [entry],
             }
         }
     }
@@ -70,6 +74,7 @@ def models_json(base_url: str, model: str, context_window: int, max_output: int)
 def command(model: str, instruction: str) -> str:
     return (
         common.LOAD_NVM
+        + _USE_NODE
         + f"pi --print --mode json --session-dir {SESSIONS} --provider {PROVIDER} --model {shlex.quote(model)} "
         # "--": a task that starts with "-" is the prompt, not an option
         + f"{PLAIN_FLAGS} --tools {TOOLS} -- {shlex.quote(instruction)} "
@@ -93,11 +98,10 @@ def outcome(events: str, reply_cap: int) -> str | Exception | None:
     """From Pi's last reply: None (completed), ContextExhausted (the window filled), or the exception to raise."""
     from harbor.llms.base import SingleTurnMaxSeqLenExceededError
 
-    last = None
-    for last in _assistant_ends(events):
-        pass
-    if last is None:
+    replies = list(_assistant_ends(events))
+    if not replies:
         return NonZeroAgentExitCodeError("pi ended without a reply")
+    last = replies[-1]
     reason = last.get("stopReason")
     if reason == "stop":
         return None
@@ -129,17 +133,18 @@ class SandboxPi(common.PublicSetup, BaseInstalledAgent):
         base_url: str,
         model_info: dict[str, Any] | None = None,
         max_seq_len: int | None = None,
+        strict_tools: bool = False,
         **kwargs,
     ):
         """``base_url``: the session's OpenAI root (``.../v1``). ``model_info``: Miles' ``max_input_tokens`` (Pi's
         context window) and ``max_output_tokens`` (its reply cap). ``max_seq_len`` is what Miles passes every
-        harness; Pi does not use it."""
+        harness; Pi does not use it. ``strict_tools``: recipe ``agent.strict_tool_schemas``."""
         super().__init__(*args, **kwargs)
         info = model_info or {}
         window, self._reply_cap = int(info["max_input_tokens"]), int(info["max_output_tokens"])
         # Harbor names the model openai/<name>; the session server takes the bare name
         self._model = self.model_name.rpartition("/")[2]
-        self._models = models_json(base_url, self._model, window, self._reply_cap)
+        self._models = models_json(base_url, self._model, window, self._reply_cap, strict_tools)
 
     @staticmethod
     def name() -> str:
