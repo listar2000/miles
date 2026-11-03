@@ -48,7 +48,7 @@ index 49a758f9eb..2d987f36fc 100644
              host_access.flags = (
                  driver.CUmemAccess_flags.CU_MEM_ACCESS_FLAGS_PROT_READWRITE
 diff --git a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
-index 94b1e8b89c..8d5e09ad56 100644
+index 94b1e8b89c..43b010e5c1 100644
 --- a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
 +++ b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
 @@ -24,7 +24,9 @@ class Driver:
@@ -80,6 +80,15 @@ index 94b1e8b89c..8d5e09ad56 100644
          # CUDA may not echo HW_DECOMPRESS; the mapped pointer still must admit it.
          properties.allocFlags.usage = 0
          return 0, properties
+@@ -90,7 +96,7 @@ class Driver:
+     def cuMemSetAccess(self, address, size, descriptors, count):
+         assert count == 2
+         assert [(x.location.type, x.location.id, x.flags) for x in descriptors] == [
+-            (3, 0, 3),
++            (getattr(self, "created_location", 3), 0, 3),  # [fork fix-074]
+             (1, 2, 1),
+         ]
+         self.calls.append("access")
 @@ -114,11 +120,11 @@ class Driver:
          return (0,)
  
