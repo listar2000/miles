@@ -7,7 +7,10 @@
 name: glm53-flash-split-gpud
 model:
   preset: glm-5.3-flash
-  revision: 46a050bec13002ad29ee795c16e61cf4fa3c4a9c
+  # Not an HF revision: the release (46a050bec1) re-quantized as the trainer exports it (release XOR the
+  # step-0 GPU-delta of glm53-gpud-full-1103-a7, built by a CPU job). Against the release ~95% of FP8 bytes
+  # differ, a ~240 GB first delta the receiver cannot pin under Modal; against this base syncs stay small.
+  revision: 29523a33f41b2cea7f85f9288433a50fb506eb39
 cluster:
   gpu: B300
   nodes: 1
@@ -51,7 +54,7 @@ algorithm:
   max_tokens_per_gpu: 8192
   lr: 1.0e-6
   max_weight_staleness: 2
-  sglang_mem_fraction: 0.75
+  sglang_mem_fraction: 0.6  # headroom for GPU-delta decode scratch
   routing_replay: true
 async:
   max_concurrent_samples: 128
