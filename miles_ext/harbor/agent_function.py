@@ -4,7 +4,7 @@ One Harbor trial per rollout sample, built on Miles' in-process Harbor agent
 function (``examples/experimental/harbor/harbor_agent_function.py``), which the
 fork imports from the source tree instead of vendoring a copy: an upstream sync
 brings its new version along, and an API change fails loudly here. This module
-adds four in-fork harnesses and owns the trial config; the upstream file is
+adds five in-fork harnesses and owns the trial config; the upstream file is
 not edited.
 
 The harness comes from ``MILES_EXT_HARNESS`` (set by the launcher from the
@@ -33,6 +33,10 @@ deepseek-sandbox
     sandbox (``harnesses.deepseek.sandbox.SandboxDeepSeek``, ext-046) and calls the
     session server's Anthropic Messages route through the tunnel.
     ``MILES_EXT_COMPACT_AT_TOKENS`` turns on its compaction as for terminus.
+pi-sandbox
+    Pi, pinned and configured as the Mobius platform runs it, inside the task
+    sandbox (``harnesses.pi.sandbox.SandboxPi``, ext-055); it calls the session
+    server's chat completions route through the tunnel and never compacts.
 
 Any other name goes through upstream's bindings unchanged (e.g. ``terminus-2``).
 
@@ -64,7 +68,7 @@ from urllib.parse import urlsplit
 from miles.rollout.agentic.session import openai_session_url
 
 from miles_ext.harbor import task_hash, trial_procs, upstream
-from miles_ext.harnesses.deepseek import sandbox as deepseek_sandbox
+from miles_ext.harnesses import common
 from miles_ext.harnesses.mini_swe_agent import context_exit
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes import recipe as R
@@ -74,13 +78,14 @@ hf = upstream.harbor_agent_function()
 logger = logging.getLogger(__name__)
 
 SANDBOX_HARNESS, HOST_HARNESS, TERMINUS_SANDBOX_HARNESS = R.HARNESS_SANDBOX, R.HARNESS_HOST, R.HARNESS_TERMINUS_SANDBOX
-DEEPSEEK_SANDBOX_HARNESS = R.HARNESS_DEEPSEEK_SANDBOX
+DEEPSEEK_SANDBOX_HARNESS, PI_SANDBOX_HARNESS = R.HARNESS_DEEPSEEK_SANDBOX, R.HARNESS_PI_SANDBOX
 # Harbor resolves agents it does not know by import path
 _IMPORT_PATHS = {
     SANDBOX_HARNESS: "miles_ext.harnesses.mini_swe_agent.sandbox:SandboxMiniSweAgent",
     HOST_HARNESS: "miles_ext.harnesses.mini_swe_agent.host:HostMiniSweAgent",
     TERMINUS_SANDBOX_HARNESS: "miles_ext.harnesses.terminus.sandbox:SandboxTerminus2",
     DEEPSEEK_SANDBOX_HARNESS: "miles_ext.harnesses.deepseek.sandbox:SandboxDeepSeek",
+    PI_SANDBOX_HARNESS: "miles_ext.harnesses.pi.sandbox:SandboxPi",
 }
 COMPACT_ENV = "MILES_EXT_COMPACT_AT_TOKENS"
 
@@ -171,6 +176,10 @@ hf.HARNESS_BINDINGS[TERMINUS_SANDBOX_HARNESS] = hf.HarnessBinding(
     kwargs=_terminus_sandbox_kwargs, env=hf.HARNESS_BINDINGS["terminus-2"].env
 )
 hf.HARNESS_BINDINGS[DEEPSEEK_SANDBOX_HARNESS] = hf.HarnessBinding(kwargs=_deepseek_sandbox_kwargs, env=_deepseek_env)
+# Pi reads its endpoint from models.json, not the environment; its window and reply cap come from model_info
+hf.HARNESS_BINDINGS[PI_SANDBOX_HARNESS] = hf.HarnessBinding(
+    kwargs=lambda session_url, *_: {"base_url": session_url}, env=lambda url, key: {}
+)
 # harnesses that run inside the sandbox and reach the model through the session tunnel
 _IN_SANDBOX = R.IN_SANDBOX_HARNESSES
 
@@ -317,7 +326,7 @@ async def run_trial(
     metrics = out["agent_metrics"]
     if out["exit_status"] == "Submitted" and context_exit.EXIT_STATUS in (
         metrics.get("mswea_exit_status"),
-        metrics.get(deepseek_sandbox.AGENT_EXIT_STATUS),
+        metrics.get(common.AGENT_EXIT_STATUS),
     ):
         out["exit_status"] = context_exit.EXIT_STATUS
         if os.environ.get("MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO") == "1":

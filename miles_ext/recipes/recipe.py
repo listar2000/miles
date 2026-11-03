@@ -33,11 +33,21 @@ HARNESS_HOST = "mini-swe-agent-host"  # mini-swe-agent loop in the rollout worke
 HARNESS_SINGLE_TURN = "single-turn"  # ext-038: one reply per prompt row, graded in process
 HARNESS_TERMINUS_SANDBOX = "terminus-2-sandbox"  # ext-045: Harbor's Terminus-2 inside the task sandbox
 HARNESS_DEEPSEEK_SANDBOX = "deepseek-sandbox"  # ext-046: DeepSeek's own agent (dsh) inside the task sandbox
-HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST, HARNESS_SINGLE_TURN, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
+HARNESS_PI_SANDBOX = "pi-sandbox"  # ext-055: Pi inside the task sandbox, as the Mobius platform runs it
+HARNESSES = (
+    HARNESS_SANDBOX,
+    HARNESS_HOST,
+    HARNESS_SINGLE_TURN,
+    HARNESS_TERMINUS_SANDBOX,
+    HARNESS_DEEPSEEK_SANDBOX,
+    HARNESS_PI_SANDBOX,
+)
 # reach the model through the session tunnel
-IN_SANDBOX_HARNESSES = (HARNESS_SANDBOX, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
-# compact their context at agent.compact_at_tokens and take their window and reply cap from the recipe
+IN_SANDBOX_HARNESSES = (HARNESS_SANDBOX, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX, HARNESS_PI_SANDBOX)
+# compact their context at agent.compact_at_tokens
 COMPACTING_HARNESSES = (HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
+# take their context window and reply cap from the recipe
+WINDOWED_HARNESSES = (*COMPACTING_HARNESSES, HARNESS_PI_SANDBOX)
 # deepseek-sandbox's compaction keeps this share of (max_seq_len - max_response_len) verbatim (dsh's default)
 DEEPSEEK_RETAIN_RATIO = 0.16
 AGENT_FUNCTIONS = {
@@ -45,6 +55,7 @@ AGENT_FUNCTIONS = {
     HARNESS_HOST: "miles_ext.harbor.agent_function.run",
     HARNESS_TERMINUS_SANDBOX: "miles_ext.harbor.agent_function.run",
     HARNESS_DEEPSEEK_SANDBOX: "miles_ext.harbor.agent_function.run",
+    HARNESS_PI_SANDBOX: "miles_ext.harbor.agent_function.run",
     HARNESS_SINGLE_TURN: "miles_ext.tasks.single_turn.run",
 }
 # Miles' --custom-agent-function-mode per harness: Harbor's agent function forks each trial itself (ext-042)
@@ -53,6 +64,7 @@ AGENT_FUNCTION_MODES = {
     HARNESS_HOST: "inline",
     HARNESS_TERMINUS_SANDBOX: "inline",
     HARNESS_DEEPSEEK_SANDBOX: "inline",
+    HARNESS_PI_SANDBOX: "inline",
     HARNESS_SINGLE_TURN: "subproc",
 }
 # Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
@@ -844,7 +856,7 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         env["MSWEA_CWD"] = agent["cwd"]
     if agent["context_exhausted_scores_zero"]:
         env["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] = "1"
-    if recipe["taskset"]["harness"] in COMPACTING_HARNESSES:
+    if recipe["taskset"]["harness"] in WINDOWED_HARNESSES:
         # the harness's context limit (its compaction and context checks) and reply cap; upstream's defaults are 32k/8k
         env["AGENT_MAX_INPUT_TOKENS"] = str(recipe["algorithm"]["max_seq_len"])
         env["AGENT_MAX_OUTPUT_TOKENS"] = str(recipe["algorithm"]["max_response_len"])
