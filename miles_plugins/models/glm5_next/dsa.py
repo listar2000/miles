@@ -159,6 +159,7 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
             pool_cu_seqlens=pool_cu_seqlens,
             index_topk=self.index_topk,
             kpool=self.index_kpool,
+            split_group=self.pg_collection.tp,  # [fork fix-071] TP ranks hold the same queries and split them
         )
 
     def forward(
