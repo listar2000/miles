@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| hook-018 | Hook | GPU-delta receiver mapping for GLM-5.3-Flash: KDA, DSA/MLA, mHC, triton block-FP8 experts, dense FP8 with FP32 scales (DeepGEMM off) | active; remove when SGLang maps glm5_next itself | [hook-018-gpu-delta-glm53.md](hook-018-gpu-delta-glm53.md) |
 | port-002 | Port | Miles GPU-delta weight sync (radixark/miles#3894): `--update-weight-transfer-mode gpu-delta`, trainer-side XOR + GPU compression, publication and receiver coordination | active; remove when the PR is merged and synced | [port-002-miles-gpu-delta.md](port-002-miles-gpu-delta.md) |
 | fix-074 | Fix | GPU-delta host arenas fall back to HOST pinned memory when gVisor refuses HOST_NUMA `cuMemCreate` (Modal B300) | active; remove when the PR stops requiring HOST_NUMA | [fix-074-gpu-delta-host-pinned.md](fix-074-gpu-delta-host-pinned.md) |
 | port-001 | Port | SGLang GPU-delta receiver (sgl-project/sglang#42210): hardware-decompressed XOR deltas applied in place, `/update_weights_from_gpu_delta` | active; remove when the PR is in our pinned `sglang-miles` | [port-001-sglang-gpu-delta.md](port-001-sglang-gpu-delta.md) |
