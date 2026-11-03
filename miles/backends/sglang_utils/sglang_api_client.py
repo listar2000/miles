@@ -98,9 +98,10 @@ class SGLangApiClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            if hasattr(e, "add_note"):
-                e.add_note(f"{response.text=}")
-            raise
+            # [fork fix-078] carry the server's reply in the message: notes do not survive every re-raise
+            raise httpx.HTTPStatusError(
+                f"{e}; response={response.text[:3000]}", request=e.request, response=e.response
+            ) from e
         if not response.content:
             return None
         return response.json()

@@ -117,6 +117,11 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, results_volume, cal
     ports = [split.ENGINE_HTTP_PORT + i for i in range(len(spec["commands"]))]
     agent_port = split.ENGINE_HTTP_PORT + len(ports)
     procs = []
+    try:  # overnight diagnostic: GPU-delta's receiver host cache lives on /dev/shm
+        import shutil
+        print(f"engine container: /dev/shm {shutil.disk_usage('/dev/shm')}", flush=True)
+    except OSError as error:
+        print(f"engine container: /dev/shm unavailable: {error}", flush=True)
     try:
         for cmd in spec["commands"]:
             print(f"engine: {cmd}", flush=True)
