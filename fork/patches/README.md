@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| fix-074 | Fix | GPU-delta host arenas fall back to HOST pinned memory when gVisor refuses HOST_NUMA `cuMemCreate` (Modal B300) | active; remove when the PR stops requiring HOST_NUMA | [fix-074-gpu-delta-host-pinned.md](fix-074-gpu-delta-host-pinned.md) |
 | port-001 | Port | SGLang GPU-delta receiver (sgl-project/sglang#42210): hardware-decompressed XOR deltas applied in place, `/update_weights_from_gpu_delta` | active; remove when the PR is in our pinned `sglang-miles` | [port-001-sglang-gpu-delta.md](port-001-sglang-gpu-delta.md) |
 | port-kind | Infra | The Port kind (open upstream PRs carried byte for byte) and SGLang changes as patch files only | active | [port-kind.md](port-kind.md) |
 | fix-073 | Fix | `--stream-optimizer-state-host-gb` again (fix-045, removed by fix-060): Adam's NVMe-streamed state in pinned host memory up to a per-GPU budget, for full-parameter GLM-5.3-Flash on one trainer node | active; remove when upstream nvme_stream has a host tier | [fix-073-nvme-host-tier-glm53.md](fix-073-nvme-host-tier-glm53.md) |
