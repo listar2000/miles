@@ -1,0 +1,17 @@
+2026-11-03, Modal CPU function on starlimobius/miles-mobius:main with port-001 + fix-074 + hook-018's weight_sync/ and
+test/registered/unit/gpu_delta_weight_sync/ copied over the installed SGLang.
+
+$ python3 -m pytest -q -o addopts= -p no:cacheprovider -W ignore test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_glm5_next.py
+
+Head (hook-018-gpu-delta-glm53.patch sha256 bd9fa187b8d69029..., as on this branch):
+5 passed in 21.65s
+
+Base (same test file, models.py from port-001 without hook-018):
+5 failed in 23.52s
+  4 x AttributeError: module 'sglang.srt.weight_sync.gpu_delta.models' has no attribute 'Glm5NextMapping'
+  1 x ValueError: unsupported GPU delta model mapping: Glm5NextForConditionalGeneration
+
+The first benchmark runs (comparison.json, summary.json here) used hook-018-gpu-delta-glm53.patch sha256
+ec440e55fa117f44...; the patch at this head adds only the UE8M0 refusal, BF16 triton-expert admission and this test file
+on top of it. Two later runs used this head's patch, bd9fa187b8d69029..., and PASS the same final-target comparison:
+fork/patches/evidence/fix-079/bench-host and bench-staged (same slice, engine and benchmark arguments).

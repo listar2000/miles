@@ -1,0 +1,138 @@
+{
+  "path": "/tmp/bench/inputs",
+  "id": "eb64a1385e8cc85b1062c5098f624eafbdbe8bcbd11627ec920d68989091c4a5",
+  "reused": false,
+  "preparation": {
+    "settings": {
+      "model": "/__modal/volumes/vo-kcRyhiPoFIJGHvtjJI72jY/gpudelta/GLM-5.3-Flash-fp8-4layer",
+      "base_files": [
+        {
+          "path": "config.json",
+          "nbytes": 20793,
+          "mtime_ns": 1793684089281495348
+        },
+        {
+          "path": "generation_config.json",
+          "nbytes": 194,
+          "mtime_ns": 1793684089289495928
+        },
+        {
+          "path": "model-00001-of-00005.safetensors",
+          "nbytes": 428105896,
+          "mtime_ns": 1793683974560481925
+        },
+        {
+          "path": "model-00002-of-00005.safetensors",
+          "nbytes": 7428085496,
+          "mtime_ns": 1793684013236883003
+        },
+        {
+          "path": "model-00003-of-00005.safetensors",
+          "nbytes": 7554375968,
+          "mtime_ns": 1793684050297707110
+        },
+        {
+          "path": "model-00004-of-00005.safetensors",
+          "nbytes": 7428085496,
+          "mtime_ns": 1793684080117132557
+        },
+        {
+          "path": "model-00005-of-00005.safetensors",
+          "nbytes": 3664856160,
+          "mtime_ns": 1793684088510439456
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "nbytes": 600439,
+          "mtime_ns": 1793684089175487664
+        },
+        {
+          "path": "processor_config.json",
+          "nbytes": 909,
+          "mtime_ns": 1793684089292496145
+        },
+        {
+          "path": "tokenizer.json",
+          "nbytes": 20217442,
+          "mtime_ns": 1793684089493510717
+        },
+        {
+          "path": "tokenizer_config.json",
+          "nbytes": 761,
+          "mtime_ns": 1793684089510511949
+        }
+      ],
+      "seed": 20261001,
+      "ratio": 0.002,
+      "versions": 3,
+      "mutation_sha256": "ac0055efdf24c56b7b73e790b56486ec2ef659dda04819ea72bd94f818de0d30",
+      "mutation_frame_bytes": 1048576
+    },
+    "rate": 0.0018986407089233398,
+    "plan_digest": "2579eb58bc792e88806d15b09c0c2fb70b7148c7edec5cfcc54c3f9e0b7a9fca",
+    "canonical_bytes": 25375471840,
+    "files": [
+      {
+        "path": "inventory/inventory.json",
+        "nbytes": 9064548
+      },
+      {
+        "path": "data/index.json",
+        "nbytes": 1770803
+      },
+      {
+        "path": "data/v1.bin",
+        "nbytes": 25375471840
+      },
+      {
+        "path": "data/v2.bin",
+        "nbytes": 25375471840
+      },
+      {
+        "path": "target-checkpoint/config.json",
+        "nbytes": 20793
+      },
+      {
+        "path": "target-checkpoint/generation_config.json",
+        "nbytes": 194
+      },
+      {
+        "path": "target-checkpoint/model-00001-of-00005.safetensors",
+        "nbytes": 428105896
+      },
+      {
+        "path": "target-checkpoint/model-00002-of-00005.safetensors",
+        "nbytes": 7428085496
+      },
+      {
+        "path": "target-checkpoint/model-00003-of-00005.safetensors",
+        "nbytes": 7554375968
+      },
+      {
+        "path": "target-checkpoint/model-00004-of-00005.safetensors",
+        "nbytes": 7428085496
+      },
+      {
+        "path": "target-checkpoint/model-00005-of-00005.safetensors",
+        "nbytes": 3664856160
+      },
+      {
+        "path": "target-checkpoint/model.safetensors.index.json",
+        "nbytes": 600439
+      },
+      {
+        "path": "target-checkpoint/processor_config.json",
+        "nbytes": 909
+      },
+      {
+        "path": "target-checkpoint/tokenizer.json",
+        "nbytes": 20217442
+      },
+      {
+        "path": "target-checkpoint/tokenizer_config.json",
+        "nbytes": 761
+      }
+    ],
+    "preparation_wall_s": 52.17031712100001
+  }
+}
