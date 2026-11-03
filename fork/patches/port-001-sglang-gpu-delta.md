@@ -17,10 +17,13 @@ place with Blackwell's hardware decompression engine. The PR is a WIP draft upst
 - Rejected: a `listar2000/sglang` fork (user prefers patch files); waiting for the upstream merge.
 
 ## How it is applied
-`fork/deps/sglang/port-001-gpu-delta.patch`, applied by `apply.py` with the other patches. Inert until a
+`fork/deps/sglang/port-001-gpu-delta.patch`, applied by `apply.py` with the other patches. `apply.py` applies ports
+first and then the rest in name order, one patch at a time, because a fix on top of a port (fix-074) edits a file the
+port creates, which a single `git apply` of all files does not see; a failure reverts the patches already applied, so
+the result is still all or none. Inert until a
 caller uses `/update_weights_from_gpu_delta` (Miles side: port-002). Needs `nvidia-libnvcomp-cu13==6.x` at
 runtime. Verify: `apply.py <sglang checkout> <SGLANG_COMMIT> --check`; the launcher's `--check-only` lists the
-marker; gate E0 runs the PR's own CUDA tests on Modal. On a sync: if SGLang now has the PR, delete the patch and
+marker; the PR's own CUDA tests on a Modal B300 (results on fix-074's page). On a sync: if SGLang now has the PR, delete the patch and
 retire port-001; if the PR head moved and we want it, refresh the patch in one commit with the new sha.
 
 ## Remove when
