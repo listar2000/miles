@@ -18,7 +18,7 @@ cluster:
   timeout_hours: 4
   placement: split
   engine:
-    memory_gib: 768
+    memory_gib: 1536  # receiver host arenas for a ~240 GB full-model delta per engine
     disk_gib: 1024
     timeout_hours: 4
     idle_minutes: 10

@@ -843,7 +843,10 @@ def _on_root(action, broadcast_value=True):
             value = action()
             result[0] = {"value": value if broadcast_value else None}
         except Exception as error:
-            result[0] = {"error": f"{type(error).__name__}: {error}"}
+            # [fork fix-078] keep the receiver's reply (the client adds it as a note) in the error
+            notes = "; ".join(getattr(error, "__notes__", ()))
+            result[0] = {"error": f"{type(error).__name__}: {error}" + (f" [{notes[:4000]}]" if notes else "")}
+            logger.error("[gpu delta] root action failed: %s", result[0]["error"])
     dist.broadcast_object_list(result, src=0, group=get_gloo_group())
     if "error" in result[0]:
         raise RuntimeError(result[0]["error"])
