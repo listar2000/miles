@@ -63,3 +63,9 @@ checkpoint:
 tracking:
   wandb_project: miles-glm53
   wandb_entity: mobiuslab
+# GPU-delta's SGLang receiver admits only attention TP1 (port-001 _describe): each TP4 engine runs attention DP4,
+# as the GLM GPU-delta bench (miles_ext/gpu_delta/glm_bench.py) does. Without it get_gpu_delta_info returns 409.
+extra_args:
+  - --sglang-enable-dp-attention
+  - --sglang-dp-size
+  - "4"
