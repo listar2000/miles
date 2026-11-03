@@ -3750,3 +3750,25 @@ class TestWeightUpdateFaultToleranceSupport:
 
         with pytest.raises(AssertionError, match="weight_update FT requires Megatron"):
             miles_validate_args(args)
+
+
+class TestStreamOptimizerStateHostBudget:
+    """[fork fix-073] The host budget is a finite, non-negative size, and only the disk-streamed Adam store reads it."""
+
+    def _parse(self, extra):
+        return get_megatron_arg_parser().parse_args(["--num-rollout", "1", *extra] + REQUIRED_ARGS)
+
+    @pytest.mark.parametrize("budget", ["-1", "nan", "inf"])
+    def test_invalid_budgets_are_refused(self, budget):
+        args = self._parse(["--stream-optimizer-state-to-disk", "--stream-optimizer-state-host-gb", budget])
+        with pytest.raises(AssertionError, match="finite number >= 0"):
+            miles_validate_args(args)
+
+    @pytest.mark.parametrize("budget", ["0", "170"])
+    def test_valid_budgets_pass(self, budget):
+        disk_adam = ["--use-distributed-optimizer", "--stream-optimizer-state-to-disk"]
+        miles_validate_args(self._parse([*disk_adam, "--stream-optimizer-state-host-gb", budget]))
+
+    def test_a_budget_without_disk_streaming_is_refused(self):
+        with pytest.raises(AssertionError, match="needs --stream-optimizer-state-to-disk"):
+            miles_validate_args(self._parse(["--stream-optimizer-state-host-gb", "10"]))

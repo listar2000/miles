@@ -69,6 +69,19 @@ def add_fork_arguments(parser):
         ),
     )
     # [fork fix-006] end
+    # [fork fix-073] begin
+    parser.add_argument(
+        "--stream-optimizer-state-host-gb",
+        type=float,
+        default=0.0,
+        help=(
+            "Per-GPU budget, in GiB, of page-locked host memory for the streamed optimizer state. Buckets "
+            "fill it in order and the rest stay on disk, so a step moves those bytes over PCIe instead of "
+            "through the disk. The values are the same either way; size it to what the node's memory request "
+            "leaves after every other host user (activation offload, Ray)."
+        ),
+    )
+    # [fork fix-073] end
 
     # Hooks the fork's extension code plugs into
     # [fork hook-001] begin

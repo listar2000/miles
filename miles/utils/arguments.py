@@ -3971,6 +3971,13 @@ def miles_validate_args(args):
         )
     # [fork fix-006] end
 
+    # [fork fix-073] the host budget only feeds the Adam store; Muon's file-backed buffers ignore it
+    assert (
+        math.isfinite(args.stream_optimizer_state_host_gb) and args.stream_optimizer_state_host_gb >= 0
+    ), f"--stream-optimizer-state-host-gb must be a finite number >= 0, got {args.stream_optimizer_state_host_gb}"
+    assert args.stream_optimizer_state_host_gb == 0 or (
+        args.stream_optimizer_state_to_disk and "muon" not in (args.optimizer or "").lower()
+    ), "--stream-optimizer-state-host-gb needs --stream-optimizer-state-to-disk with Adam"
     if args.stream_optimizer_state_to_disk:
         assert args.offload_train_target == "disk" or not args.offload_train, (
             "--stream-optimizer-state-to-disk with --offload-train requires "
