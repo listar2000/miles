@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-051 | Ext | GLM-5.3-Flash presets (FP8 release served and synced in its own format; 4-layer BF16 slice for smoke) and a together-mode 2-node full-parameter recipe | active; remove when upstream ships GLM recipe presets | [ext-051-glm53-recipe.md](ext-051-glm53-recipe.md) |
 | ext-050 | Ext | Monitor: SFT runs (kind `sft`) show loss, validation NLL, LR, throughput, checkpoints; an eval names the run and step it evaluates and the run lists those evals with pass@k | active; remove when the monitor is retired | [ext-050-monitor-sft-runs.md](ext-050-monitor-sft-runs.md) |
 | ext-049 | Ext | SFT record connectors: `write_records` validates and reports; the ATIF connector turns Harbor trial dirs (continuations, `context_management`, subagents) into records by the spec alone | active; remove when upstream Miles reads ATIF into session-server-shaped SFT data | [ext-049-sft-connectors.md](ext-049-sft-connectors.md) |
 | ext-048 | Ext | SFT records (OpenAI messages plus each call's context) tokenized with session server v2's own attach rule and TITO, offline into shards a rollout function serves; `thinking_retention` `all` or `template` | active; remove when upstream tokenizes SFT through the session server's rules | [ext-048-sft-tokenization.md](ext-048-sft-tokenization.md) |

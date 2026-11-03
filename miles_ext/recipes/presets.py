@@ -16,7 +16,7 @@ engines serve; ``train_dir_name``, when set, is a separate BF16 copy under
 /models that the trainer loads (the released checkpoint is quantized).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -149,4 +149,46 @@ PRESETS: dict[str, Preset] = {
         packed_batches=False,
         attention_backend=None,
     ),
+    # scripts/run_glm5_3_flash.py. Serve and sync FP8 weights; the trainer dequantizes the same checkpoint on load.
+    "glm-5.3-flash": Preset(
+        hf_repo="zai-org/GLM-5.3-Flash",
+        tito_model="glm53",
+        tool_call_parser="glm47",
+        reasoning_parser="glm45",
+        backend="megatron",
+        megatron_model_type="glm5.3-flash",
+        precisions={"fp8": {}},
+        precision_min_gpus={"fp8": 2},  # 321 GB of weights
+        env={
+            "SGLANG_HEALTH_CHECK_TIMEOUT": "900",
+            # inductor's subprocess compile pool deadlocks under the torch_memory_saver LD_PRELOAD (upstream launcher)
+            "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            "PYTHONFAULTHANDLER": "1",
+        },
+        # Share the radix cache across turns; Triton exposes expert ids for routing replay.
+        sglang_args="""
+            --sglang-ep-size {gpus}
+            --sglang-moe-runner-backend triton
+            --sglang-chunked-prefill-size 8192
+            --sglang-dsa-prefill-backend tilelang --sglang-dsa-decode-backend tilelang
+            --sglang-kv-cache-dtype bfloat16
+            --router-health-success-threshold 1 --router-health-check-interval-secs 15
+            --router-health-failure-threshold 40
+        """,
+        megatron_args="""
+            --model-name glm5_next --qkv-format thd
+            --train-memory-margin-bytes 3221225472 --distributed-timeout-minutes 60
+        """,
+        packed_batches=False,
+        attention_backend=None,
+    ),
 }
+
+# Upstream's 4-layer slice of GLM-5.3-Flash (BF16, layers KDA/DSA/KDA/DSA, first layer dense): smoke tests only.
+PRESETS["glm-5.3-flash-4layer"] = replace(
+    PRESETS["glm-5.3-flash"],
+    hf_repo="CharyZeng/GLM-5.3-Flash-4layer",
+    megatron_model_type="glm5.3-flash-4layer",
+    precisions={"bf16": {}},
+    precision_min_gpus={},
+)

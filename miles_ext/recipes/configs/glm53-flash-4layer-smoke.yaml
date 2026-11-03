@@ -1,0 +1,54 @@
+# GLM-5.3-Flash, full-parameter RL in one cluster ("together" mode), on upstream's 4-layer slice: a plumbing
+# smoke for the glm-5.3-flash presets before the full model. Two B300:8 nodes: the trainer on the first
+# (TP8 EP8 PP1, the full model's one-node layout), two TP4 BF16 engines on the second, NCCL weight sync, R3,
+# fully async. Single-turn STAK prompts (ext-038), so no sandboxes. The slice is not a real model: rewards
+# are not expected to move; the smoke checks startup, weight sync, R3 rows and the train/rollout log-prob gap.
+# Needs: CharyZeng/GLM-5.3-Flash-4layer at model.revision on the weights volume, plus the full release's
+# processor_config.json in that snapshot dir (fork/patches/ext-051-glm53-recipe.md, "How it is applied");
+# MILES_DATA = a dir holding prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
+name: glm53-flash-4layer-smoke
+model:
+  preset: glm-5.3-flash-4layer
+  revision: 7fb7883207fe73ea04430ac392f6ffe2b9f936c4
+cluster:
+  gpu: B300
+  nodes: 2  # 1 trainer + 1 rollout
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 512
+  timeout_hours: 1
+parallel:
+  tp: 8
+  pp: 1
+  cp: 1
+  ep: 8
+rollout:
+  gpus_per_engine: 4
+  context_length: 32768
+  max_running_requests: 128
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 2
+  rollout_batch_size: 32
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 2048
+  max_seq_len: 8192
+  max_tokens_per_gpu: 8192
+  lr: 1.0e-6
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+async:
+  max_concurrent_samples: 256
+checkpoint:
+  save_interval: 1
+  keep: 1
+  save_optimizer: true
+  save_rollout_data: false
+tracking:
+  wandb_project: miles-glm53
+  wandb_entity: mobiuslab
