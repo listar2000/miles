@@ -50,10 +50,24 @@ class Agent:
                     return web.json_response({"ok": False, "error": f"{type(e).__name__}: {e}"[:2000]})
             return web.json_response({"ok": True, **out})
 
+        async def reload(request):
+            """ext-053: make a gpu-delta publication the trainer committed visible to the engines."""
+            body = await request.json()
+            async with self.lock:
+                try:
+                    t0 = time.monotonic()
+                    await asyncio.to_thread(self.results_volume.reload)
+                    if not Path(body["dir"]).is_dir():
+                        raise FileNotFoundError(f"{body['dir']} not on the volume after reload")
+                except Exception as e:
+                    return web.json_response({"ok": False, "error": f"{type(e).__name__}: {e}"[:2000]})
+            return web.json_response({"ok": True, "reload_s": time.monotonic() - t0})
+
         async def main():
             app = web.Application()
             app.router.add_post("/connect", connect)
             app.router.add_post("/push", push)
+            app.router.add_post("/reload", reload)
             runner = web.AppRunner(app, access_log=None)
             await runner.setup()
             await web.TCPSite(runner, "127.0.0.1", port).start()

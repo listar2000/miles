@@ -99,6 +99,26 @@ class VolumeAdapterSync(_protocol_base()):
         )
 
 
+def gpu_delta_post_write(args, version_dir: str, rollout_engines) -> None:
+    """ext-053: Miles' --custom-update-weight-post-write-path for gpu-delta in split placement.
+
+    Called on every trainer rank after its publication files are written and before the engines read them.
+    Rank 0 has the trainer's function process commit the results volume and the engine container's agent
+    reload it; Miles' collective check after the hook holds the other ranks until then."""
+    import torch.distributed as dist
+
+    if dist.is_initialized() and dist.get_rank() != 0:
+        return
+    t0 = time.monotonic()
+    request_commit(Path(version_dir).name)
+    t1 = time.monotonic()
+    _call(f"{os.environ[AGENT_ENV]}/reload", {"dir": str(version_dir)}, timeout=PUSH_TIMEOUT_SECS)
+    print(
+        f"[split gpu-delta {Path(version_dir).name}] commit {t1 - t0:.1f}s reload {time.monotonic() - t1:.1f}s",
+        flush=True,
+    )
+
+
 def write_sync(root: Path, version: int, buckets: list[list]) -> Path:
     """Write one sync's tensors and bucket order to ``root/v<version>``."""
     from safetensors.torch import save_file
