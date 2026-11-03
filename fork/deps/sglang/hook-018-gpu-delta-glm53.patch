@@ -1,5 +1,5 @@
 diff --git a/python/sglang/srt/weight_sync/gpu_delta/models.py b/python/sglang/srt/weight_sync/gpu_delta/models.py
-index c685cd2a7f..0e16a33afe 100644
+index c685cd2a7f..e99b533da5 100644
 --- a/python/sglang/srt/weight_sync/gpu_delta/models.py
 +++ b/python/sglang/srt/weight_sync/gpu_delta/models.py
 @@ -9,15 +9,18 @@
@@ -153,8 +153,8 @@ index c685cd2a7f..0e16a33afe 100644
 +            raise ValueError("GPU delta requires expert TP=1 and an unsharded canonical checkpoint")
 +        runner = getattr(layer.quant_method, "runner", None)
 +        backend = getattr(getattr(runner, "runner_backend", None), "value", getattr(runner, "runner_backend", None))
-+        if type(layer.quant_method).__name__ != "Fp8MoEMethod" or backend != "triton":
-+            raise ValueError(f"GLM GPU delta admits triton block-FP8 experts only: {prefix}")
++        if type(layer.quant_method).__name__ not in ("Fp8MoEMethod", "UnquantizedFusedMoEMethod") or backend != "triton":
++            raise ValueError(f"GLM GPU delta admits triton block-FP8 or BF16 experts only: {prefix}")
 +        if not self._topology_checked:
 +            from sglang.srt.runtime_context import get_exec
 +
