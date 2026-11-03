@@ -276,7 +276,14 @@ SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # 
 # ext-053: GPU-delta through the results volume; models whose SGLang receiver mapping exists (hook-018)
 GPU_DELTA_POST_WRITE = "miles_ext.launch.split.volume_sync.gpu_delta_post_write"
 GPU_DELTA_PRESETS = ("glm-5.3-flash", "glm-5.3-flash-4layer")
-GPU_DELTA_ENV = {"SGLANG_ENABLE_JIT_DEEPGEMM": "0"}  # dense FP8 keeps the checkpoint's FP32 block scales
+GPU_DELTA_ENV = {
+    "SGLANG_ENABLE_JIT_DEEPGEMM": "0",  # dense FP8 keeps the checkpoint's FP32 block scales
+    # avoid the outer Zstd pass: its payload-sized scratch allocation competes with trainer weights
+    "GPU_DELTA_CODEC": "lz4",
+    "GPU_DELTA_INITIAL_SYNC_CODEC": "lz4",
+    "GPU_DELTA_DEVICE_ARENA": "1",  # fix-079: Modal cannot map large HW-decompress host arenas
+}
+GPU_DELTA_SYNC_TIMEOUT_S = 5400  # a full-model first sync outlasts Miles' 600 s default
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
 # does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
@@ -1024,6 +1031,7 @@ def _split_args(recipe: dict, run_id: str) -> str:
         dp = recipe["rollout"]["gpus_per_engine"]
         return f"""--rollout-external-engine-addrs {addrs}
         --sglang-enable-dp-attention --sglang-dp-size {dp}
+        --update-weights-timeout {GPU_DELTA_SYNC_TIMEOUT_S}
         --update-weight-transfer-mode gpu-delta --update-weight-delta-encoding xor
         --update-weight-disk-dir {RESULTS / run_id / "gpu_delta"}
         --custom-update-weight-post-write-path {GPU_DELTA_POST_WRITE}"""

@@ -58,6 +58,10 @@ def test_gpu_delta_argv_and_env(mapped):
     last = len(argv) - 1 - argv[::-1].index("--sglang-dp-size")  # argparse keeps the last value
     assert argv[last + 1] == str(r["rollout"]["gpus_per_engine"])
     assert R.trainer_env(r)["SGLANG_ENABLE_JIT_DEEPGEMM"] == "0"
+    assert argv[argv.index("--update-weights-timeout") + 1] == str(R.GPU_DELTA_SYNC_TIMEOUT_S)
+    env = R.trainer_env(r)
+    assert (env["GPU_DELTA_CODEC"], env["GPU_DELTA_INITIAL_SYNC_CODEC"]) == ("lz4", "lz4")
+    assert env["GPU_DELTA_DEVICE_ARENA"] == "1"
 
 
 @pytest.mark.parametrize(
