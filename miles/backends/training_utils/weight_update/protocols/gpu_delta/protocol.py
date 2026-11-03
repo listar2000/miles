@@ -477,6 +477,13 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             except Exception as error:
                 self._error = error
             self._encoding_tail_wait_s = time.monotonic() - started
+            logger.info(  # [fork fix-080] progress on long full-parameter syncs
+                "[gpu delta] rank %d encoding tail %.1fs (export staging wait %.1fs), error=%s",
+                dist.get_rank(),
+                self._encoding_tail_wait_s,
+                self._export_staging_wait_s,
+                self._error,
+            )
         if self._encoder_pool is not None:
             self._encoder_pool.shutdown(wait=True)
         if self._error is not None:
@@ -680,6 +687,14 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             "owner_seal_s": time.monotonic() - seal_started,
             **self._encoded_transfer_bytes,
         }
+        logger.info(  # [fork fix-080] progress on long full-parameter syncs
+            "[gpu delta] rank %d sealed: changed %d of %d bytes, wire %d bytes, seal %.1fs",
+            dist.get_rank(),
+            self.publication_metrics["changed_bytes"],
+            self.publication_metrics["canonical_bytes"],
+            self.publication_metrics["wire_bytes"],
+            self.publication_metrics["owner_seal_s"],
+        )
         self.publication_metrics["raw_cpu_write_s"] = self._raw_cpu_write_s
         self.publication_metrics["raw_tail_wait_s"] = self._raw_tail_wait_s
         self.publication_metrics["raw_export_d2h_bytes"] = sum(
@@ -832,7 +847,11 @@ def _on_root(action, broadcast_value=True):
             value = action()
             result[0] = {"value": value if broadcast_value else None}
         except Exception as error:
-            result[0] = {"error": f"{type(error).__name__}: {error}"}
+            # [fork fix-080] keep the notes (the engine client attaches the engine's reply as one): only the
+            # message crosses to the other ranks
+            notes = "; ".join(getattr(error, "__notes__", ()))
+            result[0] = {"error": f"{type(error).__name__}: {error}" + (f" [{notes[:4000]}]" if notes else "")}
+            logger.error("[gpu delta] root action failed: %s", result[0]["error"])
     dist.broadcast_object_list(result, src=0, group=get_gloo_group())
     if "error" in result[0]:
         raise RuntimeError(result[0]["error"])
