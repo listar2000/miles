@@ -184,10 +184,9 @@ DEFAULTS: dict[str, Any] = {
     # experts on the engine's grid (fix-006, see expert_qat)
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
                 "speculative": True},
-    # Megatron only. offload "disk": stream Adam's state to node-local disk between steps
-    # (OPTIMIZER_DISK_DIR on each trainer node; moment_dtype "bf16" halves the moments). grad_dtype: the
-    # dtype gradients accumulate and reduce in; "bf16" halves the grad buffer (upstream's OOM lever)
-    "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32"},
+    # Megatron only: offload "disk" streams Adam's state to node-local disk; host_gib budgets pinned RAM per GPU for it
+    # (leave room for other host users). moment_dtype sets the stored moments, grad_dtype the gradient accumulation.
+    "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32", "host_gib": 0},
     # the engines keep the base and apply the bf16 adapter (SGLang LoRA, hook-010 for V4.1). target_modules:
     # Miles' selector syntax; None selects attention and MLP groups.
     "lora": {"rank": 0, "alpha": 32, "target_modules": None},
@@ -340,6 +339,7 @@ FIELD_RULES: dict[str, dict] = {
     "optimizer.offload": {"type": "str", "nullable": True, "enum": ("disk",)},
     "optimizer.moment_dtype": {"type": "str", "nullable": True, "enum": ("bf16",)},
     "optimizer.grad_dtype": {"type": "str", "enum": tuple(_GRAD_DTYPE_FLAGS)},
+    "optimizer.host_gib": {"type": "int", "min": 0},
     "lora.rank": {"type": "int", "min": 0},
     "lora.alpha": {"type": "int", "min": 1},
     "lora.target_modules": {"type": "str", "nullable": True},
@@ -622,6 +622,8 @@ def _validate_trainer(recipe: dict) -> None:
         if recipe["lora"]["rank"]:
             raise ValueError("lora.* applies to model.backend: megatron only")
         return
+    if recipe["optimizer"]["host_gib"] and recipe["optimizer"]["offload"] != "disk":
+        raise ValueError("optimizer.host_gib holds part of the disk-streamed state: it needs optimizer.offload disk")
     if recipe["optimizer"]["offload"] == "disk" and not recipe["cluster"]["disk_gib"]:
         # Modal's default per-container quota (512 GiB) is far below a large model's Adam state
         raise ValueError("optimizer.offload disk needs cluster.disk_gib (node-local disk for Adam's state)")
@@ -1058,6 +1060,8 @@ def _optimizer_args(recipe: dict, resume: bool) -> str:
         args += f" --stream-optimizer-state-to-disk --offload-train-disk-dir {OPTIMIZER_DISK_DIR}"
         if opt["moment_dtype"]:
             args += f" --stream-optimizer-state-moment-dtype {opt['moment_dtype']}"
+        if opt["host_gib"]:
+            args += f" --stream-optimizer-state-host-gb {opt['host_gib']}"
     if not ckpt["save_optimizer"]:
         args += " --no-save-optim" + (" --no-load-optim" if resume else "")
     return args
