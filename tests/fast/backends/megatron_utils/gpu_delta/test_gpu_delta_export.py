@@ -175,7 +175,8 @@ def test_gpu_delta_etp2_gathers_complete_experts_before_sender_conversion(
         yield [("expert.weight", named_params[0][1].to(torch.uint8)), ("expert.scale", torch.ones(1))]
 
     iterator = gpu_delta_module.HfWeightIteratorGpuDelta.__new__(gpu_delta_module.HfWeightIteratorGpuDelta)
-    iterator.args = Namespace(backend=Namespace(swiglu=True), update_weight_transfer_mode="gpu-delta")
+    # [fork fix-075] our base reads args.swiglu
+    iterator.args = Namespace(swiglu=True, update_weight_transfer_mode="gpu-delta")
     iterator.placement = Namespace(gather_pp=False)
     iterator._non_expert_batches = []
     iterator._expert_batches = [direct_module._ExpertBatch(param_infos=[info], gathers=())]
@@ -275,7 +276,7 @@ def test_gpu_delta_cached_owners_select_one_tp_replica_and_reconstruct_current_v
     )
     args = Namespace(
         update_weight_buffer_size=32,
-        backend=Namespace(swiglu=True),
+        swiglu=True,  # [fork fix-075] our base reads args.swiglu
         megatron_to_hf_mode="raw",
         update_weight_transfer_mode="gpu-delta",
     )

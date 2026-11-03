@@ -29,7 +29,6 @@ from miles.backends.training_utils.weight_update.protocols.utils.data_replica im
 from miles.backends.training_utils.weight_update.rollout_cell_updater import create_rollout_cell_updaters
 from miles.backends.training_utils.weight_update.session import set_weight_version
 from miles.utils import async_utils, disk_delta
-from miles.utils.args.custom_view import compute_custom_function_config
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.gpu_delta import publication as gpu_delta_publication
 
@@ -698,8 +697,8 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             publication["producer_metrics"] = [owner["producer_metrics"] for owner in shards]
         try:
             if self._post_write_hook is not None:
-                fn_args = compute_custom_function_config(self.args, self.args.custom_update_weight_post_write_path)
-                self._post_write_hook(fn_args, str(self._version_dir), list(self.rollout_engines))
+                # [fork fix-075] our base hands the hook args itself, as disk-delta does
+                self._post_write_hook(self.args, str(self._version_dir), list(self.rollout_engines))
         except Exception as caught:
             error = caught
         _collective_check(error, "publication visibility")

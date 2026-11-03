@@ -6,16 +6,14 @@ from unittest.mock import Mock
 
 import pytest
 from tests.fast.backends.megatron_utils import test_shared_ppo_lifecycle
-from tests.fast.fixtures.args_fixtures import make_trainer_args
-
-from miles.utils.args.custom_function import CustomFunctionConfig
 
 actor_module = test_shared_ppo_lifecycle.actor_module
 
 
 def _checkpoint_worker(actor_module, **overrides):
     worker = object.__new__(actor_module.MegatronTrainRayActor)
-    worker.args = make_trainer_args(
+    # [fork fix-075] our base: a flat args namespace and a plain hook path
+    worker.args = SimpleNamespace(
         **(
             dict(
                 async_save=True,
@@ -89,9 +87,7 @@ def test_checkpoint_companion_becomes_ready_only_after_megatron_finishes(
 
 @pytest.mark.parametrize("rank", [0, 1])
 def test_post_save_hook_finalizes_companions_on_all_ranks(actor_module, monkeypatch, rank):
-    worker = _checkpoint_worker(
-        actor_module, custom_megatron_post_save_hook_path=CustomFunctionConfig(path="test.hook")
-    )
+    worker = _checkpoint_worker(actor_module, custom_megatron_post_save_hook_path="test.hook")
     events = []
     monkeypatch.setattr(actor_module, "save", lambda *_args, **_kwargs: events.append("save"))
     monkeypatch.setattr(actor_module, "maybe_finalize_async_save", lambda **_kwargs: events.append("finalize"))

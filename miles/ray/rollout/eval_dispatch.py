@@ -26,7 +26,9 @@ class EvalDispatcher:
         self.rollout_manager = rollout_manager
         self.inference_controller = inference_controller
         self._uses_synced_eval = uses_synced_eval(
-            args.update_weight_transfer_mode, any(model.name == "eval" for model in args.sglang.models)
+            # [fork fix-075] our base has no args.sglang.models; its eval fleet is --eval-num-gpus
+            args.update_weight_transfer_mode,
+            (getattr(args, "eval_num_gpus", 0) or 0) > 0,
         )
         self.pending: deque[tuple[int, asyncio.Task, str | None]] = deque()
         self._exported: list[str] = []
