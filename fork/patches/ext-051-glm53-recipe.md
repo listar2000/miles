@@ -21,17 +21,17 @@ Full-parameter split mode is a separate line (its weight transport is not built 
 - `glm53-flash-4layer-smoke.yaml`: 2 B300:8 nodes, trainer TP8 EP8 PP1 (the full model's one-node layout;
   CP stays 1 because GLM's DSA refuses context parallelism), two TP4 engines, fully async, R3, single-turn
   STAK prompts (no sandboxes).
+- `glm53-flash-stak.yaml`: the full model, full-parameter, on the same 2-node shape. BF16 weights and bf16
+  grads are ~160 GB per GPU. Adam is disk-streamed with bf16 moments, and `optimizer.host_gib` (170) of it per GPU
+  stays in pinned host memory (fix-073), so only ~1.2 TB per node goes through the disk.
 - Not done here: MTP speculative decoding (the release's NextN layer; no draft in the preset), the fused MoE
   runner, a BF16 rollout copy, and LoRA (upstream's native `glm5_next` LoRA spec would apply as is).
 
 ## How it is applied
-`miles_ext/recipes/presets.py` (two presets), `miles_ext/recipes/configs/glm53-flash-4layer-smoke.yaml` and its golden
-argv `miles_ext/tests/golden/glm53-flash-4layer-smoke.json`. Weights:
-`prepare_weights("CharyZeng/GLM-5.3-Flash-4layer", "7fb7883207fe73ea04430ac392f6ffe2b9f936c4", ...)`. The slice has no
-`processor_config.json`, and SGLang loads one for this multimodal architecture: without it the engines exit at startup.
-Copy the full release's file into the snapshot dir, as upstream's `run_glm5_3_flash_lora.py prepare` does:
-`hf download zai-org/GLM-5.3-Flash processor_config.json --revision 46a050bec13002ad29ee795c16e61cf4fa3c4a9c --local-dir .`, then
-`modal volume put <weights volume> processor_config.json CharyZeng--GLM-5.3-Flash-4layer/7fb7883207fe73ea04430ac392f6ffe2b9f936c4/`.
+`miles_ext/recipes/presets.py` (two presets), `miles_ext/recipes/recipe.py` (`optimizer.host_gib`),
+`miles_ext/recipes/configs/glm53-flash-4layer-smoke.yaml` and `glm53-flash-stak.yaml` with their golden argv. Weights:
+`prepare_weights("CharyZeng/GLM-5.3-Flash-4layer", "7fb7883207fe73ea04430ac392f6ffe2b9f936c4", ...)`.
+The 4-layer slice has no `processor_config.json`; copy the full release's file into the snapshot dir (see the GPU-delta smoke notes).
 Verify: `python -m pytest miles_ext/tests/test_placement_golden.py`, then the recipe's smoke run on Modal. On an upstream
 sync, diff the preset flags against `scripts/run_glm5_3_flash.py`.
 
