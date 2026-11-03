@@ -11,7 +11,8 @@ step. Most of it fits in host memory: a B300:8 node accepts up to 2,560 GiB.
 The same change as fix-045 (its page has the design and the measurements: byte-identical state, the slowest
 rank's steady step 1,541 s on disk vs 1,064 s with 100 GiB/GPU in host memory on full-size V4.1 expert shapes).
 The code is fix-045's `nvme_stream.py` and its test, restored from git. One difference: the flag is in
-`miles/utils/fork_arguments.py` (hook-014), not in `arguments.py`. The recipe sets it with `optimizer.host_gib`.
+`miles/utils/fork_arguments.py` (hook-014), not in `arguments.py`. Recipes do not set it:
+`optimizer_host_gib` in `miles_ext/recipes/recipe.py` derives it from the trainer node's memory (ext-051).
 
 Kind: a Fix with a switch, an exception to "a fix has no switch" (fork/README.md), approved by the repo owner on
 2026-11-03. The flag sizes a capacity, not an on/off for a bug: 0 is upstream's disk-only store, and the right value
@@ -20,8 +21,8 @@ as Ext plus a Hook would move most of `nvme_stream.py` for no behaviour change.
 
 ## How it is applied
 `miles_plugins/optimizers/nvme_stream.py`, `miles/utils/fork_arguments.py` and `miles/utils/arguments.py` (the Adam-only
-check), every spot marked `[fork fix-073]`. The recipe key is `optimizer.host_gib` (`miles_ext/recipes/recipe.py`,
-ext-051). Size it to what `cluster.memory_gib` leaves after Ray, the trainer processes and the HF load. Verify:
+check), every spot marked `[fork fix-073]`. The recipe derives the value with `optimizer_host_gib` (`miles_ext/recipes/recipe.py`,
+ext-051), from what `cluster.memory_gib` leaves after Ray, the trainer processes and the HF load. Verify:
 `tests/fast/optimizers/test_nvme_stream_host_tier.py` (needs a GPU), and the store's startup line on the
 `glm53-flash-stak` run reporting how many GB are in host memory.
 
