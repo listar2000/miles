@@ -75,3 +75,16 @@ def test_follow_up_resumes_only_on_the_same_base_rules_and_mode(tmp_path):
     assert R.follow_up(args, tmp_path, meta, revs[0], bundle, {**last, "rules": "old"}) is None
     assert R.follow_up(args, tmp_path, meta, revs[0], bundle, {**last, "mode": "deep"}) is None
     assert R.follow_up(SimpleNamespace(**{**vars(args), "fresh": True}), tmp_path, meta, revs[0], bundle, last) is None
+
+
+def test_new_tests_run_in_one_pytest_with_a_result_each():
+    calls = []
+
+    def run(cmd, timeout=None, check=False):
+        calls.append(cmd)
+        out = "PASSED t.py::test_a\nFAILED t.py::test_b[1] - assert 0\nPASSED t.py::test_b[2]\n"
+        return R.subprocess.CompletedProcess(cmd, 1, out, "")
+
+    got = R.pytest_nodes(SimpleNamespace(python="python", run=run), ["t.py::test_a", "t.py::test_b", "t.py::test_c"])
+    assert len(calls) == 1 and {n: r[0] for n, r in got.items()} == {
+        "t.py::test_a": "pass", "t.py::test_b": "fail", "t.py::test_c": "not run"}  # fmt: skip

@@ -14,8 +14,8 @@ Codex (to spend Codex credits instead of Claude's) was the moment to pin the pro
   Claude, Gemini or another CLI is one more entry. Rejected: a Codex-specific prompt
   folder, which would fork the rules.
 - **The script runs, the agent judges.** `review.py` runs the ledger, pre-commit and
-  `miles_ext/tests` (not `tests/fast`, which needs torch) on head and base, and proves each new test (head, then the base's
-  production files). The agent gets everything in one read-only prompt and runs
+  `miles_ext/tests` (not `tests/fast`, which needs torch) on head and base, and proves the new tests (head, then the base's
+  production files; one pytest process per side, as one per test took an hour on #144). The agent gets everything in one read-only prompt and runs
   nothing. Chosen because Codex's sandbox (bubblewrap) cannot create mounts inside the
   launch host's container, and because scripted checks are identical on every run.
   Rejected: running the agent unsandboxed with the user's GitHub login.

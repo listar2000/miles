@@ -161,7 +161,7 @@ class ModalRunner:
         )
         image = modal.Image.from_registry(CHECK_IMAGE).add_local_file(bundle, "/tmp/pr.bundle")
         app = modal.App.lookup("miles-review-checks", create_if_missing=True)
-        self.sb = modal.Sandbox.create("sleep", "infinity", image=image, app=app, cpu=4, memory=8192, timeout=3600)
+        self.sb = modal.Sandbox.create("sleep", "infinity", image=image, app=app, cpu=4, memory=8192, timeout=3 * 3600)
         self.tree, self.python, self.precommit = "/root/pr", "python", ["python", "-m", "pre_commit"]
         self._exec(
             f"git init -q {self.tree} && git -C {self.tree} fetch -q /tmp/pr.bundle 'refs/review/*:refs/review/*' 'refs/tags/*:refs/tags/*' && git -C {self.tree} checkout -q {revs[0]}",
@@ -362,9 +362,29 @@ def pytest_node(runner, node):
     return result, round(time.time() - t0, 1), tail(p, 3)
 
 
+def pytest_nodes(runner, nodes):
+    """Run `nodes` in one pytest process, so the stack is imported once; {node: (result, batch seconds, line)}.
+    A collection or usage error falls back to one process per node."""
+    if not nodes:
+        return {}
+    t0 = time.time()
+    p = runner.run([runner.python, "-m", "pytest", *nodes, "-q", "-rA", "-p", "no:cacheprovider"], timeout=1800)
+    seconds = round(time.time() - t0, 1)
+    if p.returncode not in (0, 1):
+        return {node: pytest_node(runner, node) for node in nodes}
+    lines = [ln for ln in p.stdout.splitlines() if ln.startswith(("PASSED ", "FAILED ", "ERROR "))]
+    out = {}
+    for node in nodes:
+        mine = [ln for ln in lines if ln.split()[1] == node or ln.split()[1].startswith(node + "[")]
+        kinds = {ln.split()[0] for ln in mine}
+        result = "error" if "ERROR" in kinds else "fail" if "FAILED" in kinds else "pass" if mine else "not run"
+        out[node] = (result, seconds, " | ".join(mine)[-300:] or "no result line (skipped or not collected)")
+    return out
+
+
 def prove_tests(runner, base, files, nodes):
-    """Run each new test on the head, then with the base's version of every changed production file."""
-    proofs = {node: {"head": pytest_node(runner, node)} for node in nodes}
+    """Run the new tests on the head, then with the base's version of every changed production file."""
+    proofs = {node: {"head": r} for node, r in pytest_nodes(runner, nodes).items()}
     for f in files:
         if TEST_FILE.search(f):
             continue
@@ -372,8 +392,8 @@ def prove_tests(runner, base, files, nodes):
             runner.run(["git", "checkout", "-q", base, "--", f], check=True)
         else:
             runner.run(["rm", "-f", f])
-    for node in nodes:
-        proofs[node]["base"] = pytest_node(runner, node)
+    for node, r in pytest_nodes(runner, nodes).items():
+        proofs[node]["base"] = r
     runner.run(["git", "reset", "-q", "--hard"])
     runner.run(["git", "clean", "-fdq"])
     return proofs
@@ -438,7 +458,7 @@ def build_bundle(args, work, meta, head, base, tree):
         )
     (bundle / "test_proofs.txt").write_text(
         "\n".join(
-            f"{n}: head {p['head'][0]} ({p['head'][1]} s), base {p['base'][0]} ({p['base'][1]} s)\n"
+            f"{n}: head {p['head'][0]}, base {p['base'][0]} (pytest run of {p['head'][1]} s / {p['base'][1]} s)\n"
             f"  head: {p['head'][2]}\n  base: {p['base'][2]}"
             for n, p in proofs.items()
         )
