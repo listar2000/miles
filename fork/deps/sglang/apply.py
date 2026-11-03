@@ -5,7 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-PATCHES = sorted(Path(__file__).resolve().parent.glob("*.patch"))
+# ports first: a fix or hook may edit a file a port adds (fork/README.md, "Rules for ports")
+PATCHES = sorted(
+    Path(__file__).resolve().parent.glob("*.patch"), key=lambda p: (not p.name.startswith("port-"), p.name)
+)
 
 
 def git(src: str, *args: str) -> subprocess.CompletedProcess:
@@ -25,12 +28,19 @@ def main() -> int:
             f"sglang patches: {src} is at {head[:10] or '?'}, the patches are pinned to {pin}; "
             "re-check every patch against this SGLang and update stack.SGLANG_COMMIT"
         )
-    files = [str(p) for p in PATCHES]
-    result = git(src, "apply", "--check", *files)
-    if result.returncode:
-        raise SystemExit(f"sglang patches: they do not apply to SGLang {pin}:\n{result.stderr}")
-    if not check:
-        git(src, "apply", *files).check_returncode()
+    # one at a time, in order: a later patch may edit a file an earlier one adds, which a single
+    # `git apply` of all files does not see. All or none: a failure reverts the ones applied.
+    applied: list[str] = []
+    for p in map(str, PATCHES):
+        result = git(src, "apply", p)
+        if result.returncode:
+            for done in reversed(applied):
+                git(src, "apply", "-R", done).check_returncode()
+            raise SystemExit(f"sglang patches: {Path(p).name} does not apply to SGLang {pin}:\n{result.stderr}")
+        applied.append(p)
+    if check:
+        for done in reversed(applied):
+            git(src, "apply", "-R", done).check_returncode()
     print(f"sglang patches: {'checked' if check else 'applied'} {', '.join(p.name for p in PATCHES)} on {head[:10]}")
     return 0
 
