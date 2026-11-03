@@ -1,0 +1,106 @@
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/memory.py b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+index 49a758f9eb..2d987f36fc 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/memory.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+@@ -212,20 +212,25 @@ class HostAllocation:
+                 "cuMemGetAllocationGranularity",
+             )
+             self.capacity = (capacity + granularity - 1) // granularity * granularity
+-            self.handle = _check(
+-                driver.cuMemCreate(self.capacity, properties, 0), "cuMemCreate"
+-            )
++            # [fork fix-074] gVisor (Modal) refuses HOST_NUMA cuMemCreate with
++            # INVALID_VALUE but admits plain HOST pinned memory with the same
++            # HW_DECOMPRESS usage; the capability check below still gates it.
++            location = driver.CUmemLocationType.CU_MEM_LOCATION_TYPE_HOST_NUMA
++            created = driver.cuMemCreate(self.capacity, properties, 0)
++            invalid = getattr(getattr(driver, "CUresult", None), "CUDA_ERROR_INVALID_VALUE", 1)
++            if created[0] == invalid:
++                location = driver.CUmemLocationType.CU_MEM_LOCATION_TYPE_HOST
++                properties.location.type, properties.location.id = location, 0
++                created = driver.cuMemCreate(self.capacity, properties, 0)
++            self.handle = _check(created, "cuMemCreate")
+             properties = _check(
+                 driver.cuMemGetAllocationPropertiesFromHandle(self.handle),
+                 "cuMemGetAllocationPropertiesFromHandle",
+             )
+             # Drivers may omit the requested usage flags from this query. The
+             # mapped-pointer capability check below admits actual HW-DE support.
+-            if (
+-                properties.location.type
+-                != driver.CUmemLocationType.CU_MEM_LOCATION_TYPE_HOST_NUMA
+-            ):
+-                raise RuntimeError("GPU-delta host allocation is not HOST_NUMA")
++            if properties.location.type != location:  # [fork fix-074]
++                raise RuntimeError("GPU-delta host allocation is not host memory")
+             self.address = _check(
+                 driver.cuMemAddressReserve(self.capacity, 0, 0, 0),
+                 "cuMemAddressReserve",
+@@ -236,9 +241,7 @@ class HostAllocation:
+             )
+             self.mapped = True
+             host_access = driver.CUmemAccessDesc()
+-            host_access.location.type = (
+-                driver.CUmemLocationType.CU_MEM_LOCATION_TYPE_HOST_NUMA
+-            )
++            host_access.location.type = location  # [fork fix-074]
+             host_access.location.id = 0  # Ignored for host access.
+             host_access.flags = (
+                 driver.CUmemAccess_flags.CU_MEM_ACCESS_FLAGS_PROT_READWRITE
+diff --git a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
+index 94b1e8b89c..8d5e09ad56 100644
+--- a/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
++++ b/test/registered/unit/gpu_delta_weight_sync/test_gpu_delta_memory.py
+@@ -24,7 +24,9 @@ class Driver:
+     CUmemAllocationType = SimpleNamespace(CU_MEM_ALLOCATION_TYPE_PINNED=1)
+     CUmemAllocationHandleType = SimpleNamespace(CU_MEM_HANDLE_TYPE_NONE=0)
+     CUmemLocationType = SimpleNamespace(
+-        CU_MEM_LOCATION_TYPE_HOST_NUMA=3, CU_MEM_LOCATION_TYPE_DEVICE=1
++        CU_MEM_LOCATION_TYPE_HOST_NUMA=3,
++        CU_MEM_LOCATION_TYPE_DEVICE=1,
++        CU_MEM_LOCATION_TYPE_HOST=2,  # [fork fix-074]
+     )
+     CUmemAllocationGranularity_flags = SimpleNamespace(
+         CU_MEM_ALLOC_GRANULARITY_MINIMUM=0
+@@ -68,12 +70,16 @@ class Driver:
+     def cuMemCreate(self, size, properties, flags):
+         assert size == 8192 and flags == 0
+         self.calls.append("create")
++        # [fork fix-074] gVisor refuses HOST_NUMA with INVALID_VALUE (1)
++        if self.failure == "host_numa_refused" and properties.location.type == 3:
++            return (1,)
++        self.created_location = properties.location.type
+         return 0, 11
+ 
+     def cuMemGetAllocationPropertiesFromHandle(self, handle):
+         assert handle == 11
+         properties = self.CUmemAllocationProp()
+-        properties.location.type = 3
++        properties.location.type = getattr(self, "created_location", 3)  # [fork fix-074]
+         # CUDA may not echo HW_DECOMPRESS; the mapped pointer still must admit it.
+         properties.allocFlags.usage = 0
+         return 0, properties
+@@ -114,11 +120,11 @@ class Driver:
+         return (0,)
+ 
+ 
+-@pytest.mark.parametrize("failure", [None, "map", "capability"])
++@pytest.mark.parametrize("failure", [None, "map", "capability", "host_numa_refused"])
+ def test_original_host_vmm_admission_and_cleanup(failure):
+     driver = Driver(failure)
+     with patch.object(memory, "_driver", return_value=driver):
+-        if failure:
++        if failure in ("map", "capability"):
+             error = (
+                 "cuMemMap" if failure == "map" else "not hardware-decompression capable"
+             )
+@@ -132,6 +138,9 @@ def test_original_host_vmm_admission_and_cleanup(failure):
+             allocation.close()
+             allocation.close()
+     expected = ["create", "reserve", "map"]
++    if failure == "host_numa_refused":  # [fork fix-074] retried once as plain HOST pinned memory
++        expected = ["create", "create", "reserve", "map"]
++        assert driver.created_location == 2
+     if failure != "map":
+         expected += ["access", "capability", "unmap"]
+     assert driver.calls == expected + ["free_address", "release"]
