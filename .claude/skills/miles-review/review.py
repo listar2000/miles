@@ -464,10 +464,7 @@ def build_prompt(args, tree, head, base, bundle, files):
     sections += [(str(r.relative_to(tree)), r.read_text()) for r in rules]
     sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())]
     head_files = [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in files if (tree / f).is_file()]
-    if args.deep:
-        # context files and evidence have no stand-in in the diff, so they are never dropped
-        sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in context_files(args, tree, files)]
-        sections += [(f"evidence/{name}", text) for name, text in evidence(args)]
+    sections += deep_inputs(args, tree, files)  # no stand-in in the diff, so they are never dropped
     body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections + head_files)
     if len(body) > MAX_PROMPT_CHARS:  # too big for the agent: the diff in bundle/ has to stand in for full files
         body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
@@ -510,14 +507,33 @@ def follow_up(args, tree, meta, base, bundle, last):
     sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in changed if (tree / f).is_file()]
     sections += [(f"bundle/{b.name}", b.read_text(errors="replace")) for b in sorted(bundle.iterdir())
                  if b.name not in ("diff.patch", "prior_review.md")]  # fmt: skip
-    if args.deep:  # the PR body may name new context or evidence since the last round
-        sections += [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in context_files(args, tree, changed)]
-        sections += [(f"evidence/{name}", text) for name, text in evidence(args)]
+    if args.deep:  # context and evidence the session already read are not sent again
+        seen = seen_deep(args, last["session"])
+        sections += [(n, t) for n, t in deep_inputs(args, tree, changed) if seen.get(n) != digest(t)]
     body = "\n".join(f"\n===== {name} =====\n{text}" for name, text in sections)
     if len(body) > MAX_PROMPT_CHARS:
         return None
     rnd = int(last["round"] or 1) + 1
     return FOLLOW_UP.format(round=rnd, pr=args.pr, prior=prior[:8], head=head[:8], base=base[:8]) + body
+
+
+def deep_inputs(args, tree, files):
+    """A deep review's --context files (minus `files`, inlined already) and --evidence, as (name, text)."""
+    if not args.deep:
+        return []
+    found = [(f"head:{f}", (tree / f).read_text(errors="replace")) for f in context_files(args, tree, files)]
+    return found + [(f"evidence/{name}", text) for name, text in evidence(args)]
+
+
+def digest(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def seen_deep(args, session):
+    """Deep inputs `session` has read, as {name: digest}; empty when the record is another session's."""
+    f = args.out / f"pr{args.pr}-deep-seen.json"
+    record = json.loads(f.read_text()) if f.exists() else {}
+    return record.get("seen", {}) if record.get("session") == session else {}
 
 
 def set_status(meta, state, text, url=None):
@@ -967,6 +983,9 @@ def review(args, work, meta, head, base, tree):
             break
         print(f"attempt {attempt} broke the protocol: {'; '.join(violations)}", file=sys.stderr)
     run_info.update(usage, attempt=attempt, session="resumed" if resumed else "new")
+    if args.deep:  # a new session read every deep input; a resumed one has now read the current ones too
+        seen = {**seen_deep(args, session), **{n: digest(t) for n, t in deep_inputs(args, tree, [])}}
+        (args.out / f"pr{args.pr}-deep-seen.json").write_text(json.dumps({"session": session, "seen": seen}))
     report = work / "review.md"
     summary_for = lambda inline: render(result, meta, base, run_info, violations, ctx, prior, inline)  # noqa: E731
     report.write_text(summary_for(())[1])

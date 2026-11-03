@@ -65,7 +65,11 @@ recommendations the author decides on. The summary is the newest-created review 
 `/review` counts as answered once the summary was edited after it. Later rounds continue the PR's Codex session with
 the diff since the reviewed head (a fresh full round on a rebase, a protocol change or
 `/review full`), so one judge carries its reasoning across rounds; check results are cached by
-the head and base trees. Each round sets a `codex-review` commit status, which a branch rule
+the head and base trees. A PR is reviewed deep when it changes runtime code (the trainer, an
+SGLang patch, a fix/hook/port patch page), carries the `deep-review` label, or had a deep round
+before, so its session stays deep; a deep follow-up sends only the context and evidence the
+session has not read. Rejected: the trainer-paths-only rule, which reviewed SGLang patches
+(#143, #145) as normal. Each round sets a `codex-review` commit status, which a branch rule
 on `main` can require. Rejected: always-fresh sessions with the prior summary only, which
 repeated the whole read each round and lost the reasoning behind earlier points. Approve and Request changes are not used: the box
 posts as the PR author, and GitHub refuses both on one's own PR (a reviewer GitHub App

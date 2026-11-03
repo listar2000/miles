@@ -398,11 +398,11 @@ branches of this repository:
 
 | When | Mode |
 | --- | --- |
-| a ready PR has a head with no review (after `--settle` seconds, so quick pushes coalesce) | deep if labelled `deep-review` or the diff touches `miles/`, `miles_plugins/` or `train_async.py`, else normal |
+| a ready PR has a head with no review (after `--settle` seconds, so quick pushes coalesce) | deep if labelled `deep-review`, if the diff touches runtime code (`miles/`, `miles_plugins/`, `train_async.py`, an SGLang patch under `fork/deps/sglang/`, or a `fix-`, `hook-` or `port-` patch page), or once any round was deep; else normal |
 | a `/review` or `/review deep` comment after the last review, drafts too | as asked (or deep by the rule above) |
 
 A later round continues the last round's agent session, sending it the diff since the head it
-reviewed, so one judge follows the PR. It starts a fresh session with the full prompt when
+reviewed (and, when deep, only the context and evidence it has not read), so one judge follows the PR. It starts a fresh session with the full prompt when
 there is none to continue, the PR was rebased, the mode or this skill changed, the session
 cannot be resumed, or the comment is `/review full` (also `/review deep full`). The checks run
 once per pair of head and base trees: a round whose code did not change (a PR body fix)
