@@ -43,7 +43,7 @@ Upstream's tag-triggered workflow (`release-docker.yml`) fires on
 `v[0-9]+.*`, so `stable-*` tags match nothing. GitHub Actions are off for
 this repository; we run no workflows.
 
-## Four kinds of change
+## Kinds of change
 
 Every fork commit has exactly one trailer saying what it is.
 
@@ -51,6 +51,7 @@ Every fork commit has exactly one trailer saying what it is.
 | --- | --- | --- | --- |
 | **Fix** (`Fork-Fix: fix-NNN`) | a bug fix to upstream code | in place, in the upstream file; in SGLang, a patch file (SGLang patches, below) | yes: it is the only thing that can (with hooks) |
 | **Hook** (`Fork-Hook: hook-NNN`) | an extension point upstream lacks, so an extension can plug in | in place, in the upstream file; in SGLang, a patch file | yes |
+| **Port** (`Fork-Port: port-NNN`) | an open upstream Miles or SGLang PR we need before it merges, carried byte for byte from its head commit | in Miles, at the PR's own paths; in SGLang, one patch file | yes, until the sync that brings the merged PR retires it |
 | **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | no (new files only) |
 | **Ext** (`Fork-Ext: ext-NNN`) | new capability: harnesses, recipes, algorithms, sandbox providers | `miles_ext/` | no (new files only) |
 
@@ -79,6 +80,20 @@ through Miles' own extension points (`--custom-generate-function-path`,
 Harbor's `import_path` for agents and environments. If an extension needs a
 hook that does not exist, add a Hook commit with the smallest possible change
 rather than editing upstream code from the extension's commit.
+
+Rules for **ports**: the fix and hook rules, with these differences.
+
+- The content is the PR head's diff against its base, applied as is: no edits of
+  our own inside a port. Conflicts with our code are resolved toward ours, and
+  each resolution is listed on the port's patch page. Our adaptations are their
+  own fix, hook or ext commits on top.
+- Trailers: `Touches:` (every file, new ones included), `Upstream-PR: <PR url>@<head sha>`,
+  `Remove-When:` (normally "merged upstream and synced").
+- Files the port adds keep the PR's bytes and need no marker; files it edits get
+  `[fork port-NNN]` markers like a fix.
+- A refresh to a newer PR head is a new commit with the same id and the new sha.
+- On a sync that brings the merged PR, take upstream's side and retire the port
+  (`Retires: port-NNN`). A port always has a patch page.
 
 `python fork/tools/ledger.py markdown` prints our commits since the upstream base as a table.
 
@@ -428,12 +443,16 @@ Dockerfile applies with `patch --fuzz=0`, each with its upstream PR and a
 "drop when" line, failing the build when one does not apply. We cannot commit
 to `sglang-miles`, so we carry SGLang changes the second way.
 
-**What may be patched.** A Fix or a Hook, under the same rules as in Miles
+**What may be patched.** A Port of an open SGLang PR (see "Kinds of
+change"), as one patch file of any size, or a Fix or a Hook, under the same rules as in Miles
 code: a bug fix, or the smallest extension point an extension needs. It
 copies a pattern SGLang already uses for the same job (name it on the patch
 page) and stays small: about 30 changed lines; a larger one needs the user's
-OK on its PR. No new server flags, kernels, model support or features: those
-go to SGLang. Never change SGLang at runtime from `miles_ext`
+OK on its PR. No new server flags, kernels or features of our own: those
+go to SGLang. The exception is a fix or hook on top of a port that the port's
+feature needs (for example a model mapping for a weight-sync port); it may be
+larger than 30 lines, needs the user's OK on its PR, and is offered upstream to
+the port's author. Never change SGLang at runtime from `miles_ext`
 (monkeypatching, a script that edits the installed files): what is not a patch
 file is not in the image's record. A runtime applier is fine on a throwaway
 image during an investigation; it never lands.
@@ -495,10 +514,9 @@ image) and run step 2. A patch whose fix SGLang now has is deleted and its
 page marked removed; one that no longer applies is redone against the new
 code with the same id and markers. Both happen in the `sync-` commit.
 
-**When to switch to a fork.** More than about five live SGLang patches, or one
-that needs redoing on most syncs: propose a `listar2000/sglang` branch off the
-pinned `sglang-miles` commit (as for Harbor below), so the patches become
-commits that merge like ours.
+**No SGLang fork.** We carry SGLang changes as patch files only, however many
+there are (user's call, 2026-11-03). A patch that needs redoing on most syncs is
+a reason to send it upstream, not to fork SGLang.
 
 ## Harbor
 
@@ -517,5 +535,5 @@ Harbor today because we carry no change to installed Harbor code:
 
 The switch: the first change we need in installed Harbor code goes into a
 `listar2000/harbor` fork branched from the pinned commit, with the same
-four-kinds rules, and `HARBOR_REPO`/`HARBOR_COMMIT` point at it. Until then a
+same kinds-of-change rules, and `HARBOR_REPO`/`HARBOR_COMMIT` point at it. Until then a
 fork would only add a second sync to every upstream release.

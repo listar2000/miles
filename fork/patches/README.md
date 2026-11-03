@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| port-kind | Infra | The Port kind (open upstream PRs carried byte for byte) and SGLang changes as patch files only | active | [port-kind.md](port-kind.md) |
 | fix-073 | Fix | `--stream-optimizer-state-host-gb` again (fix-045, removed by fix-060): Adam's NVMe-streamed state in pinned host memory up to a per-GPU budget, for full-parameter GLM-5.3-Flash on one trainer node | active; remove when upstream nvme_stream has a host tier | [fix-073-nvme-host-tier-glm53.md](fix-073-nvme-host-tier-glm53.md) |
 | ext-051 | Ext | GLM-5.3-Flash presets (FP8 release served and synced in its own format; 4-layer BF16 slice for smoke) and a together-mode 2-node full-parameter recipe | active; remove when upstream ships GLM recipe presets | [ext-051-glm53-recipe.md](ext-051-glm53-recipe.md) |
 | ext-050 | Ext | Monitor: SFT runs (kind `sft`) show loss, validation NLL, LR, throughput, checkpoints; an eval names the run and step it evaluates and the run lists those evals with pass@k | active; remove when the monitor is retired | [ext-050-monitor-sft-runs.md](ext-050-monitor-sft-runs.md) |

@@ -13,7 +13,7 @@ image. Code reaches the image in one way only: as a commit of this repo
 - **Data and task sets** stay in your own project. They are inputs, not code.
 - **New code** lives under `miles_ext/` on a branch of this repo: a draft PR, or
   a branch you launch from with `MILES_FORK_COMMIT`. Follow the Ext rules in
-  [fork/README.md](../README.md) ("Four kinds of change"). They come down to new
+  [fork/README.md](../README.md) ("Kinds of change"). They come down to new
   files only, plugged in through extension points. The
   [miles-fork skill](../../.claude/skills/miles-fork/SKILL.md) has the steps.
 - Loading a package from outside this repo is not supported yet. If you need it,

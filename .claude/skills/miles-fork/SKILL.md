@@ -45,6 +45,7 @@ even one whose PR closed.
 | fix a bug in upstream code | Fix | in place, in the upstream file | `Fork-Fix: fix-NNN` |
 | add an extension point upstream lacks | Hook | in place, smallest possible edit | `Fork-Hook: hook-NNN` |
 | fix a bug in SGLang, or add a hook there | Fix or Hook | `fork/deps/sglang/<id>-<slug>.patch` (below) | `Fork-Fix: fix-NNN` / `Fork-Hook: hook-NNN` |
+| carry an open upstream Miles or SGLang PR before it merges | Port | byte for byte: Miles files at the PR's paths, SGLang as `fork/deps/sglang/port-NNN-<slug>.patch` | `Fork-Port: port-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
 | change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
@@ -78,6 +79,30 @@ separate Hook commit; never edit upstream code from an Ext commit.
 5. Add its row to `fork/UPSTREAM.md` (the upstream candidate list), or say in
    the PR why it is not a candidate. Every fix upstream accepts is one the next
    sync drops.
+
+## Port: an open upstream PR
+
+Rules: `fork/README.md`, "Rules for ports". Take the PR head's diff from its base,
+unchanged:
+
+```bash
+gh pr view <n> -R radixark/miles --json headRefOid,baseRefName   # or -R sgl-project/sglang
+git fetch upstream pull/<n>/head:pr<n> && git diff $(git merge-base pr<n> upstream/<base>) pr<n> > /tmp/port.diff
+git apply --3way /tmp/port.diff     # Miles: resolve toward our code, list each resolution on the patch page
+```
+
+Add a `[fork port-NNN]` comment line to each existing upstream file it edits (new files stay the PR's
+bytes). For SGLang, the diff becomes `fork/deps/sglang/port-NNN-<slug>.patch` with one marker line per
+edited file, checked like any SGLang patch below. Trailers:
+
+```
+Fork-Port: port-001
+Touches: <every file, new ones too; sglang:<path> for SGLang>
+Upstream-PR: https://github.com/<owner>/<repo>/pull/<n>@<head sha>
+Remove-When: merged upstream and synced
+```
+
+Our changes to make it work for us are separate fix, hook or ext commits. A patch page is required.
 
 ## Fix or Hook in SGLang
 
