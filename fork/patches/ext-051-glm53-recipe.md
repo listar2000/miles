@@ -35,7 +35,12 @@ Full-parameter split mode is a separate line (its weight transport is not built 
     the third pinned served-model copy appeared; 40 was reached only through step 1 (those runs failed first in the
     engine's arena mapping, fix-079). So 35 is below the known failure but untested past one step.
   - Why derive: a hand-set value per recipe has to be re-done whenever another host user joins the node.
-- Not done here: MTP speculative decoding (the release's NextN layer; no draft in the preset), the fused MoE
+- MTP speculative decoding: `glm-5.3-flash` drafts with the release's NextN layer (EAGLE, 3 steps, top-1, 4 draft
+  tokens), the settings of the one-node engine probe of 2026-11-03: median decode per request 80 vs 60 tok/s at 64
+  requests per node, 59 vs 56 at 128, with no all-zero R3 rows in either arm (miles-ops `notes/glm53/README.md`). The
+  draft is never trained or synced, so acceptance falls as the policy drifts. Off for the 4-layer slice (no NextN
+  layer) and with GPU-delta sync, whose receiver plan has not run with a draft model loaded.
+- Not done here: the fused MoE
   runner, a BF16 rollout copy, and LoRA (upstream's native `glm5_next` LoRA spec would apply as is).
 
 ## How it is applied

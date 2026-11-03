@@ -586,6 +586,8 @@ def speculative_algorithm(recipe: dict) -> str | None:
     preset = PRESETS[recipe["model"]["preset"]]
     if not (recipe["rollout"]["speculative"] and preset.speculative_algorithm):
         return None
+    if gpu_delta(recipe):
+        return None  # GPU-delta's receiver plan has not been run with a draft model loaded
     if preset.draft_precisions and rollout_precision(recipe) not in preset.draft_precisions:
         return None
     return preset.speculative_algorithm
@@ -1075,7 +1077,7 @@ def _rollout_args(recipe: dict) -> str:
     if expert_qat(recipe):
         args += " --mxfp4-qat-routed-experts"  # fix-006
     if spec := speculative_algorithm(recipe):
-        args += f" --sglang-speculative-algorithm {spec}"
+        args += f" --sglang-speculative-algorithm {spec} {PRESETS[recipe['model']['preset']].speculative_args}"
     return args
 
 

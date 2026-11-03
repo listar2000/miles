@@ -39,6 +39,8 @@ class Preset:
     draft_precisions: tuple[str, ...] = ()
     # --sglang-speculative-algorithm for the model's draft (recipe rollout.speculative); None: no draft
     speculative_algorithm: str | None = None
+    # further SGLang speculative flags, emitted only with the draft
+    speculative_args: str = ""
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
     # env added only when weight syncs replace the engines' base weights (full-parameter runs); a LoRA run
@@ -162,6 +164,11 @@ PRESETS: dict[str, Preset] = {
         precisions={"fp8": {}},
         precision_min_gpus={"fp8": 2},  # 321 GB of weights
         served_gib=306,  # zai-org/GLM-5.3-Flash at 46a050be: 328,366,204,147 bytes
+        # Use the release's NextN layer as the speculative draft.
+        speculative_algorithm="EAGLE",
+        speculative_args="--sglang-speculative-num-steps 3 --sglang-speculative-eagle-topk 1 "
+        "--sglang-speculative-num-draft-tokens 4",
+        draft_precisions=("fp8",),
         env={
             "SGLANG_HEALTH_CHECK_TIMEOUT": "900",
             # inductor's subprocess compile pool deadlocks under the torch_memory_saver LD_PRELOAD (upstream launcher)
@@ -195,4 +202,6 @@ PRESETS["glm-5.3-flash-4layer"] = replace(
     precisions={"bf16": {}},
     precision_min_gpus={},
     served_gib=46,  # 48,689,371,310 bytes at 7fb78832
+    speculative_algorithm=None,  # the slice has no NextN layer
+    speculative_args="",
 )
