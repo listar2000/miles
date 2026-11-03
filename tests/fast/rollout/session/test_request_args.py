@@ -1,12 +1,15 @@
 """Server constraints, full model argument resolution, and the renderer projection."""
 
 from copy import deepcopy
+from pathlib import Path  # [fork fix-081]
+from types import SimpleNamespace  # [fork fix-081]
 from unittest.mock import MagicMock
 
 import pytest
 from tests.fast.fixtures.session_fixtures import make_session_server_config
 
 from miles.rollout.session.errors import MessageValidationError
+from miles.rollout.session.request_args import flatten_content_parts  # [fork fix-081]
 from miles.rollout.session.request_args import (
     ClientResponseIntent,
     apply_session_sampling_defaults,
@@ -380,3 +383,31 @@ def test_parse_chat_request_rejects_invalid_json(body):
 def test_parse_chat_request_preserves_unicode_and_empty_body():
     assert parse_chat_request(b"") == {}
     assert parse_chat_request(rb'{"content":"\u4f60\u597d \ud83d\ude00"}') == {"content": "你好 😀"}
+
+
+# [fork fix-081]
+QWEN3_THINKING_2507 = (
+    Path(__file__).parents[4] / "miles/utils/chat_template_utils/templates/qwen3_thinking_2507_and_next_fixed.jinja"
+)
+OPENAI_PARTS_TEMPLATE = (
+    "{% for m in messages %}{% for part in m['content'] %}{{ part['text'] }}{% endfor %}{% endfor %}"
+)
+PARTS = [{"type": "text", "text": "Fix the bug.\n"}, {"type": "text", "text": "Then run tests."}]
+
+
+def test_text_parts_flatten_like_sglang_for_a_string_content_template():
+    tokenizer = SimpleNamespace(chat_template=QWEN3_THINKING_2507.read_text())
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": PARTS}]
+    args = {"model": "m", "messages": messages}
+
+    out = flatten_content_parts(args, tokenizer)
+
+    assert out["messages"] == [messages[0], {"role": "user", "content": "Fix the bug.\n Then run tests."}]
+    assert out["model"] == "m" and args["messages"][1]["content"] is PARTS  # the client's input is untouched
+
+
+def test_text_parts_stay_for_a_template_that_reads_them():
+    args = {"messages": [{"role": "user", "content": PARTS}]}
+    assert flatten_content_parts(args, SimpleNamespace(chat_template=OPENAI_PARTS_TEMPLATE)) is args
+    assert flatten_content_parts(args, SimpleNamespace(chat_template=None)) is args
+    assert flatten_content_parts(args, SimpleNamespace(chat_template={"default": OPENAI_PARTS_TEMPLATE})) is args
