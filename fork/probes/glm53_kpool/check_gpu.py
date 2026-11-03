@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import time
-from types import SimpleNamespace
 
 sys.path.insert(0, "/root/overlay")
 
