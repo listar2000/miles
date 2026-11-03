@@ -318,9 +318,9 @@ FIELD_RULES: dict[str, dict] = {
     "taskset.harness": {"type": "str", "enum": HARNESSES},
     "agent.max_steps": {"type": "int", "min": 1},
     "agent.exec_timeout": {"type": "int", "min": 1},
-    "agent.timeout": {"type": "int", "min": 1},
+    "agent.timeout": {"type": "int", "nullable": True, "min": 1},  # None: each task's own task.toml timeout
     "agent.trial_timeout": {"type": "int", "min": 1},
-    "agent.verifier_timeout": {"type": "int", "min": 1},
+    "agent.verifier_timeout": {"type": "int", "nullable": True, "min": 1},  # None: each task's own
     "agent.setup_timeout": {"type": "int", "min": 1},
     "agent.cwd": {"type": "str", "nullable": True},
     "agent.compact_at_tokens": {"type": "int", "nullable": True, "min": 1},
@@ -847,16 +847,18 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         "HARBOR_TRIALS_DIR": str(RESULTS / run_id / "trials"),
         "MILES_EXT_HARNESS": recipe["taskset"]["harness"],
         "AGENT_MODEL_NAME": "model",
-        "AGENT_TIMEOUT": str(agent["timeout"]),
         "AGENT_TRIAL_TIMEOUT": str(agent["trial_timeout"]),
         "HARBOR_AGENT_MAX_ITERATIONS": str(agent["max_steps"]),
-        "HARBOR_VERIFIER_TIMEOUT_SEC": str(agent["verifier_timeout"]),
         "HARBOR_AGENT_SETUP_TIMEOUT_SEC": str(agent["setup_timeout"]),
         "HARBOR_TIMEOUT_MULTIPLIER": "1.0",
         "MSWEA_EXEC_TIMEOUT": str(agent["exec_timeout"]),
         "MSWEA_SILENT_STARTUP": "1",
         "MSWEA_COST_TRACKING": "ignore_errors",
     }
+    if agent["timeout"] is not None:
+        env["AGENT_TIMEOUT"] = str(agent["timeout"])
+    if agent["verifier_timeout"] is not None:
+        env["HARBOR_VERIFIER_TIMEOUT_SEC"] = str(agent["verifier_timeout"])
     if multiplier := recipe["sandbox"]["build_timeout_multiplier"]:
         env["HARBOR_ENV_BUILD_TIMEOUT_MULTIPLIER"] = str(multiplier)
     if agent["cwd"]:
