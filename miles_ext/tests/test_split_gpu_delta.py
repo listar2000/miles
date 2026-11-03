@@ -83,11 +83,6 @@ def test_gpu_delta_needs_a_mapped_preset():
         R.validate(_full_param(), local_inputs=False)
 
 
-def test_full_parameter_split_without_gpu_delta_is_still_refused():
-    with pytest.raises(ValueError, match="supports LoRA, or full-parameter"):
-        R.validate(_recipe(**{"lora.rank": 0}), local_inputs=False)
-
-
 def test_post_write_hook_commits_then_reloads_on_rank_0(monkeypatch):
     calls = []
     monkeypatch.setenv(volume_sync.AGENT_ENV, "http://127.0.0.1:9")

@@ -100,11 +100,7 @@ class VolumeAdapterSync(_protocol_base()):
 
 
 def gpu_delta_post_write(args, version_dir: str, rollout_engines) -> None:
-    """ext-053: Miles' --custom-update-weight-post-write-path for gpu-delta in split placement.
-
-    Called on every trainer rank after its publication files are written and before the engines read them.
-    Rank 0 has the trainer's function process commit the results volume and the engine container's agent
-    reload it; Miles' collective check after the hook holds the other ranks until then."""
+    """Commit and reload the publication on rank 0; Miles synchronizes ranks after this hook (ext-053)."""
     import torch.distributed as dist
 
     if dist.is_initialized() and dist.get_rank() != 0:

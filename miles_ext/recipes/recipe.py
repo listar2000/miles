@@ -182,9 +182,6 @@ DEFAULTS: dict[str, Any] = {
     # overflow it is shortened), max_running_requests (None: SGLang's). speculative: decode with the preset's
     # draft model when the served precision has one. A full-weight fp8_fp4 run always keeps the trainer's FP4
     # experts on the engine's grid (fix-006, see expert_qat)
-    # weight_sync (ext-053): "tensor" (the protocol the placement picks) or "gpu-delta" (split placement,
-    # full-parameter: compressed XOR deltas through the results volume, port-001/port-002, presets in
-    # GPU_DELTA_PRESETS)
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
                 "speculative": True, "weight_sync": "tensor"},
     # Megatron only. offload "disk": stream Adam's state to node-local disk between steps
@@ -1001,8 +998,6 @@ def _split_args(recipe: dict, run_id: str) -> str:
         return ""
     addrs = " ".join(f"127.0.0.1:{SPLIT_ENGINE_PORT + i}" for i in range(num_engines(recipe)))
     if gpu_delta(recipe):
-        # the trainer publishes to the results volume; the post-write hook commits it and has the engine
-        # container reload it before the engines read the publication
         return f"""--rollout-external-engine-addrs {addrs}
         --update-weight-transfer-mode gpu-delta --update-weight-delta-encoding xor
         --update-weight-disk-dir {RESULTS / run_id / "gpu_delta"}
