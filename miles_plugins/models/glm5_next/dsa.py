@@ -1,7 +1,10 @@
+from collections import deque  # [fork fix-072]
+
 import torch
 import torch.nn.functional as F
 from megatron.core import parallel_state
 from megatron.core.tensor_parallel.mappings import gather_from_sequence_parallel_region
+from megatron.core.tensor_parallel.random import is_checkpointing  # [fork fix-072]
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.module import mark_keep_in_fp32
 from megatron.core.transformer.moe.moe_utils import RouterGatingLinearFunction
@@ -10,9 +13,17 @@ from miles.kernels.attention.dsa import sparse_attention
 from miles.kernels.attention.dsa.kpool import build_pooled_keys, pool_boundaries
 from miles.utils.replay_base import indexer_replay_manager
 from miles_plugins.models.glm5.glm5 import DSAMLASelfAttention
-from miles_plugins.models.glm5_next.ops.kpool_indexer import kpool_select_topk
+from miles_plugins.models.glm5_next.ops.kpool_indexer import gather_query_rows, kpool_select_rows  # [fork fix-072]
 
 _SPARSE_MLA_TAIL_DIM = 64
+
+
+def _recompute_stash(config) -> deque | None:
+    """[fork fix-072] The forward-to-recompute stash, or None where its depth bound does not hold: indexer replay pops
+    its own top-k in the recompute, and an interleaved (virtual) pipeline keeps more forwards in flight per layer."""
+    if indexer_replay_manager.enabled or (getattr(config, "virtual_pipeline_model_parallel_size", None) or 1) > 1:
+        return None
+    return deque()
 
 
 class Glm5NextDSAAttention(DSAMLASelfAttention):
@@ -57,6 +68,8 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
         if indexer_replay_manager.enabled:
             full_attn_layers = list(config.glm5_next_full_attn_layers)
             self.indexer_replay.stream_idx = full_attn_layers.index(self.layer_number - 1)
+        # [fork fix-072] this rank's selected rows of checkpointed forwards awaiting their recompute, oldest first
+        self._recompute_topk = _recompute_stash(config)
 
     def get_absorb_query_key_value_tensors(
         self,
@@ -151,7 +164,7 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
             cu_seqlens,
             self.index_kpool,
         )
-        return kpool_select_topk(
+        return kpool_select_rows(  # [fork fix-072] this rank's rows; forward assembles them
             index_q=index_q,
             pooled_k=pooled_k,
             head_weights=head_weights,
@@ -192,7 +205,8 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
             inference_context=inference_context,
         )
 
-        topk_indices = self._kpool_select(index_q, index_k, head_weights, gate_score, packed_seq_params)
+        rows = self._index_rows(index_q, index_k, head_weights, gate_score, packed_seq_params)  # [fork fix-072]
+        topk_indices = gather_query_rows(rows)
 
         query = F.pad(query, (0, _SPARSE_MLA_TAIL_DIM)).contiguous()
         key = F.pad(key, (0, _SPARSE_MLA_TAIL_DIM)).contiguous()
@@ -209,3 +223,23 @@ class Glm5NextDSAAttention(DSAMLASelfAttention):
 
         output, bias = self.linear_proj(core_attn_out)
         return output, bias
+
+    def train(self, mode: bool = True):
+        # [fork fix-072] each train pass starts with an empty stash, so a step that died between a forward and
+        # its recompute cannot hand its top-k to the next one
+        if getattr(self, "_recompute_topk", None):
+            self._recompute_topk.clear()
+        return super().train(mode)
+
+    def _index_rows(self, *select_args):
+        """[fork fix-072] Reuse the checkpointed forward's selected rows in its recompute, in forward order."""
+        stash = self._recompute_topk
+        if stash is None or not is_checkpointing():
+            return self._kpool_select(*select_args)
+        if torch.is_grad_enabled():
+            return stash.popleft()
+        rows = self._kpool_select(*select_args)
+        stash.append(rows)
+        depth = self.config.pipeline_model_parallel_size
+        assert len(stash) <= depth, f"layer {self.layer_number}: {len(stash)} awaiting recompute, at most {depth}"
+        return rows
