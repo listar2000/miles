@@ -18,6 +18,8 @@ class TestHfWeightIteratorFactory:
     def _make_args(self, mode="bridge"):
         return Namespace(
             megatron_to_hf_mode=mode,
+            # [fork port-002] GPU-delta weight sync (radixark/miles#3894)
+            update_weight_transfer_mode="broadcast",
             hf_checkpoint="/fake/path",
             update_weight_buffer_size=1,
         )

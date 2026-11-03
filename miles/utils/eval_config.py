@@ -4,6 +4,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+
+def uses_synced_eval(transfer_mode, has_eval_pool):  # [fork port-002]
+    return transfer_mode == "gpu-delta" and has_eval_pool
+
+
 _MISSING = object()
 
 # TODO: This is ugly, temporarily leave this. We should unify all the config name for dataset, default, and args. (advice from Tom.)
