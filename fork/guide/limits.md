@@ -35,7 +35,7 @@ a recipe.
 ## Rollout and sandboxes
 
 - Harnesses: mini-swe-agent inside the sandbox, mini-swe-agent on the host,
-  Terminus-2 and DeepSeek's dsh inside the sandbox, and single-turn (`HARNESSES` in `recipe.py`).
+  Terminus-2, DeepSeek's dsh and Pi inside the sandbox, and single-turn (`HARNESSES` in `recipe.py`).
   Harbor installs the harness in each trial's sandbox. Task images stay the
   benchmark's own.
 - Context compaction (`agent.compact_at_tokens`) is Terminus-2 and dsh only, Megatron only, and moves
@@ -44,6 +44,8 @@ a recipe.
 - deepseek-sandbox: no step cap (`agent.max_steps` is ignored), no images, glibc task images or
   Alpine's own Node; each sandbox installs Node and dsh (about a minute)
   ([ext-046](../patches/ext-046-deepseek-sandbox.md)).
+- pi-sandbox: Mobius' Pi setup (compaction off, no step cap, `agent.max_steps` ignored), glibc task
+  images; each sandbox installs Node and Pi ([ext-055](../patches/ext-055-pi-sandbox.md)).
 - Sandboxes are Modal or Sail. Each has its own capacity, and a provider that is
   slow to start shows up as setup timeouts ([running.md](running.md)).
 
