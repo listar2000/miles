@@ -29,6 +29,7 @@ from miles.rollout.session.errors import (
 )
 from miles.rollout.session.linear_trajectory import LinearTrajectory, SessionRegistry
 from miles.rollout.session.request_args import ClientResponseIntent, filter_turn_args, parse_chat_request
+from miles.rollout.session.request_args import flatten_content_parts  # [fork fix-081]
 from miles.rollout.session.samples.codec import COMPUTED_FIELDS, ROLLOUT_SAMPLING_MASK_FIELDS, encode_samples
 from miles.rollout.session.samples.merge import (
     compute_samples_from_openai_records,
@@ -370,6 +371,7 @@ class SessionCore:
                 raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
             client_args = parse_chat_request(body)
+            client_args = flatten_content_parts(client_args, self.registry.tokenizer)  # [fork fix-081]
             prepared = session.prepare_token_ids_and_request_args(
                 client_args,
                 config=self.config,
