@@ -49,5 +49,5 @@ checkpoint:
   save_optimizer: true
   save_rollout_data: false
 tracking:
-  wandb_project: miles-smoke
+  wandb_project: miles-glm53
   wandb_entity: mobiuslab
