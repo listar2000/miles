@@ -55,6 +55,8 @@ class Preset:
     attention_backend: str | None = "flash"  # --attention-backend; None: the model's spec decides
     # --custom-lora-spec-path for LoRA on a model Miles' native LoRA does not ship
     lora_spec_path: str | None = None
+    # GiB of the served checkpoint; GPU-delta sync keeps copies of it in trainer host memory
+    served_gib: float | None = None
 
     @property
     def dir_name(self) -> str:
@@ -159,6 +161,7 @@ PRESETS: dict[str, Preset] = {
         megatron_model_type="glm5.3-flash",
         precisions={"fp8": {}},
         precision_min_gpus={"fp8": 2},  # 321 GB of weights
+        served_gib=306,  # zai-org/GLM-5.3-Flash at 46a050be: 328,366,204,147 bytes
         env={
             "SGLANG_HEALTH_CHECK_TIMEOUT": "900",
             # inductor's subprocess compile pool deadlocks under the torch_memory_saver LD_PRELOAD (upstream launcher)
@@ -191,4 +194,5 @@ PRESETS["glm-5.3-flash-4layer"] = replace(
     megatron_model_type="glm5.3-flash-4layer",
     precisions={"bf16": {}},
     precision_min_gpus={},
+    served_gib=46,  # 48,689,371,310 bytes at 7fb78832
 )

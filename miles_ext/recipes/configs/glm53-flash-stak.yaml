@@ -1,9 +1,9 @@
 # GLM-5.3-Flash, full-parameter RL in one cluster ("together" mode) on two B300:8 nodes: the whole trainer
 # on the first (TP8 EP8 PP1; BF16 weights + bf16 grads ~160 GB per GPU), two TP4 engines serving the FP8
 # release on the second, NCCL weight sync, R3, fully async. Adam's fp32 state (~2.6 TB with bf16 moments)
-# streams per step: optimizer.host_gib of it per GPU stays in page-locked host memory (fix-073), the rest on
-# node-local disk. Single-turn STAK prompts (ext-038) at short context: this checks that the full model
-# fits and trains on one node before long-context agentic runs (which need the long-context indexer).
+# streams per step: what the trainer node's memory leaves (recipe.optimizer_host_gib, fix-073) stays in pinned
+# host memory, the rest on node-local disk. Single-turn STAK prompts (ext-038) at short context: this checks
+# that the full model fits and trains on one node before long-context agentic runs (which need the long-context indexer).
 # Needs: zai-org/GLM-5.3-Flash at model.revision on the weights volume (prepare_weights); MILES_DATA = a
 # dir holding prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
 name: glm53-flash-stak
@@ -15,7 +15,7 @@ cluster:
   nodes: 2  # 1 trainer + 1 rollout
   train_gpus: 8
   cpu: 64
-  # 8 x optimizer.host_gib of pinned Adam state, plus Ray, the trainer processes and the HF load
+  # sizes the pinned Adam tier: (2304 - TRAINER_HOST_RESERVE_GIB) / 8 GPUs = 150 GiB per GPU
   memory_gib: 2304
   disk_gib: 3072  # Modal's max; the Adam state host memory does not hold (~1.2 TB)
   timeout_hours: 3
@@ -28,7 +28,6 @@ optimizer:
   offload: disk
   moment_dtype: bf16
   grad_dtype: bf16
-  host_gib: 170
 rollout:
   gpus_per_engine: 4
   context_length: 32768

@@ -1,5 +1,6 @@
 """ext-053: full-parameter split placement with GPU-delta weight sync (rollout.weight_sync gpu-delta)."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,9 @@ def _full_param(**over) -> dict:
 @pytest.fixture
 def mapped(monkeypatch):
     # the split LoRA recipe's preset stands in for a preset with an SGLang GPU-delta mapping
-    monkeypatch.setattr(R, "GPU_DELTA_PRESETS", (_recipe()["model"]["preset"],))
+    name = _recipe()["model"]["preset"]
+    monkeypatch.setattr(R, "GPU_DELTA_PRESETS", (name,))
+    monkeypatch.setitem(R.PRESETS, name, replace(R.PRESETS[name], served_gib=476))
 
 
 def test_gpu_delta_argv_and_env(mapped):
