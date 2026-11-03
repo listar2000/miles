@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The fork's ledger, read from the commit series itself.
 
-Every fork commit carries a ``Fork-<Kind>: <id>`` trailer (Fix, Hook, Infra,
+Every fork commit carries a ``Fork-<Kind>: <id>`` trailer (Fix, Hook, Port, Infra,
 Ext) and, for fixes and hooks, ``Touches:`` (upstream files it edits), ``Evidence:``,
-``Upstream-Status:`` and ``Remove-When:``. Git keeps these through a rebase,
+``Upstream-Status:`` and ``Remove-When:``. A port (an open upstream PR carried as is)
+has ``Touches:``, ``Upstream-PR: <url>@<head sha>`` and ``Remove-When:``. Git keeps these through a rebase,
 so the history is the record and nothing has to be kept in sync by hand.
 
     python fork/tools/ledger.py list              # table of fork commits since the upstream base
@@ -41,7 +42,10 @@ so the history is the record and nothing has to be kept in sync by hand.
   8. a ``fixup!`` (or ``squash!``/``amend!``) commit is review work on a PR branch: it counts
      as part of the commit its subject names, as ``git rebase --autosquash`` will fold it. It
      must name a commit of the series, and ``check --merge`` (the merge desk, after the
-     autosquash) refuses any that is left.
+     autosquash) refuses any that is left;
+  9. a port follows the fix and hook rules, except that it may span several commits (a
+     refresh to a newer PR head), and a file it adds (absent from the upstream base, or new
+     in its SGLang patch) needs no marker, so the file stays byte for byte the PR's.
 
 The upstream base is ``stack.UPSTREAM_BASE``: the upstream commit ``main`` last
 merged (a release tag, or between releases the commit an upstream image was
@@ -73,12 +77,19 @@ OWN_PATHS = (
     ".github/pull_request_template.md",
     ".github/workflows/miles-mobius-image.yml",
 )
-KINDS = ("Fix", "Hook", "Infra", "Ext")
-UPSTREAM_KINDS = ("Fix", "Hook")  # the only kinds allowed to edit upstream files
-MARKER = re.compile(r"\[fork ((?:fix|hook)-\d{3})\]")
+KINDS = ("Fix", "Hook", "Port", "Infra", "Ext")
+UPSTREAM_KINDS = ("Fix", "Hook", "Port")  # the only kinds allowed to edit upstream files
+MARKER = re.compile(r"\[fork ((?:fix|hook|port)-\d{3})\]")
 SGLANG_PATCHES = "fork/deps/sglang/"
 SGLANG = "sglang:"  # Touches: prefix for a file of the SGLang checkout (stack.SGLANG_SRC)
-ID_FORMATS = {"Fix": r"fix-\d{3}", "Hook": r"hook-\d{3}", "Ext": r"ext-\d{3}", "Infra": r"[a-z0-9]+(?:[.-][a-z0-9]+)*"}
+UPSTREAM_PR = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+@[0-9a-f]{7,40}")
+ID_FORMATS = {
+    "Fix": r"fix-\d{3}",
+    "Hook": r"hook-\d{3}",
+    "Port": r"port-\d{3}",
+    "Ext": r"ext-\d{3}",
+    "Infra": r"[a-z0-9]+(?:[.-][a-z0-9]+)*",
+}
 
 
 def git(*args: str) -> str:
@@ -117,20 +128,35 @@ def own(path: str) -> bool:
 
 def sglang_patch_id(path: str) -> str | None:
     """The fork id of an SGLang patch file (``fork/deps/sglang/fix-001-x.patch`` -> ``fix-001``)."""
-    m = re.fullmatch(re.escape(SGLANG_PATCHES) + r"((?:fix|hook)-\d{3})-[a-z0-9-]+\.patch", path)
+    m = re.fullmatch(re.escape(SGLANG_PATCHES) + r"((?:fix|hook|port)-\d{3})-[a-z0-9-]+\.patch", path)
     return m.group(1) if m else None
 
 
 def patch_files(text: str, fork_id: str) -> dict[str, bool]:
-    """{file a unified diff edits: whether its added lines carry the ``[fork <fork_id>]`` marker}."""
+    """{file a unified diff edits: whether its added lines carry the ``[fork <fork_id>]`` marker}.
+
+    A file a port's patch creates counts as marked (rule 9)."""
     out: dict[str, bool] = {}
     current = None
     for line in text.splitlines():
         if line.startswith("diff --git "):
             current = line.split(" b/", 1)[1]
             out[current] = False
+        elif current and line.startswith("new file mode") and fork_id.startswith("port-"):
+            out[current] = True
         elif current and line.startswith("+") and not line.startswith("+++") and fork_id in MARKER.findall(line):
             out[current] = True
+    return out
+
+
+def patch_new_files(text: str) -> set[str]:
+    """Files a unified diff creates."""
+    out, current = set(), None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[1]
+        elif current and line.startswith("new file mode"):
+            out.add(current)
     return out
 
 
@@ -189,6 +215,14 @@ def commits(base: str) -> list[Commit]:
                 continue
         out.append(Commit(sha[:10], subject, trailers, files))
     return out
+
+
+def in_base(base: str, path: str) -> bool:
+    try:
+        git("cat-file", "-e", f"{base}:{path}")
+    except subprocess.CalledProcessError:
+        return False
+    return True
 
 
 def only_removes(sha: str, path: str, base: str) -> bool:
@@ -254,7 +288,11 @@ def cmd_markdown(base: str):
     gone = retired(series)
     for c in series:
         if c.kind in UPSTREAM_KINDS:
-            status = f"retired by {gone[c.fork_id]}" if c.fork_id in gone else c.get("Upstream-Status")
+            status = (
+                f"retired by {gone[c.fork_id]}"
+                if c.fork_id in gone
+                else (c.get("Upstream-Status") or c.get("Upstream-PR"))
+            )
             print(f"| {c.fork_id} | {c.kind.lower()} | {c.subject} | {c.get('Touches')} | {status} "
                   f"| {c.get('Remove-When')} |")
         elif c.kind:
@@ -302,7 +340,7 @@ def cmd_check(base: str, merge: bool = False) -> int:
     for c in series:
         if c.kind is None:
             hint = "; a fixup! subject must name a commit of this series" if FIXUP.fullmatch(c.subject) else ""
-            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Infra/Ext trailer{hint}")
+            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Port/Infra/Ext trailer{hint}")
             continue
         if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")) and (
             c.kind not in UPSTREAM_KINDS
@@ -312,13 +350,18 @@ def cmd_check(base: str, merge: bool = False) -> int:
             problems.append(f"{c.sha} {c.fork_id}: only a fix or hook commit may carry a Releases: trailer")
         if not re.fullmatch(ID_FORMATS[c.kind], c.fork_id):
             problems.append(f"{c.sha} {c.fork_id!r}: a Fork-{c.kind} id must match {ID_FORMATS[c.kind]}")
-        if c.kind in UPSTREAM_KINDS and sum(o.fork_id == c.fork_id for o in series) > 1:
+        if c.kind in ("Fix", "Hook") and sum(o.fork_id == c.fork_id for o in series) > 1:
             problems.append(f"{c.sha} {c.fork_id}: a {c.kind.lower()} id is used by one commit only")
         if c.kind in UPSTREAM_KINDS:
             touches = {t.strip() for v in c.trailers.get("Touches", []) for t in v.split(",") if t.strip()}
-            for key in ("Evidence", "Upstream-Status", "Remove-When"):
+            required = (
+                ("Upstream-PR", "Remove-When") if c.kind == "Port" else ("Evidence", "Upstream-Status", "Remove-When")
+            )
+            for key in required:
                 if key not in c.trailers:
                     problems.append(f"{c.sha} {c.fork_id}: missing {key} trailer")
+            if c.kind == "Port" and not all(UPSTREAM_PR.fullmatch(v) for v in c.trailers.get("Upstream-PR", [])):
+                problems.append(f"{c.sha} {c.fork_id}: Upstream-PR must be <github PR url>@<head sha>")
             for f in c.files:
                 if sglang_patch_id(f) == c.fork_id:
                     continue
@@ -328,7 +371,7 @@ def cmd_check(base: str, merge: bool = False) -> int:
                     problems.append(f"{c.sha} {c.fork_id}: edits {f} but Touches: does not list it")
             sglang_touches = {t.removeprefix(SGLANG) for t in touches if t.startswith(SGLANG)}
             if sglang_touches:
-                sglang[c.fork_id] = sglang_touches
+                sglang[c.fork_id] = sglang_touches  # a port refresh's Touches replace the earlier ones
                 if len(c.files) != 1 or sglang_patch_id(c.files[0]) != c.fork_id:
                     problems.append(
                         f"{c.sha} {c.fork_id}: an SGLang fix or hook commit touches exactly one file, "
@@ -337,6 +380,9 @@ def cmd_check(base: str, merge: bool = False) -> int:
             if c.fork_id in gone:
                 continue
             removes = "Retires" in c.trailers or "Releases" in c.trailers
+            if c.kind == "Port":  # a refresh declares the port's whole current file set
+                for ids in declared.values():
+                    ids.discard(c.fork_id)
             for f in touches - {SGLANG + t for t in sglang_touches}:
                 if removes and only_removes(c.sha, f, base):
                     continue  # removing our code leaves nothing to mark
@@ -368,6 +414,8 @@ def cmd_check(base: str, merge: bool = False) -> int:
         if f not in changed:
             problems.append(f"{f}: declared by {sorted(ids)} but identical to {base} (fix dropped? remove the commit)")
         missing = ids - markers_in(ROOT / f)
+        if missing and all(i.startswith("port-") for i in missing) and not in_base(base, f):
+            missing = set()  # a file a port adds stays byte for byte the PR's (rule 9)
         if missing:
             problems.append(f"{f}: no [fork <id>] marker for {sorted(missing)}")
     patches: dict[str, Path] = {}
@@ -381,7 +429,7 @@ def cmd_check(base: str, merge: bool = False) -> int:
             continue
         if fid not in sglang:
             problems.append(
-                f"{rel}: not named <fix|hook>-NNN-<slug>.patch, or no commit of that id declares "
+                f"{rel}: not named <fix|hook|port>-NNN-<slug>.patch, or no commit of that id declares "
                 "its files (Touches: sglang:<path>)"
             )
             continue
@@ -431,7 +479,13 @@ def sglang_marker_problems() -> list[str]:
     problems = []
     for path in patches:
         fid = sglang_patch_id(str(path.relative_to(ROOT)))
-        for f in patch_files(path.read_text(), fid):
+        text = path.read_text()
+        added = patch_new_files(text) if fid.startswith("port-") else set()  # a port's new files carry no marker
+        for f in patch_files(text, fid):
+            if f in added:
+                if not (src / f).is_file():
+                    problems.append(f"{src / f}: missing; {path.name} is not applied in this image")
+                continue
             if fid in markers_in(src / f):
                 print(f"{fid}: {src / f}")
             else:
