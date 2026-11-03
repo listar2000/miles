@@ -58,6 +58,7 @@ a larger change. Low = cosmetic or specific to our stack.
 | fix-064 | Score centering's MIS gives out-of-band tokens weight 0 but logs no count of them, so a run sees only the mean token weight | still present (`ScoreCenteringMetrics` has no mask field) | none found | 2 lines + test, applies clean | Low: observability only |
 | [fix-063](patches/fix-063-rollout-at-engine-ready.md) | A fresh fully async LoRA run's engines wait for the trainer's first weight sync, though it sends the zero adapter they can register themselves (6-25 min idle) | still present (`train_async.py` syncs before the first rollout) | none found | ~110 lines + tests; needs fix-022 first | Medium: startup time only |
 | [fix-058](patches/fix-058-score-centering-dspark.md) | Score centering refuses every SGLang speculative mode as "not verified", so SC runs lose DSpark (a rollout batch took 54 min without DSpark versus about 30 min with it); DSpark is exact rejection sampling with top-k from the verify logits | still present, [score_centering.py:33](https://github.com/radixark/miles/blob/db7f7d60/miles/utils/score_centering.py#L33) | none found (upstream branches add refusals) | 8 lines + test, applies clean | Medium: needs the GPU check cited in the PR |
+| [fix-070](patches/fix-070-glm53-kpool-query-chunks.md) + [fix-071](patches/fix-071-glm53-kpool-tp-split.md) | GLM-5.3 kpool indexer builds the dense `[T, T_pool]` fp32 scores for the whole sequence on every TP rank (64 GiB per DSA call at 256k) | still present on main `74f5bd2e` (2026-11-02), [kpool_indexer.py:32](https://github.com/radixark/miles/blob/74f5bd2e8fa25d79ea37c5ef272e1a25c1b13196/miles_plugins/models/glm5_next/ops/kpool_indexer.py#L32) | not searched | ~110 lines + tests, one PR | High: blocks long-context GLM-5.3-Flash training |
 
 ## SGLang
 
@@ -88,5 +89,5 @@ a larger change. Low = cosmetic or specific to our stack.
 - fix-049 only serves ext-034 (our group log).
 - fix-059 only removes the off switches of our own fixes; upstream gets each fix without one.
 - Features carried as fixes: fix-022 (trainer init alongside the engines),
-  fix-045 and fix-073 (optimizer host-memory tier), fix-047 (recompute reuses the indexer top-k).
+  fix-045 and fix-073 (optimizer host-memory tier), fix-047 and fix-072 (recompute reuses the indexer top-k).
 - Hooks (hook-001, 002, 005, 006, 007, 008) exist for our extensions.
