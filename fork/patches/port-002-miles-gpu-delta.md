@@ -28,13 +28,16 @@ teleportation"): PP-local owners XOR old and new canonical weights, compress on 
 - fix-077 (from the overnight GLM run): the receiver plan names tensors as the checkpoint does, and GLM-5.3-Flash's
   multimodal checkpoint nests the text model under `model.language_model.`; Megatron's export emits `model.*`. Exporter
   names now map onto those plan names, and a baseline capture that still meets unplanned tensors fails once with the list.
+- fix-078 (found in the full GLM-5.3-Flash split runs): the encoder concatenated each owner's frames into one device arena before the
+  D2H, a second device copy of the owner's payload that a full-parameter trainer has no HBM for. Frames now copy
+  straight into the pinned host slab in the same layout.
 
 ## How it is applied
 Opt-in: `--update-weight-transfer-mode gpu-delta` (plus `--update-weight-disk-dir`, a local HF checkpoint, Megatron
 raw exporter, `retract` pause, no LoRA; `miles/utils/gpu_delta/admission.py`). Nothing changes for other modes.
 Verify: the PR's fast tests on CPU in our image (`tests/fast/{backends/megatron_utils,backends/training_utils/weight_update,utils}/gpu_delta`),
 gate E0 for the native path. On a sync: if upstream merged #3894, take upstream's side of every file listed in
-`Touches:` and retire port-002, fix-075, fix-076 and fix-077; if the PR head moved and we want it, refresh in one commit.
+`Touches:` and retire port-002 and fix-075 to fix-078; if the PR head moved and we want it, refresh in one commit.
 
 ## Remove when
 radixark/miles#3894 is merged and our main has synced past it; upstream status: open draft PR (2026-11-03).
