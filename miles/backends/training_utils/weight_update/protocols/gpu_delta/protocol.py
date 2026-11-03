@@ -69,6 +69,8 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
         self._raw_names = self._gpu_batch_names = ()
         self._batch_by_name = {}
         self._plan = {}
+        self._plan_alias = {}
+        self._unplanned = []
         self._capturing = False
         self._baseline_captured = False
         self._publication_version = 0
@@ -109,6 +111,13 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             raise RuntimeError("GPU-delta recovery requires the same canonical tensor plan")
         self._cohort = cohort
         self._plan = {tensor["name"]: tensor for tensor in cohort.plan}
+        # [fork fix-077] Receivers name tensors as the checkpoint does; multimodal checkpoints
+        # (GLM-5.3-Flash) nest the text model under model.language_model., which Megatron's HF export omits.
+        self._plan_alias = {
+            "model." + name[len("model.language_model.") :]: name
+            for name in self._plan
+            if name.startswith("model.language_model.")
+        }
 
     def _incarnations(self):
         return {
@@ -231,6 +240,12 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
                 self.send_bucket(bucket)
         self._capturing = False
         self._read_baseline = None
+        if self._unplanned and self._error is None:  # [fork fix-077]
+            seen = sorted(self._seen)
+            self._error = ValueError(
+                f"exporter tensors not in the receiver plan ({len(self._unplanned)}): {self._unplanned[:40]}; "
+                f"plan sample: {sorted(self._plan)[:20]}; matched {len(seen)} of {len(self._plan)}"
+            )
         if self._error is None:
             try:
                 self._prepare_gpu_schedule()
@@ -290,6 +305,12 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             if self._error is not None:
                 return
             try:
+                if name not in self._plan:  # [fork fix-077]
+                    name = self._plan_alias.get(name, name)
+                if self._capturing and name not in self._plan:
+                    # [fork fix-077] collect every unplanned name so one failed start lists them all
+                    self._unplanned.append(name)
+                    continue
                 tensor = self._match_layout(name, tensor)
                 if name in self._seen:
                     raise ValueError(f"Duplicate canonical tensor owner for {name!r}")

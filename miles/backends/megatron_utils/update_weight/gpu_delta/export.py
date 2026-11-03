@@ -123,6 +123,9 @@ def _block_fp8_scales(plan, config):
         scales[weight_name] = scale_name
     if scales and (config.get("quant_method") != "fp8" or config.get("weight_block_size") != [128, 128]):
         raise ValueError("Canonical block128 UE8M0 export requires FP8 block size [128, 128]")
+    # [fork fix-077] the exporter names a multimodal checkpoint's text tensors without model.language_model.
+    prefix = "model.language_model."
+    scales |= {"model." + w[len(prefix) :]: sc for w, sc in scales.items() if w.startswith(prefix)}
     return scales
 
 

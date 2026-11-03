@@ -507,3 +507,15 @@ def test_gpu_delta_full_snapshot_uses_direct_factory(direct_module, gpu_delta_mo
     )
     assert type(iterator) is direct_module.HfWeightIteratorDirect
     assert captured["placement"] == full
+
+
+def test_ue8m0_scales_resolve_for_unprefixed_exporter_names(gpu_delta_module):
+    # [fork fix-077] a multimodal plan names text tensors model.language_model.*, the exporter model.*
+    fmt = {"format": "fp8-block128-ue8m0"}
+    plan = {
+        "model.language_model.layers.0.mlp.down_proj.weight": fmt | {"dtype": "F8_E4M3"},
+        "model.language_model.layers.0.mlp.down_proj.weight_scale_inv": fmt | {"dtype": "U8"},
+    }
+    scales = gpu_delta_module._block_fp8_scales(plan, {"quant_method": "fp8", "weight_block_size": [128, 128]})
+    canonical = "model.language_model.layers.0.mlp.down_proj.weight_scale_inv"
+    assert scales["model.layers.0.mlp.down_proj.weight"] == canonical
