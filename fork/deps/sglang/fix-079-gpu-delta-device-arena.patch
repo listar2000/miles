@@ -1,0 +1,111 @@
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/codec.py b/python/sglang/srt/weight_sync/gpu_delta/codec.py
+index 7a567cdc9e..ec5483f082 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/codec.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/codec.py
+@@ -280,7 +280,7 @@ class NvcompDecoder:
+         from sglang.srt.weight_sync.gpu_delta.memory import device_empty
+ 
+         if (
+-            host_input.device.type != "cpu"
++            host_input.device.type not in ("cpu", "cuda")  # [fork fix-079] or its device-staged image
+             or host_input.dtype != torch.uint8
+             or not host_input.is_contiguous()
+         ):
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/host.py b/python/sglang/srt/weight_sync/gpu_delta/host.py
+index 4308010726..64fac99f36 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/host.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/host.py
+@@ -20,6 +20,7 @@ or copies plain LZ4 into its own original CUDA HOST_NUMA allocation.
+ import fcntl
+ import hashlib
+ import json
++import logging  # [fork fix-079]
+ import mmap
+ import os
+ import re
+@@ -35,7 +36,12 @@ import numpy as np
+ import orjson
+ 
+ from sglang.srt.weight_sync.gpu_delta import profiling
+-from sglang.srt.weight_sync.gpu_delta.memory import HostAllocation
++from sglang.srt.weight_sync.gpu_delta.memory import (  # [fork fix-079]
++    DeviceStagedArena,
++    HostAllocation,
++)
++
++logger = logging.getLogger(__name__)  # [fork fix-079]
+ 
+ 
+ def validate_codec(manifest):
+@@ -440,7 +446,19 @@ class HostArena:
+             * _CAPACITY_ALIGNMENT
+         )
+         started = time.perf_counter()
+-        allocation = HostAllocation(capacity, self.device) if capacity else None
++        allocation = None
++        if capacity:
++            try:
++                if os.environ.get("GPU_DELTA_DEVICE_ARENA") == "1":  # [fork fix-079] force the staged arena
++                    raise RuntimeError("GPU_DELTA_DEVICE_ARENA=1: CUDA_ERROR_OUT_OF_MEMORY forced")
++                allocation = HostAllocation(capacity, self.device)
++            except RuntimeError as error:
++                # [fork fix-079] gVisor (Modal) caps the HW-decompress host mapping: stage through device memory
++                if "OUT_OF_MEMORY" not in str(error):
++                    raise
++                logger.warning("GPU-delta host arena of %d bytes refused (%s); staging through device memory", capacity, error)
++                allocation = DeviceStagedArena(capacity, self.device)
++                metrics["host_rank_device_staged"] = 1
+         self.close()
+         self.allocation = allocation
+         self.mapping = allocation.view if allocation is not None else None
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/memory.py b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+index 2d987f36fc..f24698a7f3 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/memory.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/memory.py
+@@ -282,3 +282,24 @@ class HostAllocation:
+         if int(self.handle):
+             _check(self.driver.cuMemRelease(self.handle), "cuMemRelease")
+             self.handle = 0
++
++
++class DeviceStagedArena:
++    """[fork fix-079] Host arena fallback where the HW-decompress host mapping is refused.
++
++    CPU workers fill an ordinary host buffer; before the pause the receiver copies it into
++    a DE-capable device buffer of the same size, which the decoder reads instead.
++    """
++
++    def __init__(self, capacity, device):
++        import torch
++
++        self.capacity = capacity
++        self.host = torch.empty(capacity, dtype=torch.uint8)
++        self.view = memoryview(self.host.numpy()).cast("B")
++        self.device_tensor = device_empty((capacity,), torch.uint8, torch.device("cuda", device))
++
++    def close(self):
++        if self.view is not None:
++            self.view.release()
++        self.view = self.host = self.device_tensor = None
+diff --git a/python/sglang/srt/weight_sync/gpu_delta/receiver.py b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
+index 5025bd68c3..f0098e33d5 100644
+--- a/python/sglang/srt/weight_sync/gpu_delta/receiver.py
++++ b/python/sglang/srt/weight_sync/gpu_delta/receiver.py
+@@ -447,10 +447,16 @@ class PreparedDelta:
+             if inner_codec not in backend.decoders:
+                 backend.decoders[inner_codec] = NvcompDecoder(self.device, inner_codec)
+             decoder = backend.decoders[inner_codec]
++            decode_input = backend.host_arena.tensor
++            staged = getattr(backend.host_arena.allocation, "device_tensor", None)
++            if staged is not None:  # [fork fix-079] copy the filled host arena into its DE-capable device image
++                with torch.cuda.stream(self.de_stream):
++                    staged[: decode_input.numel()].copy_(decode_input)
++                decode_input = staged[: decode_input.numel()]
+             self.decode_plan = decoder.prepare_batches(
+                 frame_table,
+                 frame_counts,
+-                backend.host_arena.tensor,
++                decode_input,
+                 self.de_stream,
+             )
+             self.decode_plan.record_stream(self.stream)

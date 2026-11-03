@@ -267,6 +267,8 @@ GPU_DELTA_ENV = {
     # (46 GiB per GPU for full GLM-5.3-Flash), which a full-parameter trainer node does not have
     "GPU_DELTA_CODEC": "lz4",
     "GPU_DELTA_INITIAL_SYNC_CODEC": "lz4",
+    # [fork fix-079] Modal cannot map HW-decompress host arenas past a small size: stage through HBM
+    "GPU_DELTA_DEVICE_ARENA": "1",
 }
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
 # does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
