@@ -120,5 +120,17 @@ def add_fork_arguments(parser):
         ),
     )
     # [fork hook-002] end
+    # [fork hook-020] begin
+    parser.add_argument(
+        "--custom-megatron-save-context-path",
+        type=str,
+        default=None,
+        help=(
+            "Path to a factory ``(args, iteration) -> context manager`` that every trainer rank enters "
+            "around each Megatron checkpoint save; its exit also runs when the save fails. It may change "
+            "args (e.g. args.save) for the save and must restore them on exit."
+        ),
+    )
+    # [fork hook-020] end
 
     return parser
