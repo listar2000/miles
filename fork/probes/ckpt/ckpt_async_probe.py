@@ -1,4 +1,4 @@
-"""Measure Megatron checkpoint saves and uploads on one H100:8 node."""
+"""Measure Megatron checkpoint saves and uploads on a GPU node (usage: fork/patches/ext-056-save-settings.md)."""
 
 import json
 import os
@@ -11,16 +11,20 @@ from pathlib import Path
 
 import modal
 
-BASE_IMAGE = "radixark/miles:v0.1.2@sha256:c81d8ba7b91571aac8e0bb2be372c6a9664e1ff7b88f518a8891861bae83e3b7"
+BASE_IMAGE = os.environ.get(
+    "CKPT_PROBE_IMAGE", "radixark/miles:v0.1.2@sha256:c81d8ba7b91571aac8e0bb2be372c6a9664e1ff7b88f518a8891861bae83e3b7"
+)
+GPU = os.environ.get("CKPT_PROBE_GPU", "H100:8")
+NPROC = int(GPU.split(":")[1]) if ":" in GPU else 1
 VOL, LOCAL = "/vol", "/tmp/ckpt"
 WORKER = "/root/ckpt_async_worker.py"
 
-app = modal.App("miles-ckpt-probe-h100")
+app = modal.App("miles-ckpt-probe-gpu")
 vol = modal.Volume.from_name("miles-ckpt-probe", version=2)
 image = (
     modal.Image.from_registry(BASE_IMAGE)
     .entrypoint([])
-    .env({"PYTHONUNBUFFERED": "1"})
+    .env({"PYTHONUNBUFFERED": "1", "CKPT_PROBE_GPU": GPU})
     .pip_install("py-spy")
     .add_local_file(Path(__file__).with_name("ckpt_async_worker.py"), WORKER)
 )
@@ -30,6 +34,11 @@ CASES = {
     "sync-t1": (VOL, 8, 1, False, 1, False, False, None, False, 25),
     "sync-t8": (VOL, 8, 8, False, 1, False, False, None, False, 25),
     "sync-t1-local": (LOCAL, 8, 1, False, 1, False, False, None, False, 25),
+    "sync-t1-64": (VOL, 64, 1, False, 1, False, False, None, False, 25),
+    "sync-t1-64-local": (LOCAL, 64, 1, False, 1, False, False, None, False, 25),
+    # GLM-5.3 full-param shard size (627 GB over 8 ranks); -hog first fills host RAM as the trainer does
+    "sync-t1-78": (VOL, 78, 1, False, 1, False, False, None, False, 25),
+    "sync-t1-78-hog": (VOL, 78, 1, False, 1, False, False, None, False, 25),
     "local-then-copy": (LOCAL, 64, 1, False, 1, False, False, None, False, 25),
     "local-then-copy-diskload": (LOCAL, 64, 1, False, 1, False, True, None, False, 25),
     "async-nvrx-persistent": (VOL, 8, 8, True, 2, True, False, "nvrx", True, 5),
@@ -38,6 +47,8 @@ CASES = {
     "async-nvrx-temporal": (VOL, 8, 8, True, 2, True, False, "nvrx", False, 5),
     "async-mcore-temporal": (VOL, 8, 8, True, 2, True, False, "mcore", False, 5),
 }
+HOG_GIB = {"sync-t1-78-hog": 1700}  # host RAM held while saving
+HOG = "import sys, time; b = bytearray(int(sys.argv[1]) << 30); b[::4096] = b'x' * len(b[::4096]); print('hog ready', flush=True); time.sleep(86400)"
 COPY_JOBS = 16
 DISK_LOAD = (
     "mkdir -p /tmp/optload; while true; do dd if=/dev/zero of=/tmp/optload/f bs=64M count=320 conv=fsync "
@@ -86,7 +97,7 @@ def _run_case(name: str) -> dict:
         [
             "torchrun",
             "--nproc-per-node",
-            "8",
+            str(NPROC),
             WORKER,
             "--case",
             name,
@@ -105,6 +116,11 @@ def _run_case(name: str) -> dict:
     )
     env = os.environ | ({"ASYNC_STRATEGY": strategy} if strategy else {})
     load = subprocess.Popen(["bash", "-c", DISK_LOAD]) if disk_load else None
+    hog = None
+    if name in HOG_GIB:
+        hog = subprocess.Popen(["python", "-c", HOG, str(HOG_GIB[name])], stdout=subprocess.PIPE, text=True)
+        hog.stdout.readline()
+        print(f"hog holds {HOG_GIB[name]} GiB; host RAM used {_used_gib()[0]:.1f} GiB", flush=True)
     lines = []
     try:
         with _PeakRam() as ram:
@@ -118,6 +134,8 @@ def _run_case(name: str) -> dict:
             proc.wait()
             timer.cancel()
     finally:
+        if hog:
+            hog.kill()
         if load:
             load.kill()
             shutil.rmtree("/tmp/optload", ignore_errors=True)
@@ -141,7 +159,7 @@ def _run_case(name: str) -> dict:
             check=True,
         )
         res["copy_to_volume_s"] = round(time.monotonic() - t, 1)
-        res["copy_gbs"] = round(8 * (gib << 30) / 1e9 / res["copy_to_volume_s"], 3)
+        res["copy_gbs"] = round(NPROC * (gib << 30) / 1e9 / res["copy_to_volume_s"], 3)
     if target == VOL or name.startswith("local-then-copy"):
         t = time.monotonic()
         vol.commit()
@@ -153,9 +171,9 @@ def _run_case(name: str) -> dict:
 
 @app.function(
     image=image,
-    gpu="H100:8",
+    gpu=GPU,
     cpu=64,
-    memory=1024 * 1024,
+    memory=int(os.environ.get("CKPT_PROBE_MEMORY_GIB", "1024")) * 1024,
     ephemeral_disk=3 * 1024 * 1024,
     volumes={VOL: vol},
     timeout=3 * 3600,
