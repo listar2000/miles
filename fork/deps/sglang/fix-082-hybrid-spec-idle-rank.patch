@@ -1,0 +1,15 @@
+diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
+index b7b48b3cbd..d2cc7d35d3 100644
+--- a/python/sglang/srt/model_executor/forward_batch_info.py
++++ b/python/sglang/srt/model_executor/forward_batch_info.py
+@@ -1776,7 +1776,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
+                 and self.spec_info is not None
+                 and not self.spec_info.is_draft_input()
+             ):
+-                if self.forward_mode.is_idle():
++                # [fork fix-082] a rank with no padded rows stays IDLE: a 0-row TARGET_VERIFY reaches the
++                # attention backends, and DSA's metadata reads seq_lens_cpu.max() of an empty tensor
++                if self.forward_mode.is_idle() and num_tokens > 0:
+                     self._original_forward_mode = self.forward_mode
+                     self.forward_mode = ForwardMode.TARGET_VERIFY
+                 # Invert the spec_scale_global_num_tokens scaling.
