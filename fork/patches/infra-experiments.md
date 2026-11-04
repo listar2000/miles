@@ -14,7 +14,8 @@ all of `miles_ext/`).
 
 ## How it is applied
 `OWN_PATHS` includes `experiments/`; `Fork-Exp: <folder>` commits touching anything else fail `ledger.py check`.
-Launches that run experiment code lay `experiments/` over the image (ext-054). Nothing to do on a sync.
+The SFT launcher in #158 (ext-054) lays `experiments/` over the image; until it lands, nothing launches
+experiment code. Nothing to do on a sync.
 
 ## Remove when
 never (fork layout); upstream status: not applicable
