@@ -17,9 +17,10 @@ Measurements, 2026-11-04 (probes in `fork/probes/ckpt/`, volume v2):
 | GLM-5.3-Flash trainer, two B300:8 (Adam in host memory), one save with weights and Adam's state (3,410 GB) to the volume | 2,608 s = 1.3 GB/s (~0.65 per node) |
 | Qwen3.5-9B, one H200:8, staged weights-only save / save with Adam's state to the volume | training paused 5-16 s / 59-74 s (different contents) |
 
-A container sustains ~0.65-0.8 GB/s of long checkpoint writes to the volume, and its local NVMe under the GLM
-trainer is no faster, so staging does not shorten a GLM save on one node; it does for models whose save fits
-the page cache. More trainer nodes divide a save between their containers.
+In these configurations a container wrote long checkpoints to the volume at ~0.65-0.8 GB/s, and its local NVMe
+under the GLM trainer was no faster, so staging did not shorten a one-node GLM save. Whether it shortens a smaller
+model's save is not measured like for like (untested: saves that fit the page cache). Two trainer nodes split a
+save between their containers.
 
 ## Decision
 - `checkpoint.stage_dir`: ext-031 (removed 2026-10-27, unused) again, on hook-020. Each rank saves to node-local
