@@ -1,0 +1,18 @@
+# Qwen3-30B-A3B-Thinking-2507 on the GLM-5.3-Flash Pi traces (README.md), 128K, the tmax Qwen3-30B schedule.
+model: qwen3-30b-a3b-thinking-2507
+commit: 32909123a387cd7dcdf038dec1e4c31936638845  # sft/trainer (#162): hook-019 + trainer
+data:
+  volume: miles-rl-datasets
+  records: sft/tb2-pi-glm53flash/records-t1800
+  shards: sft/tb2-pi-glm53flash/qwen3-30b-128k-b2-t1800
+  max_tokens: 131072
+  postprocess: [experiments.glm53_pi_sft.postprocess.untrain_no_reasoning]
+train:
+  epochs: 1
+  batch: 128
+  lr: 2.0e-5
+  decay: linear
+  warmup: 0.03
+  cp: 4
+val: {interval: 10}
+tracking: {wandb_project: miles-sft}
