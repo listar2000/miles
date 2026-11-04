@@ -40,7 +40,8 @@ so the history is the record and nothing has to be kept in sync by hand.
      id's marker in that file, nor a retiring or releasing commit's own marker in a
      file where it only removed code (every line it added is a line of the upstream base);
   8. a ``fixup!`` (or ``squash!``/``amend!``) commit is review work on a PR branch: it counts
-     as part of the commit its subject names, as ``git rebase --autosquash`` will fold it. It
+     as part of the commit its subject names, as ``git rebase --autosquash`` will fold it; an
+     ``amend!`` commit's trailers replace the target's, as its message will. It
      must name a commit of the series, and ``check --merge`` (the merge desk, after the
      autosquash) refuses any that is left;
   9. a port follows the fix and hook rules, except that it may span several commits (a
@@ -213,6 +214,8 @@ def commits(base: str) -> list[Commit]:
             if target:
                 target.files = sorted({*target.files, *files})
                 target.fixups.append(sha[:10])
+                if subject.startswith("amend! "):  # its message replaces the target's, as --autosquash does
+                    target.trailers = trailers
                 continue
         out.append(Commit(sha[:10], subject, trailers, files))
     return out
