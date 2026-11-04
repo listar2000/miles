@@ -290,6 +290,18 @@ class TestConstructorArguments:
         assert actor_spec.worker_class == actor_class
         assert critic_spec.worker_class == train_specs._TRAINER_ACTOR_CLASSES[backend]
 
+    # [fork hook-019] begin
+    def test_a_custom_trainer_actor_class_replaces_the_default_except_for_multi_lora(self):
+        (default,) = specs_trainer(_make_args())
+        actor, critic = specs_trainer(_make_args(custom_trainer_actor_class="ext.Actor", use_critic=True))
+        (multi_lora,) = specs_trainer(_make_args(custom_trainer_actor_class="ext.Actor", multi_lora=True))
+
+        assert actor.worker_class == critic.worker_class == "ext.Actor"
+        assert default.worker_class == train_specs._TRAINER_ACTOR_CLASSES["megatron"]
+        assert multi_lora.worker_class == "miles.backends.megatron_utils.lora.actor.MultiLoRATrainRayActor"
+
+    # [fork hook-019] end
+
 
 class TestConcurrencyGroups:
     def test_the_heartbeat_rpc_is_always_isolated(self):

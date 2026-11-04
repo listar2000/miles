@@ -132,5 +132,16 @@ def add_fork_arguments(parser):
         ),
     )
     # [fork hook-020] end
+    # [fork hook-019] begin
+    parser.add_argument(
+        "--custom-trainer-actor-class",
+        type=str,
+        default=None,
+        help=(
+            "Import path of a Ray trainer actor class used instead of the --train-backend default, "
+            "e.g. a subclass of MegatronTrainRayActor that adds a step kind."
+        ),
+    )
+    # [fork hook-019] end
 
     return parser
