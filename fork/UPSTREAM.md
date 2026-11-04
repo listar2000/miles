@@ -96,4 +96,4 @@ a larger change. Low = cosmetic or specific to our stack.
 - fix-059 only removes the off switches of our own fixes; upstream gets each fix without one.
 - Features carried as fixes: fix-022 (trainer init alongside the engines),
   fix-045 and fix-073 (optimizer host-memory tier), fix-047 and fix-072 (recompute reuses the indexer top-k).
-- Hooks (hook-001, 002, 005, 006, 007, 008) exist for our extensions.
+- Hooks (hook-001, 002, 005, 006, 007, 008, 019) exist for our extensions.
