@@ -8,7 +8,7 @@ import time
 
 import modal
 
-VOLUME = os.environ.get("CKPT_PROBE_VOLUME", "miles-ckpt-probe")
+VOLUME = "miles-ckpt-probe"
 GPU = os.environ.get("CKPT_PROBE_GPU") or None
 TOTAL_GIB = int(os.environ.get("CKPT_PROBE_GIB", "64"))
 STREAMS = [int(s) for s in os.environ.get("CKPT_PROBE_STREAMS", "1,8,32,64").split(",")]
@@ -25,7 +25,7 @@ vol = modal.Volume.from_name(VOLUME, create_if_missing=True, version=2)
 image = (
     modal.Image.debian_slim()
     .pip_install("torch==2.5.1", index_url="https://download.pytorch.org/whl/cpu")
-    .env({"CKPT_PROBE_VOLUME": VOLUME, "CKPT_PROBE_GPU": GPU or ""})
+    .env({"CKPT_PROBE_GPU": GPU or ""})
 )
 
 
