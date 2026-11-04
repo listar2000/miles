@@ -1,6 +1,4 @@
 # Qwen3-30B-A3B-Thinking-2507 on the GLM-5.3-Flash Pi traces (README.md), 128K, the tmax Qwen3-30B schedule.
-#   MILES_SFT_CONFIG=experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml modal run -m miles_ext.sft.modal_prepare
-#   MILES_SFT_CONFIG=experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml modal run --detach -m miles_ext.sft.modal_train --run-id <id>
 model: qwen3-30b-a3b-thinking-2507
 commit: 32909123a387cd7dcdf038dec1e4c31936638845  # sft/trainer (#162): hook-019 + trainer
 data:

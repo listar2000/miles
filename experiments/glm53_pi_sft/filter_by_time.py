@@ -1,9 +1,10 @@
-"""Copy the records whose teacher run took at most --max-seconds of agent time (first to last step)."""
+"""Copy the training records whose teacher run took at most --max-seconds of agent time; held-out records as they are."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,9 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     for path in sorted(args.input.glob("*.jsonl")):
         if path.name.startswith("_"):
+            continue
+        if path.name.endswith(".val.jsonl"):
+            shutil.copyfile(path, args.output / path.name)
             continue
         kept = dropped = 0
         with open(path) as f, open(args.output / path.name, "w") as out:

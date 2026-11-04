@@ -94,7 +94,8 @@ point a Mobius eval at it. Baseline: Qwen3-30B-A3B-Thinking-2507 in the same set
 | --- | --- | --- |
 | [qwen3-30b-128k.yaml](configs/qwen3-30b-128k.yaml) (v1, 2 epochs, stopped at step 50) | all | every reply |
 | [qwen3-30b-128k-b2.yaml](configs/qwen3-30b-128k-b2.yaml) (v2) | all | replies without reasoning in context, untrained ([postprocess.py](postprocess.py)) |
-| [qwen3-30b-128k-b2-t1800.yaml](configs/qwen3-30b-128k-b2-t1800.yaml) (v3) | teacher runs of at most 30 min ([filter_by_time.py](filter_by_time.py): 3,771 of 4,505) | as v2 |
+| [qwen3-30b-128k-b2-t1800.yaml](configs/qwen3-30b-128k-b2-t1800.yaml) (v3) | teacher runs of at most 30 min ([filter_by_time.py](filter_by_time.py): 3,620 of 4,326) | as v2 |
+| [qwen3-30b-128k-b2-r8k.yaml](configs/qwen3-30b-128k-b2-r8k.yaml) (v4) | all | as v2, and replies with over 8,000 characters of reasoning untrained (12% of reasoning replies, 79% of the reasoning text) |
 
 v3's held-out set is v2's (all held-out records), so the two validation NLLs compare.
 
@@ -115,5 +116,12 @@ TB 2.1 in Pi (87 tasks x 2, strict tool schemas, 30-min agent limit, exactly 2 t
 | v2 | 9/174 (5.2%) | 7/87 | 133 |
 | v3 | 6/174 (3.4%) | 6/87 | 147 |
 | v2, 28 concurrent agents, 8K reply cap | 7/174 (4.0%) | 7/87 | 19 (122 replies hit 8K) |
+
+These runs lost about 40% of SFT trial time to a serving jam: Pi abandoned replies after a 300 s idle timeout and resent them while the server kept generating. With that timeout off (ext-055) and a 16K reply cap:
+
+| Model | mean@1 | pass@2 | Ended on a 16K reply |
+| --- | --- | --- | --- |
+| base | 12/174 (6.9%) | 8/87 | 8 |
+| v2 | 12/174 (6.9%) | 10/87 | 94 |
 
 v1 (epoch 1) under each task's own limit, first two trials per task: 8/172 (4.7%), pass@2 7/87 (base 14/174, 8/87).

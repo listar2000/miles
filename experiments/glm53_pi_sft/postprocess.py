@@ -17,3 +17,21 @@ def untrain_no_reasoning(record: dict[str, Any]) -> dict[str, Any]:
         if not (messages[step["completion"]].get("reasoning_content") or "").strip():
             step["train"] = False
     return {**record, "steps": steps}
+
+
+LONG_REASONING_CHARS = 8000  # 88% of the teacher's reasoning steps are shorter; the rest hold 79% of its reasoning
+
+
+def untrain_long_reasoning(record: dict[str, Any]) -> dict[str, Any]:
+    """Keep replies with very long reasoning in the context but out of the loss, so the student does not learn to
+    overthink."""
+    messages = record["messages"]
+    steps = record.get("steps") or [
+        {"context": list(range(i)), "completion": i, "train": True}
+        for i, m in enumerate(messages)
+        if m["role"] == "assistant" and i > 0
+    ]
+    for step in steps:
+        if len(messages[step["completion"]].get("reasoning_content") or "") > LONG_REASONING_CHARS:
+            step["train"] = False
+    return {**record, "steps": steps}
