@@ -158,15 +158,15 @@ def test_adam_state_goes_in_every_kth_save_straight_to_the_volume(tmp_path, monk
     monkeypatch.setenv(S.OPTIM_EVERY_ENV, "3")
     _rank(monkeypatch, 0)
     seen = {}
-    for it in (2, 4, 6, 12):  # save_interval 2: Adam's state at 6 and 12 (every 3rd save)
+    for it in (1, 3, 5, 11):  # save_interval 2 (saves after rollouts 1, 3, 5, ...): Adam's state in every 3rd save
         args = Namespace(save=str(vol), no_save_optim=False, save_interval=2)
         with S.context(args, it):
             seen[it] = (args.save, args.no_save_optim)
             Path(args.save, f"iter_{it:07d}").mkdir(parents=True, exist_ok=True)
         assert (args.save, args.no_save_optim) == (str(vol), False)
         shutil.rmtree(stage, ignore_errors=True)  # stands in for the upload
-    assert seen == {2: (str(stage), True), 4: (str(stage), True), 6: (str(vol), False), 12: (str(vol), False)}
-    assert S.has_optimizer(vol / "iter_0000006") and not S.has_optimizer(vol / "iter_0000002")
+    assert seen == {1: (str(stage), True), 3: (str(stage), True), 5: (str(vol), False), 11: (str(vol), False)}
+    assert S.has_optimizer(vol / "iter_0000005") and not S.has_optimizer(vol / "iter_0000001")
 
 
 def test_an_upload_does_not_move_the_tracker_back(tmp_path, monkeypatch):
