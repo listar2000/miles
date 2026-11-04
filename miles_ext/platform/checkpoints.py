@@ -20,6 +20,7 @@ import re
 
 import modal
 
+from miles_ext.checkpoint.staged_save import has_optimizer
 from miles_ext.platform.layout import iter_dir, read_tracker, read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target
@@ -95,16 +96,18 @@ def _remove(volume: modal.Volume, path: str) -> dict:
 
 
 def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final: bool,
-                   latest: int | None, pinned: tuple[int, ...] = ()) -> list[dict]:
+                   latest: int | None, pinned: tuple[int, ...] = (), keep_every: int | None = None) -> list[dict]:
     """Which saves to delete (pure; tested without Modal).
 
     While training (``final=False``): keep the newest ``keep`` full saves and the
     one the run resumes from; HF exports are kept. At the end (``final=True``):
     keep the final HF export, and the final full save if ``keep_final_full`` or if there
     is no HF export yet.
-    Pinned steps are never deleted."""
+    Pinned steps, and full saves whose step is a multiple of ``keep_every``, are never deleted."""
     if keep < 1:
         raise ValueError("keep must be >= 1")
+    if keep_every:
+        pinned = (*pinned, *(s["step"] for s in saves if s["kind"] == "full" and s["step"] % keep_every == 0))
     full = sorted((s for s in saves if s["kind"] == "full"), key=lambda s: -s["step"])
     hf = sorted((s for s in saves if s["kind"] == "hf"), key=lambda s: -s["step"])
     drop = []
@@ -136,13 +139,14 @@ def _kept_full(saves: list[dict], plan: list[dict]) -> list[int]:
 
 
 def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1, keep_final_full: bool = True,
-                    final: bool = False, pinned: tuple[int, ...] = (), dry_run: bool = False) -> list[dict]:
+                    final: bool = False, pinned: tuple[int, ...] = (), dry_run: bool = False,
+                    keep_every: int | None = None) -> list[dict]:
     """Delete what ``retention_plan`` says; returns the deleted (or, dry run, the planned) saves."""
     target = Target.of(target)
     volume = _volume(target)
     saves = list_checkpoints(run_id, target, sizes=False)
     plan = retention_plan(saves, keep=keep, keep_final_full=keep_final_full, final=final,
-                          latest=read_tracker_volume(volume, run_id), pinned=pinned)
+                          latest=read_tracker_volume(volume, run_id), pinned=pinned, keep_every=keep_every)
     if not dry_run:
         for s in plan:
             _remove(volume, checkpoint_path(run_id, s["step"], s["kind"]))
@@ -157,8 +161,9 @@ def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1,
 
 
 def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: bool,
-                          pinned: tuple[int, ...] = ()) -> list[dict]:
-    """``apply_retention`` inside a container that has the results volume mounted (the trainer)."""
+                          pinned: tuple[int, ...] = (), keep_every: int | None = None) -> list[dict]:
+    """``apply_retention`` inside a container that has the results volume mounted (the trainer). While
+    training, the newest save holding Adam's state (ext-056 ``.optimizer`` marker) is kept as well."""
     import shutil
     from pathlib import Path
 
@@ -169,8 +174,11 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
             if d.is_dir() and (m := re.fullmatch(ITER_RE, d.name)) and {c.name for c in d.iterdir()} - NOT_A_SAVE:
                 saves.append({"step": int(m.group(1)), "kind": kind, "path": str(d)})
     latest = read_tracker(run_dir)
+    with_optimizer = [s["step"] for s in saves if s["kind"] == "full" and has_optimizer(s["path"])]
+    if with_optimizer and not final:
+        pinned = (*pinned, max(with_optimizer))
     plan = retention_plan(saves, keep=keep, keep_final_full=keep_final_full, final=final, latest=latest,
-                          pinned=pinned)
+                          pinned=pinned, keep_every=keep_every)
     for s in plan:
         path = Path(s["path"]).resolve()
         if path.parent.parent != run_dir.resolve() or not re.fullmatch(ITER_RE, path.name):

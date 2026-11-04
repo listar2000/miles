@@ -25,6 +25,7 @@ from typing import Any
 import yaml
 
 from miles.utils.external_utils.model_args_utils import load_model_args
+from miles_ext.checkpoint.staged_save import OPTIM_EVERY_ENV, STAGE_ENV
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes.presets import PRESETS
 
@@ -218,8 +219,14 @@ DEFAULTS: dict[str, Any] = {
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
     # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
     # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
+    # Megatron only (ext-056): stage_dir: each node saves to this node-local dir and uploads to the results
+    # volume in the background, so training pauses only for the local write (None: saves go to the volume);
+    # optimizer_every: with save_optimizer, Adam's state goes in every k-th save only (those go straight to
+    # the volume), the others hold weights only; keep_every: retention also keeps every save whose step is a
+    # multiple of it (backtracking points; None: only the newest `keep`)
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True, "save_rollout_data": False},
+                   "save_optimizer": True, "save_rollout_data": False, "stage_dir": None,
+                   "optimizer_every": 1, "keep_every": None},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -377,6 +384,9 @@ FIELD_RULES: dict[str, dict] = {
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
+    "checkpoint.stage_dir": {"type": "str", "nullable": True},
+    "checkpoint.optimizer_every": {"type": "int", "min": 1},
+    "checkpoint.keep_every": {"type": "int", "nullable": True, "min": 1},
     "parallel.tp": {"type": "int", "min": 1},
     "parallel.pp": {"type": "int", "min": 1},
     "parallel.cp": {"type": "int", "min": 1},
@@ -506,6 +516,10 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
+    if (ckpt["stage_dir"] or ckpt["optimizer_every"] > 1) and backend(recipe) != "megatron":
+        raise ValueError("checkpoint.stage_dir and checkpoint.optimizer_every are Megatron-only")
+    if ckpt["optimizer_every"] > 1 and not ckpt["save_optimizer"]:
+        raise ValueError("checkpoint.optimizer_every needs checkpoint.save_optimizer")
     revision = recipe["model"]["revision"]
     if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
         raise ValueError(f"model.revision must be a full commit sha, got {revision!r}")
@@ -913,8 +927,9 @@ def _sandbox_env(recipe: dict, run_id: str) -> dict[str, str]:
     return env
 
 
-def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
-    """The Miles argv (train.py / train_async.py) for a resolved recipe."""
+def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool = True) -> list[str]:
+    """The Miles argv (train.py / train_async.py) for a resolved recipe. ``resume_optimizer`` False: the save
+    the run resumes from holds weights only (checkpoint.optimizer_every), so Adam's state starts afresh."""
     preset = PRESETS[recipe["model"]["preset"]]
     algo, cluster = recipe["algorithm"], recipe["cluster"]
     batch, n = int(algo["rollout_batch_size"]), int(algo["n_samples"])
@@ -1000,7 +1015,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
         --sglang-mem-fraction-static {mem_fraction}
         --sglang-decode-log-interval 1000
         --update-weight-buffer-size 536870912
-        {_backend_args(recipe, resume)}
+        {_backend_args(recipe, resume, resume_optimizer)}
         {"--use-dynamic-batch-size" if preset.packed_batches else "--micro-batch-size 1"}
         --max-tokens-per-gpu {algo["max_tokens_per_gpu"]}
         {placement}
@@ -1012,6 +1027,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool) -> list[str]:
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
+    if save_context(recipe):
+        args += ["--custom-megatron-save-context-path", "miles_ext.checkpoint.staged_save.context"]
     if recipe["checkpoint"]["save_rollout_data"]:
         args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
     # torch_memory_saver (colocated offload) rejects expandable segments; a fully async trainer needs them so its
@@ -1080,7 +1097,17 @@ def trainer_env(recipe: dict) -> dict[str, str]:
         env.update(GPU_DELTA_ENV)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+    if recipe["checkpoint"]["stage_dir"]:
+        env[STAGE_ENV] = recipe["checkpoint"]["stage_dir"]
+    if save_context(recipe):
+        env[OPTIM_EVERY_ENV] = str(recipe["checkpoint"]["optimizer_every"])
     return env
+
+
+def save_context(recipe: dict) -> bool:
+    """Whether every trainer rank saves inside miles_ext.checkpoint.staged_save.context (ext-056)."""
+    ckpt = recipe["checkpoint"]
+    return bool(ckpt["stage_dir"]) or ckpt["optimizer_every"] > 1
 
 
 def train_dir(recipe: dict) -> Path:
@@ -1125,7 +1152,7 @@ def optimizer_host_gib(recipe: dict) -> int:
     return max(0, int(free // min(trainer_gpus(recipe), GPUS_PER_NODE)))  # the fullest trainer node
 
 
-def _optimizer_args(recipe: dict, resume: bool) -> str:
+def _optimizer_args(recipe: dict, resume: bool, resume_optimizer: bool = True) -> str:
     opt, ckpt = recipe["optimizer"], recipe["checkpoint"]
     args = ""
     if opt["offload"] == "disk":
@@ -1136,10 +1163,12 @@ def _optimizer_args(recipe: dict, resume: bool) -> str:
             args += f" --stream-optimizer-state-host-gb {host_gib}"
     if not ckpt["save_optimizer"]:
         args += " --no-save-optim" + (" --no-load-optim" if resume else "")
+    elif resume and not resume_optimizer:
+        args += " --no-load-optim"
     return args
 
 
-def _backend_args(recipe: dict, resume: bool) -> str:
+def _backend_args(recipe: dict, resume: bool, resume_optimizer: bool = True) -> str:
     if backend(recipe) != "megatron":
         return "--gradient-checkpointing --attn-implementation flash_attention_2"
     # A fresh run loads from --ref-load when --load holds no Megatron checkpoint
@@ -1168,7 +1197,7 @@ def _backend_args(recipe: dict, resume: bool) -> str:
         --override-opt_param-scheduler
         {"--skip-actor-forward-only" if recipe["algorithm"]["loss"] == "policy_loss" else ""}
         {preset.megatron_args}
-        {_optimizer_args(recipe, resume)}
+        {_optimizer_args(recipe, resume, resume_optimizer)}
         {_lora_args(recipe)}
         """
 
