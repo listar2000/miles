@@ -133,7 +133,8 @@ def _agent(tmp_path):
 def test_run_is_a_plain_loop_without_compaction_on_the_session_server(tmp_path):
     sandbox, context = _Sandbox(_events(_end("toolUse"), _end("stop"))), AgentContext()
     asyncio.run(_agent(tmp_path).run("- solve it\n", sandbox, context))
-    assert json.loads(sandbox.uploads[f"{pi.CONFIG_DIR}/settings.json"]) == {"compaction": {"enabled": False}}
+    settings = json.loads(sandbox.uploads[f"{pi.CONFIG_DIR}/settings.json"])
+    assert settings == {"compaction": {"enabled": False}, "httpIdleTimeoutMs": "disabled"}
     provider = json.loads(sandbox.uploads[f"{pi.CONFIG_DIR}/models.json"])["providers"][pi.PROVIDER]
     assert provider["baseUrl"] == f"{PUBLIC}/30000/sessions/s/v1"
     # Pi's defaults for an OpenAI-style server: plain tool schemas, no thinking parameters

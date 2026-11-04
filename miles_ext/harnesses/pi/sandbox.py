@@ -25,8 +25,9 @@ API_KEY_ENV = "MILES_PI_API_KEY"
 TOOLS = "read,write,edit,bash,grep,find,ls"
 # nothing from the task, image or home: discovered extensions, skills, prompt templates, AGENTS.md, MCP
 PLAIN_FLAGS = "--no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-approve"
-# compaction off stops both threshold and overflow compaction
-SETTINGS = {"compaction": {"enabled": False}}
+# Compaction off stops both threshold and overflow compaction. The session server sends a streamed reply only when
+# it is complete, so no HTTP idle timeout; maxTokens bounds a reply and agent.timeout a trial.
+SETTINGS = {"compaction": {"enabled": False}, "httpIdleTimeoutMs": "disabled"}
 SESSIONS = (EnvironmentPaths.agent_dir / "pi" / "sessions").as_posix()
 EVENTS = (EnvironmentPaths.agent_dir / "pi.jsonl").as_posix()  # --mode json events, without message_update
 STDERR = (EnvironmentPaths.agent_dir / "pi.stderr.txt").as_posix()

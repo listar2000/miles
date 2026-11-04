@@ -13,9 +13,14 @@ so it cannot be vendored verbatim.
   `@earendil-works/pi-coding-agent@1.5.0`, unpatched, with Mobius' launch (mobius-platform `staging`,
   `programs/harbor-eval/patches/harness/pi.py`, PR #3190): `--no-extensions --no-skills --no-prompt-templates
   --no-context-files --no-mcp --no-approve` (nothing from the task, image or home: no AGENTS.md, skills, MCP),
-  `--tools read,write,edit,bash,grep,find,ls`, `settings.json` `{"compaction": {"enabled": false}}` in
+  `--tools read,write,edit,bash,grep,find,ls`, `settings.json` `{"compaction": {"enabled": false},
+  "httpIdleTimeoutMs": "disabled"}` in
   `PI_CODING_AGENT_DIR` (stops threshold and overflow compaction), `PI_OFFLINE=1`, `PI_TELEMETRY=0`. The
   session is still saved under the trial's agent logs; no turn cap (Mobius sets none); `agent.timeout` applies.
+- **No HTTP idle timeout (differs from Mobius).** The session server answers Pi's streamed request only when the
+  whole reply is done, so Pi's default 300 s idle timeout abandoned long replies and resent them while SGLang kept
+  decoding the abandoned ones. In SFT evals those orphans filled the engines' KV cache (90-99%, against ~20% for
+  the base model) and slowed every other trial; about 40% of trial time went to these timeouts.
 - **The model** is a custom `openai-completions` provider in Pi's `models.json` pointing at the session's
   OpenAI root through the tunnel (ext-009), with the recipe's window and reply cap. Pi's own compat defaults for
   such a server stay: no thinking parameters (the chat template decides reasoning) and plain tool schemas, unless:
