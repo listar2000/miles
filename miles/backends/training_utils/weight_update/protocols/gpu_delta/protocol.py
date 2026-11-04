@@ -16,6 +16,7 @@ import logging
 import time
 import uuid
 from collections import Counter
+from collections.abc import Mapping  # [fork fix-083]
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,6 +42,28 @@ _PLAIN_FLOAT_DTYPE_BY_SAFETENSORS_DTYPE = {
     "F16": torch.float16,
     "BF16": torch.bfloat16,
 }
+
+
+class _CheckpointBase(Mapping):  # [fork fix-083]
+    """The immutable HF base of this owner's tensors, read from the checkpoint when a recovery or save needs it.
+
+    Replaces the pinned startup copy after the first commit; each read is a pinned temporary for the encoder.
+    """
+
+    def __init__(self, checkpoint, plan, names):
+        self._checkpoint, self._plan, self._names, self._reader = checkpoint, plan, tuple(names), None
+
+    def __getitem__(self, name):
+        if self._reader is None:
+            self._reader = disk_delta.make_tensor_reader(self._checkpoint)
+        raw = gpu_delta_publication.read_canonical_tensor(self._reader, name, self._plan[name])
+        return torch.from_numpy(raw).pin_memory()
+
+    def __iter__(self):
+        return iter(self._names)
+
+    def __len__(self):
+        return len(self._names)
 
 
 class UpdateWeightFromGpuDelta(WeightTransferProtocol):
@@ -501,8 +524,12 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
 
     def _commit_baseline(self):
         """Advance the baseline only after receiver activation succeeds."""
-        reusable = {} if self._snapshot is self._hf_snapshot else self._snapshot
+        first = self._snapshot is self._hf_snapshot  # [fork fix-083]
+        reusable = {} if first else self._snapshot
         self._snapshot, self._next_snapshot = self._next_snapshot, reusable
+        if first:
+            # [fork fix-083] release the pinned startup copy; its blocks back the next target's snapshot
+            self._hf_snapshot = _CheckpointBase(self.args.hf_checkpoint, self._plan, list(self._hf_snapshot))
         self._target_step = None
         self._publication_version = self._target_version
         self._committed_incarnations = self._incarnations()
@@ -522,7 +549,8 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
             self._gpu_batch_names,
             self._raw_names,
             self._hf_snapshot,
-            self._next_snapshot,
+            # [fork fix-083] lazy: after the commit, the captured target is the current baseline
+            self._snapshot if self._target_step is None else self._next_snapshot,
         )
         self._recovery_step = self._source_step
         self._recovery_publication = None
@@ -579,7 +607,17 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
     def _recovery_descriptor(self):
         # A repeated model/step can reuse compressed bytes, but fresh receivers
         # must join the current publication sequence before the next delta.
-        if self._recovery_publication is None or self._recovery_publication["target_version"] != self._target_version:
+        if (
+            self._recovery_publication is None
+            or self._recovery_publication["target_version"] != self._target_version
+            or self._recovery_step != self._source_step  # [fork fix-083] a cached publication of an older target
+        ):
+            error = None  # [fork fix-083] encoded only when a recovery needs it, not after every sync
+            try:
+                self._cache_recovery_payload()
+            except Exception as caught:
+                error = caught
+            _collective_check(error, "base-relative compression")
             directory = self._stream_dir / f"recovery_v{self._target_version:06d}"
             self._recovery_publication = self._publish_recovery(directory, self._target_version)
         return self._recovery_publication
@@ -761,13 +799,7 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
         future = None
         if dist.get_rank() == 0:
             future = async_utils.submit(self._activate_subset(publication, ordinary, weight_version))
-        error = None
-        try:
-            # HTTP preparation/apply is already in flight. This owner-local
-            # compression reuses the captured target without another export.
-            self._cache_recovery_payload()
-        except Exception as caught:
-            error = caught
+        # [fork fix-083] no base-relative compression here: _recovery_descriptor encodes it on demand
 
         def settle():
             result = future.result()
@@ -789,7 +821,6 @@ class UpdateWeightFromGpuDelta(WeightTransferProtocol):
         joined = time.monotonic()
         activation = _on_root(settle)
         self._activation_join_s = time.monotonic() - joined
-        _collective_check(error, "base-relative compression")
         fresh = tuple(engine_id for engine_id in incarnations if engine_id not in ordinary)
         if fresh:
             descriptor = self._recovery_descriptor()

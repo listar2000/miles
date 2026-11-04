@@ -1,9 +1,11 @@
 """Baseline ownership, publication commits, checkpoint reuse and recovery lifecycle."""
 
 import asyncio
+import gc  # [fork fix-083]
 import json
 import threading
 import time
+import weakref  # [fork fix-083]
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
@@ -647,7 +649,7 @@ def _activation_result(cohort):
     return {"resumed_receipts": [{}] if cohort.engine_ids else []}
 
 
-def test_checkpoint_target_reuse_anchor_retention_and_background_overlap(tmp_path, single_rank, monkeypatch):
+def test_checkpoint_target_reuse_anchor_retention_and_lazy_recovery(tmp_path, single_rank, monkeypatch):
     protocol = _ready_protocol(tmp_path, monkeypatch)
     exports = []
 
@@ -671,7 +673,11 @@ def test_checkpoint_target_reuse_anchor_retention_and_background_overlap(tmp_pat
         return _activation_result(cohort)
 
     monkeypatch.setattr(gpu_delta.gpu_delta_session, "activate_publication", activate)
+    startup = weakref.ref(protocol._hf_snapshot["w"])
     protocol.finalize(1)
+    gc.collect()
+    # [fork fix-083] the first commit releases the pinned startup copy of the HF base
+    assert startup() is None
     assert protocol._recovery_payload is cached
     assert protocol._snapshot is not protocol._hf_snapshot
     assert protocol._next_snapshot == {}
@@ -681,28 +687,16 @@ def test_checkpoint_target_reuse_anchor_retention_and_background_overlap(tmp_pat
     assert protocol.begin_sync(2, export, rollout_id=1) and protocol.requires_export
     protocol.send_bucket([("w", torch.tensor([9, 10, 11, 12], dtype=torch.uint8))])
     protocol.after_base_weights()
-    activation_started = threading.Event()
-    recovery_finished = threading.Event()
-    encode = protocol._cache_recovery_payload
 
-    async def overlapping_activate(clients, cohort, publication, weight_version=None):
-        activation_started.set()
-        while not recovery_finished.is_set():
-            await asyncio.sleep(0.001)
-        return _activation_result(cohort)
+    def no_encode():
+        raise AssertionError("an ordinary sync must not encode the base-relative recovery payload")
 
-    def overlapping_encode():
-        assert activation_started.wait(2), "HTTP activation must start before recovery encoding finishes"
-        encode()
-        recovery_finished.set()
-
-    monkeypatch.setattr(gpu_delta.gpu_delta_session, "activate_publication", overlapping_activate)
-    monkeypatch.setattr(protocol, "_cache_recovery_payload", overlapping_encode)
+    monkeypatch.setattr(gpu_delta.gpu_delta_session, "activate_publication", activate)
+    monkeypatch.setattr(protocol, "_cache_recovery_payload", no_encode)
     protocol.finalize(2)
     assert protocol._hf_snapshot["w"].tolist() == [1, 2, 3, 4]
     assert protocol._snapshot["w"].tolist() == [9, 10, 11, 12]
-    assert cached.raw["w"] == bytes([5, 6, 7, 8])
-    assert protocol._recovery_payload.raw["w"] == bytes([9, 10, 11, 12])
+    assert protocol._recovery_payload is cached and cached.raw["w"] == bytes([5, 6, 7, 8])
     # Ordinary updates retain recovery bytes locally without writing an artifact.
     assert not (protocol._stream_dir / "recovery_v000002").exists()
 
