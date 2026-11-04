@@ -7,7 +7,7 @@ from miles_ext.sft import prepare as prepare_module
 from miles_ext.sft.parity import compare, full_loss_mask
 from miles_ext.sft.postprocess import load_processors
 from miles_ext.sft.render import SftRenderer
-from miles_ext.sft.rollout import generate_rollout
+from miles_ext.sft.rollout import VAL_BASE, generate_rollout
 from miles_ext.tests.test_sft_render import AGENT, CHAT, TOOLS, _qwen_tito
 
 from miles.utils.types import Sample
@@ -58,6 +58,14 @@ def test_prepared_samples_come_back_from_the_rollout_function_unchanged(tmp_path
     assert full_loss_mask(first.tokens, first.response_length, first.loss_mask) == expected.loss_mask
     assert first.reward == 0 and first.loss_mask[0] == 1
     assert sum(sum(g[0].loss_mask) for g in groups) == counts.trained_tokens
+
+
+def test_validation_rollout_pads_to_the_global_batch_with_untrained_copies(tmp_path, monkeypatch):
+    rows = [{"messages": AGENT, "tools": TOOLS}, {"messages": CHAT}, {"messages": AGENT, "tools": TOOLS}]
+    out, _ = _prepare(tmp_path, rows)
+    monkeypatch.setenv("MILES_SFT_VAL_DIR", str(out))
+    groups = generate_rollout(SimpleNamespace(global_batch_size=2), VAL_BASE, None)
+    assert len(groups) == 4 and [sum(g[0].loss_mask) > 0 for g in groups] == [True, True, True, False]
 
 
 def test_samples_over_max_tokens_are_dropped_not_cut(tmp_path):
