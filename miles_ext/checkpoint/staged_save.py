@@ -92,8 +92,10 @@ def context(args, iteration: int):
         (target / f"{MARKER}{rank}").touch()
     if rank == 0:
         where = "node-local stage" if staged else "volume"
-        _print(f"save: iteration {iteration} to the {where} ({'with' if optim else 'without'} Adam's state) "
-               f"in {time.monotonic() - began:.0f}s")
+        _print(
+            f"save: iteration {iteration} to the {where} ({'with' if optim else 'without'} Adam's state) "
+            f"in {time.monotonic() - began:.0f}s"
+        )
 
 
 def _copy_pieces(files: list[Path], src_root: Path, dest_root: Path) -> int:
