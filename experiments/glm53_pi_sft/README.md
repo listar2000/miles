@@ -107,6 +107,7 @@ v3's held-out set is v2's (all held-out records), so the two validation NLLs com
 | Two-epoch training (v1) | qwen3-30b-128k | stopped at step 50 (epoch 1 checkpoint at step 30); val NLL 1.153 -> 0.840 (step 20) -> 0.792 (step 50) |
 | v2 | qwen3-30b-128k-b2 | 30 steps; val NLL 0.856 (trained tokens only) |
 | v3 | qwen3-30b-128k-b2-t1800 | 27 steps; val NLL 0.864 |
+| v4 | qwen3-30b-128k-b2-r8k | 30 steps; val NLL 0.894 -> 0.630 (trained tokens only) |
 
 TB 2.1 in Pi (87 tasks x 2, strict tool schemas, 30-min agent limit, exactly 2 trials per task):
 
@@ -123,5 +124,9 @@ These runs lost about 40% of SFT trial time to a serving jam: Pi abandoned repli
 | --- | --- | --- | --- |
 | base | 12/174 (6.9%) | 8/87 | 8 |
 | v2 | 12/174 (6.9%) | 10/87 | 94 |
+| v4 | 7/174 (4.0%) | 7/87 | 54 |
+
+v4 removed the overthinking (reply length p99 3.8K tokens against v2's 10.4K) but not the failure to finish: 8 of 174 runs
+end with an answer (v2 7, base 161), and writes and edits are 4% of tool calls (base 43%, teacher about 22% of steps).
 
 v1 (epoch 1) under each task's own limit, first two trials per task: 8/172 (4.7%), pass@2 7/87 (base 14/174, 8/87).
