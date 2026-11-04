@@ -1,7 +1,7 @@
 # ext-056: staged Megatron saves with a parallel upload, Adam's state on every k-th save, retention while training
 
 ## Why
-Full-parameter GLM-5.3-Flash (run glm53-gpud-full-1103-a12, one B300:8 trainer) paused training 1,281 s to
+Full-parameter GLM-5.3-Flash (a two-step split-mode run on one B300:8 trainer node, 2026-11-03) paused training 1,281 s to
 save 627 GB of BF16 weights to the results volume. Adam's state would add ~2.3 TB per save. Modal
 containers live at most 24 h and GPU functions can be preempted, so long runs need regular saves, and RL
 runs need older steps to backtrack to. The launcher applied retention only at the end of a run.
