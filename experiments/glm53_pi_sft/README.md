@@ -88,9 +88,32 @@ layouts were not measured (no H200 capacity at the time).
 Evaluate in Pi, the harness that made the traces: serve the HF export behind an OpenAI-compatible endpoint and
 point a Mobius eval at it. Baseline: Qwen3-30B-A3B-Thinking-2507 in the same setup.
 
+## Variants (overnight 2026-11-04, 1 epoch each)
+
+| Config | Records | Loss |
+| --- | --- | --- |
+| [qwen3-30b-128k.yaml](configs/qwen3-30b-128k.yaml) (v1, 2 epochs, stopped at step 50) | all | every reply |
+| [qwen3-30b-128k-b2.yaml](configs/qwen3-30b-128k-b2.yaml) (v2) | all | replies without reasoning in context, untrained ([postprocess.py](postprocess.py)) |
+| [qwen3-30b-128k-b2-t1800.yaml](configs/qwen3-30b-128k-b2-t1800.yaml) (v3) | teacher runs of at most 30 min ([filter_by_time.py](filter_by_time.py): 3,771 of 4,505) | as v2 |
+
+v3's held-out set is v2's (all held-out records), so the two validation NLLs compare.
+
 ## Runs
 
 | Run | Config | Result |
 | --- | --- | --- |
 | Two-step smoke | qwen3-30b-128k, 2 steps | loss 1.156 -> 1.151, held-out NLL 1.153 -> 1.030 |
-| Two-epoch training | qwen3-30b-128k | launched 2026-11-04 01:25 UTC |
+| Two-epoch training (v1) | qwen3-30b-128k | stopped at step 50 (epoch 1 checkpoint at step 30); val NLL 1.153 -> 0.840 (step 20) -> 0.792 (step 50) |
+| v2 | qwen3-30b-128k-b2 | 30 steps; val NLL 0.856 (trained tokens only) |
+| v3 | qwen3-30b-128k-b2-t1800 | 27 steps; val NLL 0.864 |
+
+TB 2.1 in Pi (87 tasks x 2, strict tool schemas, 30-min agent limit, exactly 2 trials per task):
+
+| Model | mean@1 | pass@2 | Timed out |
+| --- | --- | --- | --- |
+| base | 12/174 (6.9%) | 8/87 | 2 |
+| v2 | 9/174 (5.2%) | 7/87 | 133 |
+| v3 | 6/174 (3.4%) | 6/87 | 147 |
+| v2, 28 concurrent agents, 8K reply cap | 7/174 (4.0%) | see below | 19 (122 replies hit 8K) |
+
+v1 (epoch 1) under each task's own limit, first two trials per task: 8/172 (4.7%), pass@2 7/87 (base 14/174, 8/87).
