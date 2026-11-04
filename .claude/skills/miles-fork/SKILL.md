@@ -47,7 +47,7 @@ even one whose PR closed.
 | fix a bug in SGLang, or add a hook there | Fix or Hook | `fork/deps/sglang/<id>-<slug>.patch` (below) | `Fork-Fix: fix-NNN` / `Fork-Hook: hook-NNN` |
 | carry an open upstream Miles or SGLang PR before it merges | Port | byte for byte: Miles files at the PR's paths, SGLang as `fork/deps/sglang/port-NNN-<slug>.patch` | `Fork-Port: port-NNN` |
 | add a capability (harness, sandbox provider, recipe, reward, platform API) | Ext | new files under `miles_ext/` | `Fork-Ext: ext-NNN` |
-| add one experiment's own scripts, configs, filters, write-up | Exp | `experiments/<folder>/` only ([experiments/README.md](../../../experiments/README.md)) | `Fork-Exp: <folder>` |
+| add one experiment's own scripts, configs, filters, write-up | Exp | `experiments/<folder>/` only (rules: `experiments/README.md`) | `Fork-Exp: <folder>` |
 | use a file from a newer Miles/Harbor/dependency | Ext, vendored | verbatim copy under `miles_ext/`, entry in `fork/vendored.json` | `Fork-Ext: ext-NNN` |
 | change tooling, image build, pins, docs, this skill | Infra | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | `Fork-Infra: <kebab id>` (`infra-NNN`, `sync-<tag>`, `stable-YYYY-MM-DD`, or a short name) |
 
