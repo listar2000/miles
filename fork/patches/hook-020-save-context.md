@@ -1,7 +1,7 @@
 # hook-020: `--custom-megatron-save-context-path`, a context every trainer rank enters around each Megatron save
 
 ## Why
-Full-parameter GLM-5.3-Flash on one B300:8 trainer node (run glm53-gpud-full-1103-a12) paused training for
+Full-parameter GLM-5.3-Flash on one B300:8 trainer node (a two-step split-mode run, 2026-11-03) paused training for
 1,281 s to save 627 GB of weights straight to the results volume (about 0.5 GB/s). Probes on 2026-11-04
 (`fork/probes/ckpt/`) show the same save landing on node-local disk several times faster, and a B300:8
 Megatron sync save of 8 x 78 GiB to the volume took 816 s on an otherwise idle node. Nothing in Miles lets a
