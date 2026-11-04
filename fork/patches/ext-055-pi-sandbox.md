@@ -25,7 +25,8 @@ so it cannot be vendored verbatim.
     definitions match the training data; the harness default stays provider-neutral.
 - **Same prompt text as the traces**: Pi's system prompt names its install path, so Node is pinned to the
   22.23.4 the traces ran on and Pi is installed globally under nvm, as Harbor's Pi does. The task goes on argv
-  as Harbor and Mobius pass it, since Pi trims a prompt read from stdin; a task command `pkill -f <task text>`
+  as Harbor and Mobius pass it, since Pi trims a prompt read from stdin, after `--` (Harbor and Mobius omit it, so a
+  task starting with `-` fails there as an unknown option); a task command `pkill -f <task text>`
   can therefore match the agent, as on Mobius.
 - Not carried from Mobius: its extension (a Z.ai UTF-8 repair and a request-context log for its ATIF) and its
   ATIF conversion; Miles records tokens in the session server.

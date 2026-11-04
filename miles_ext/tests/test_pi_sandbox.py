@@ -132,7 +132,7 @@ def _agent(tmp_path):
 
 def test_run_is_a_plain_loop_without_compaction_on_the_session_server(tmp_path):
     sandbox, context = _Sandbox(_events(_end("toolUse"), _end("stop"))), AgentContext()
-    asyncio.run(_agent(tmp_path).run("solve it\n", sandbox, context))
+    asyncio.run(_agent(tmp_path).run("- solve it\n", sandbox, context))
     assert json.loads(sandbox.uploads[f"{pi.CONFIG_DIR}/settings.json"]) == {"compaction": {"enabled": False}}
     provider = json.loads(sandbox.uploads[f"{pi.CONFIG_DIR}/models.json"])["providers"][pi.PROVIDER]
     assert provider["baseUrl"] == f"{PUBLIC}/30000/sessions/s/v1"
@@ -144,7 +144,7 @@ def test_run_is_a_plain_loop_without_compaction_on_the_session_server(tmp_path):
         assert flag in launch
     assert "--tools read,write,edit,bash,grep,find,ls" in launch
     # argv as Mobius passes it: Pi trims a prompt read from stdin
-    assert "'solve it\n'" in launch
+    assert "-- '- solve it\n'" in launch  # a task starting with "-" stays the prompt
     assert env["PI_CODING_AGENT_DIR"] == pi.CONFIG_DIR and env["PI_OFFLINE"] == "1"
     assert (context.n_input_tokens, context.n_output_tokens) == (200, 20)
 

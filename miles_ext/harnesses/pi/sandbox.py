@@ -75,7 +75,8 @@ def command(model: str, instruction: str) -> str:
     return (
         common.LOAD_NVM
         + f"pi --print --mode json --session-dir {SESSIONS} --provider {PROVIDER} --model {shlex.quote(model)} "
-        + f"{PLAIN_FLAGS} --tools {TOOLS} {shlex.quote(instruction)} "
+        # "--": a task that starts with "-" is the prompt, not an option
+        + f"{PLAIN_FLAGS} --tools {TOOLS} -- {shlex.quote(instruction)} "
         # message_update events repeat the growing reply; Harbor's Pi drops them too
         + f'2> {STDERR} </dev/null | grep -v \'"type":"message_update"\' > {EVENTS}'
     )
