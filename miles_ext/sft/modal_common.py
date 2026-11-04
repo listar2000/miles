@@ -9,6 +9,7 @@ from pathlib import Path
 import modal
 
 from miles_ext import stack
+from miles_ext.platform.images import fork_image
 from miles_ext.sft import config as sft_config
 
 REPO = Path(__file__).resolve().parents[2]
@@ -23,7 +24,7 @@ def image() -> modal.Image:
     if CONFIG is None:
         return modal.Image.debian_slim()
     img = (
-        modal.Image.from_registry(CONFIG.image)
+        fork_image(CONFIG.commit, CONFIG.image)
         .entrypoint([])
         .env({"PYTHONUNBUFFERED": "1", "PYTHONPATH": f"{stack.MILES_SRC}:/root/Megatron-LM"})
     )

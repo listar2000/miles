@@ -1,7 +1,4 @@
-"""The SFT run config (YAML) that ``modal_prepare`` and ``modal_train`` read, and the Miles argv it gives.
-
-Keys and an example: ``miles_ext/sft/README.md``.
-"""
+"""The SFT run config (YAML) that ``modal_prepare`` and ``modal_train`` read, and the Miles argv it gives."""
 
 from __future__ import annotations
 
@@ -47,7 +44,8 @@ class Val:
 @dataclass(frozen=True)
 class SftConfig:
     model: str
-    image: str
+    image: str | None  # a published fork image, pinned by digest
+    commit: str | None  # or a pushed fork commit, built into an image on Modal
     data: Data
     wandb_project: str
     train: Train = field(default_factory=Train)
@@ -72,12 +70,13 @@ class SftConfig:
 
 def load(path: str | Path) -> SftConfig:
     raw = yaml.safe_load(Path(path).read_text())
-    unknown = set(raw) - {"model", "image", "data", "train", "val", "tracking"}
+    unknown = set(raw) - {"model", "image", "commit", "data", "train", "val", "tracking"}
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
     cfg = SftConfig(
         model=raw["model"],
-        image=raw["image"],
+        image=raw.get("image"),
+        commit=raw.get("commit"),
         data=Data(**raw["data"]),
         wandb_project=raw["tracking"]["wandb_project"],
         train=Train(**raw.get("train", {})),
@@ -85,8 +84,12 @@ def load(path: str | Path) -> SftConfig:
     )
     if cfg.model not in PRESETS or cfg.preset.megatron_model_type is None:
         raise ValueError(f"{path}: model {cfg.model!r} is not a preset with a Megatron definition")
-    if "@sha256:" not in cfg.image:
+    if (cfg.image is None) == (cfg.commit is None):
+        raise ValueError(f"{path}: give one of image (repo@sha256:...) or commit")
+    if cfg.image is not None and "@sha256:" not in cfg.image:
         raise ValueError(f"{path}: image must be pinned by digest (repo@sha256:...)")
+    if not cfg.preset.packed_batches:
+        raise ValueError(f"{path}: {cfg.model} trains one sample per micro-batch, which SFT does not support yet")
     if cfg.train.decay not in ("linear", "cosine"):
         raise ValueError(f"{path}: train.decay is linear or cosine")
     if GPUS % cfg.train.cp:
@@ -138,7 +141,6 @@ def miles_argv(cfg: SftConfig, run_id: str, num_rollout: int, save_interval: int
 
 
 def wandb_project(cfg: SftConfig, run_id: str) -> str:
-    """``smoke-``/``debug-`` run ids log to the smoke project, as RL launches do."""
     return SMOKE_PROJECT if run_id.startswith(SMOKE_PREFIXES) else cfg.wandb_project
 
 

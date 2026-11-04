@@ -27,7 +27,7 @@ A run config (YAML, `config.py`) drives both steps. Keys, with defaults where th
 
 ```yaml
 model: qwen3-30b-a3b-thinking-2507   # a preset (miles_ext/recipes/presets.py) with a megatron_model_type
-image: docker.io/starlimobius/miles-mobius@sha256:...   # pinned by digest
+image: docker.io/starlimobius/miles-mobius@sha256:...   # pinned by digest; or commit: <pushed fork commit>
 data:
   volume: miles-rl-datasets
   records: sft/<dataset>/records     # *.jsonl train records, *.val.jsonl held out, _* ignored
@@ -45,13 +45,15 @@ python -m modal run --detach -m miles_ext.sft.modal_train --run-id <id>  # [--nu
 ```
 
 - Layout: one H200:8 node, TP1, CP `train.cp`, EP8, full recompute, `max_tokens / cp` packed tokens per GPU.
-  Exercised: Qwen3-30B-A3B-Thinking-2507 at 128K with CP4. Rendering supports the families below.
+  Exercised: Qwen3-30B-A3B-Thinking-2507 at 128K with CP4. A model needs a preset with a Megatron definition
+  and packed batches (DeepSeek V4.1's one-sample micro-batches are refused for now), and a supported family below.
 - Weights: `/models/<preset dir>` on `MILES_WEIGHTS_VOLUME`. One save per epoch.
 - Outputs on `MILES_RESULTS_VOLUME` under `<run id>/`: `checkpoints/` (Megatron, weights only),
   `hf/iter_NNNNNNN/` (an HF export per save, with the base's tokenizer and configs), `argv-*.json`.
 - The same run id again resumes from the last checkpoint's weights with a fresh optimizer state.
-- Code: the image plus this checkout's `miles_ext/` and `experiments/`, laid over it at launch, so the image
-  digest alone does not identify the code; `argv-*.json` keeps the config and argv.
+- Code: the image (or one Modal builds from `commit`) plus this checkout's `miles_ext/` and `experiments/`, laid
+  over it at launch, so the image digest alone does not identify the code; `argv-*.json` keeps the config and argv.
+  The image's `miles/` must have hook-019 (`--custom-trainer-actor-class`); `modal_train` refuses an older one.
 
 ## Offline
 

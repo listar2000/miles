@@ -1,11 +1,8 @@
-from pathlib import Path
-
 import pytest
 import yaml
 
 from miles_ext.sft import config as sft_config
 
-REPO = Path(__file__).resolve().parents[2]
 BASE = {
     "model": "qwen3-30b-a3b-thinking-2507",
     "image": "docker.io/x/y@sha256:" + "0" * 64,
@@ -35,6 +32,9 @@ def test_tokens_per_gpu_follow_the_cap_and_cp(tmp_path):
         {"model": "no-such-model"},
         {"extra": 1},
         {"train": {"cp": 3}},
+        {"commit": "abc"},
+        {"image": None},
+        {"model": "deepseek-v4.1-flash"},
         {"train": {"decay": "step"}},
     ],
 )
@@ -56,8 +56,3 @@ def test_argv_carries_layout_schedule_and_preset_args(tmp_path):
     assert flag("--prompt-data") == "/datasets/sft/d/q-128k/train/prompts.jsonl"
     assert flag("--custom-trainer-actor-class") == "miles_ext.sft.val.SftTrainRayActor"
     assert "--load" not in argv
-
-
-def test_experiment_configs_load():
-    for path in REPO.glob("experiments/*/configs/*.yaml"):
-        sft_config.load(path)

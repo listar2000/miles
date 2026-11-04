@@ -1,4 +1,4 @@
-"""The run config's records to token shards on a Modal CPU container. Usage: ``miles_ext/sft/README.md``."""
+"""The run config's records to token shards on a Modal CPU container."""
 
 from __future__ import annotations
 

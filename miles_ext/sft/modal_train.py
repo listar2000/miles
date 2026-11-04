@@ -1,5 +1,4 @@
-"""SFT on the shards of the run config ``MILES_SFT_CONFIG`` names, on one Modal H200:8 node. Usage, outputs and
-resume: ``miles_ext/sft/README.md``."""
+"""SFT on the shards of the run config ``MILES_SFT_CONFIG`` names, on one Modal H200:8 node."""
 
 from __future__ import annotations
 
@@ -69,12 +68,18 @@ def train(config_yaml: str, run_id: str, num_rollout: int, save_interval: int) -
     path = Path("/tmp/sft-config.yaml")
     path.write_text(config_yaml)
     cfg = sft_config.load(path)
+    if "--custom-trainer-actor-class" not in (stack.MILES_SRC / "miles/utils/fork_arguments.py").read_text():
+        raise RuntimeError(
+            "the image predates hook-019 (--custom-trainer-actor-class): use a newer image or `commit:`"
+        )
     run = Path(sft_config.RESULTS_MOUNT) / run_id
     run.mkdir(parents=True, exist_ok=True)
     resume = (run / "checkpoints" / "latest_checkpointed_iteration.txt").exists()
     argv = sft_config.miles_argv(cfg, run_id, num_rollout, save_interval, resume)
     (run / f"argv-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
-        json.dumps({"image": cfg.image, "config": config_yaml, "resume": resume, "argv": argv}, indent=1)
+        json.dumps(
+            {"image": cfg.image, "commit": cfg.commit, "config": config_yaml, "resume": resume, "argv": argv}, indent=1
+        )
     )
     env = {
         **os.environ,

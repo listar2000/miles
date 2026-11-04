@@ -88,7 +88,7 @@ class SftTrainRayActor(MegatronTrainRayActor):
 
 
 def _define_val_metric():
-    """Miles defines step metrics for train/, rollout/, eval/ and perf/ only (wandb_utils)."""
+    """Register validation metrics against the training step."""
     try:
         import wandb
 
