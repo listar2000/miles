@@ -26,6 +26,7 @@ import yaml
 
 from miles.utils.external_utils.model_args_utils import load_model_args
 from miles_ext.checkpoint.save_policy import OPTIM_EVERY_ENV
+from miles_ext.checkpoint.staged_save import STAGE_ENV
 from miles_ext.obs import sandbox_profile
 from miles_ext.recipes.presets import PRESETS
 
@@ -222,7 +223,8 @@ DEFAULTS: dict[str, Any] = {
     # optimizer_every k: with save_optimizer, Adam's state goes in every k-th save only (Megatron)
     # keep_every m: retention also keeps the save after every m-th rollout (Megatron; a multiple of save_interval)
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
-                   "save_optimizer": True, "save_rollout_data": False, "optimizer_every": 1, "keep_every": None},
+                   "save_optimizer": True, "save_rollout_data": False, "optimizer_every": 1, "keep_every": None,
+                   "stage_dir": None},
     # Megatron only: tensor / pipeline / context parallel sizes; data parallel is
     # what is left of the trainer GPUs (cluster.train_gpus, or all GPUs when colocated).
     # ep: expert parallel size for MoE models (None: Miles' default)
@@ -380,6 +382,7 @@ FIELD_RULES: dict[str, dict] = {
     "async.pause_generation": {"type": "str", "enum": PAUSE_GENERATION},
     "checkpoint.save_interval": {"type": "int", "min": 1},
     "checkpoint.keep": {"type": "int", "min": 1},
+    "checkpoint.stage_dir": {"type": "str", "nullable": True},
     "checkpoint.optimizer_every": {"type": "int", "min": 1},
     "checkpoint.keep_every": {"type": "int", "nullable": True, "min": 1},
     "parallel.tp": {"type": "int", "min": 1},
@@ -511,8 +514,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
     ckpt = recipe["checkpoint"]
     if ckpt["save_hf"] and backend(recipe) != "megatron":
         raise ValueError("checkpoint.save_hf is Megatron-only; FSDP runs get HF weights from finalize_hf")
-    if (ckpt["optimizer_every"] > 1 or ckpt["keep_every"]) and backend(recipe) != "megatron":
-        raise ValueError("checkpoint.optimizer_every and checkpoint.keep_every are Megatron-only")
+    if (ckpt["optimizer_every"] > 1 or ckpt["keep_every"] or ckpt["stage_dir"]) and backend(recipe) != "megatron":
+        raise ValueError("checkpoint.optimizer_every, keep_every and stage_dir are Megatron-only")
     if ckpt["optimizer_every"] > 1 and not ckpt["save_optimizer"]:
         raise ValueError("checkpoint.optimizer_every needs checkpoint.save_optimizer")
     if ckpt["keep_every"] and ckpt["keep_every"] % ckpt["save_interval"]:
@@ -1024,7 +1027,9 @@ def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool =
     )
     if preset.chat_template_kwargs:
         args += ["--apply-chat-template-kwargs", json.dumps(preset.chat_template_kwargs)]
-    if recipe["checkpoint"]["optimizer_every"] > 1:
+    if recipe["checkpoint"]["stage_dir"]:
+        args += ["--custom-megatron-save-context-path", "miles_ext.checkpoint.staged_save.context"]
+    elif recipe["checkpoint"]["optimizer_every"] > 1:
         args += ["--custom-megatron-save-context-path", "miles_ext.checkpoint.save_policy.context"]
     if recipe["checkpoint"]["save_rollout_data"]:
         args += ["--save-debug-rollout-data", str(RESULTS / run_id / "rollout_data" / "{rollout_id}.pt")]
@@ -1094,7 +1099,9 @@ def trainer_env(recipe: dict) -> dict[str, str]:
         env.update(GPU_DELTA_ENV)
     if backend(recipe) == "megatron":
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    if recipe["checkpoint"]["optimizer_every"] > 1:
+    if recipe["checkpoint"]["stage_dir"]:
+        env[STAGE_ENV] = recipe["checkpoint"]["stage_dir"]
+    if recipe["checkpoint"]["optimizer_every"] > 1 or recipe["checkpoint"]["stage_dir"]:
         env[OPTIM_EVERY_ENV] = str(recipe["checkpoint"]["optimizer_every"])
     return env
 

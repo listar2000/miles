@@ -13,8 +13,8 @@ def with_optimizer(args, iteration: int) -> bool:
     a save off the interval (the final one, one the supervisor requested) holds weights only."""
     if args.no_save_optim:
         return False
-    every = int(os.environ[OPTIM_EVERY_ENV])
-    return (iteration + 1) % (every * (args.save_interval or 1)) == 0
+    every = int(os.environ.get(OPTIM_EVERY_ENV, "1"))
+    return every == 1 or (iteration + 1) % (every * (args.save_interval or 1)) == 0
 
 
 def has_optimizer(iter_dir: str | Path) -> bool:
