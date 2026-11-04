@@ -99,8 +99,10 @@ def main() -> None:
             os.makedirs(out, exist_ok=True)
         dist.barrier()
         blocking, background = _save(sd, out, a.threads, a.async_save, queue)
-        saves.append({"blocking_s": round(blocking, 1), "background_s": round(background, 1)}
-                     | {k: round(v, 1) for k, v in PHASES.items()})
+        saves.append(
+            {"blocking_s": round(blocking, 1), "background_s": round(background, 1)}
+            | {k: round(v, 1) for k, v in PHASES.items()}
+        )
         PHASES.clear()
     res = {
         "case": a.case,

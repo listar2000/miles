@@ -57,8 +57,16 @@ def _ticker(stop: threading.Event) -> None:
     last, t0 = 0, time.monotonic()
     while not stop.wait(TICK):
         now = WRITTEN[0]
-        print(json.dumps({"tick_s": round(time.monotonic() - t0), "written_gib": now >> 30,
-                          "gbs_last_tick": round((now - last) / 1e9 / TICK, 3)}), flush=True)
+        print(
+            json.dumps(
+                {
+                    "tick_s": round(time.monotonic() - t0),
+                    "written_gib": now >> 30,
+                    "gbs_last_tick": round((now - last) / 1e9 / TICK, 3),
+                }
+            ),
+            flush=True,
+        )
         last = now
 
 
