@@ -1,4 +1,4 @@
-"""Measure Megatron checkpoint saves and uploads on a GPU node (usage: fork/patches/ext-056-staged-save.md)."""
+"""Measure Megatron checkpoint saves and uploads on a GPU node (usage: fork/patches/ext-056-save-settings.md)."""
 
 import json
 import os

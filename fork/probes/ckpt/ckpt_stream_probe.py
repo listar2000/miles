@@ -1,4 +1,4 @@
-"""Measure Modal checkpoint write and copy throughput with parallel streams (usage: fork/patches/ext-056-staged-save.md)."""
+"""Measure Modal checkpoint write and copy throughput with parallel streams (usage: fork/patches/ext-056-save-settings.md)."""
 
 import json
 import os
