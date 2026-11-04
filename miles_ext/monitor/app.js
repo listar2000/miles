@@ -253,18 +253,19 @@
     return `<div class="barkey">${["done", "error", "verifying", "agent", "setup", "stale", "unknown"].filter(k => p[k]).map(k => `<span><i style="background:${PH[k][1]}"></i>${PH[k][0]} ${int(p[k])}</span>`).join("")}</div>`; };
   function stepper(su, r) {
     if (!su || !su.stages) return "";
-    const at = su.stages.findIndex(([k]) => k === su.stage);
+    const stages = r && !trains(r) ? su.stages.filter(([k]) => k !== "training") : su.stages;
+    const at = stages.findIndex(([k]) => k === su.stage);
     // a run that has ended without reaching "done": finished ends on a green "done"; stopped early, on an amber "stopped"
     const ended = r && r.tone !== "run" && su.stage !== "done", ok = ended && r.tone === "good";
     const endT = ended ? (r.trials && r.trials.last_finish) || null : null;
     const short = { queued: "queued", container: "container", ray: "Ray", sessions: "sessions", loading: "loading", loaded: "loaded",
                     ready: "engine ready", rollout: "rollout", trials: "trials", training: "training", done: "done" };
-    return `<div class="stepper">${su.stages.map(([k, l], i) => {
+    return `<div class="stepper">${stages.map(([k, l], i) => {
       const stopped = ended && !ok && k === "done";
       const cls = stopped ? "stopped" : ended ? (ok || i <= at ? "done" : "") : i < at || (i === at && k === "done") ? "done" : i === at ? "cur" : "";
       const t = (su.seen && su.seen[k]) || (ended && k === "done" ? endT : null);
       const extra = k === "loading" && i === at && su.shards ? " " + su.shards : "";
-      const name = stopped ? "stopped" : k === "trials" && /^rollout filling/.test(l) ? "filling batch 0" : short[k] || k;
+      const name = stopped ? "stopped" : k === "trials" && /^rollout filling/.test(l) && trains(r) ? "filling batch 0" : short[k] || k;
       if (stopped) l = `stopped early: ${r.status}${endT ? " · last trial write" : ""}`;
       return `<div class="step ${cls}" title="${esc(l)}${t ? " · " + fmt(t) : ""}">${esc(name)}${esc(extra)}<span class="when">${t ? hm(t) : "&nbsp;"}</span></div>`;
     }).join("")}</div>`;
@@ -313,6 +314,17 @@
   const costTitle = c => c.unbilled ? `Billed through ${hm(S.cost.through)}; the rest is the monitor's estimate since then at the app's latest billed rate` : `Billed through ${hm(S.cost.through)}`;
   // ---- training runs: steps from Miles' per-step log lines ------------------------------------------------------
   const stepsOf = r => (r.train && r.train.steps) || [];
+  const pct = v => v == null ? "–" : `${(100 * v).toFixed(1)}%`;
+  /* An eval's pass@k from the server (pass_at): over each task's first k trials, refill extras left out. */
+  const evalPass = r => typeOf(r) === "eval" && r.pass && r.pass.at1 != null ? r.pass : null;
+  function evalPanel(r, p) {
+    const t = r.trials, a = p.all || {}, nexc = Object.values(t.exceptions || {}).reduce((x, y) => x + y, 0);
+    const big = (v, k, s) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div><div class="s">${s || "&nbsp;"}</div></div>`;
+    return `<div class="panel" data-key="p-results"><h2>Results</h2>
+      <div class="tiles">${big(mean2(t.mean_reward), "Mean reward", t.extras ? "all trials" : "")}${big(int(nexc), "Exceptions", nexc ? Object.entries(t.exceptions).slice(0, 2).map(([e, n]) => `${esc(e.replace(/Error$/, ""))} ${n}`).join(" · ") : "")}</div>
+      ${t.extras ? `<p class="small" style="margin:10px 0 0"><b>${int(t.finished)} trials ran for ${int(t.finished - t.extras)} planned.</b> Some sample groups were aborted (serving aborts), and Miles refilled them by re-sampling the whole batch, so tasks got more than ${p.k} trials. The headline numbers count each task's first ${p.k} trials by start time; the ${int(t.extras)} later ones are refill extras, faded in the tables below. With them, pass@${p.k} would read ${pct(a.atk)}, pass@1 ${pct(a.at1)}, ${a.tasks_solved} tasks solved.</p>` : ""}
+      ${p.tasks_k < p.tasks ? `<p class="muted small" style="margin:6px 0 0">${p.tasks - p.tasks_k} tasks have fewer than ${p.k} finished trials and are left out of pass@${p.k}.</p>` : ""}</div>`;
+  }
   function trainKpis(r, k) {
     const tr = r.train || {}, steps = stepsOf(r), exp = tr.expected_steps || (r.registry || {}).expected_steps;
     const last = steps[steps.length - 1], first = steps[0];
@@ -440,6 +452,11 @@
     if (seen.rollout || seen.trials) return { text: `<b>Rollout only: filling batch 0.</b> The trainer is still loading`, filling: 0 };
     return { text: "Starting up", filling: null };
   }
+  function evalNow(r, ended) {
+    const t = r.trials || {}, att = latest(r), fin = t.extras ? `${int(t.finished)} trials finished (${int(t.finished - t.extras)} counted + ${int(t.extras)} refill extras)` : `${int(t.finished)} of ${int(t.expected || t.dirs)} trials finished`;
+    if (ended || att && /^stopped/.test(att.app_state || "")) return { text: `<b>${ended ? `Ended (${esc(ended.status)})` : "Done"}.</b> ${fin}${t.last_finish ? `; last finish ${hm(t.last_finish)}` : ""}` };
+    return { text: t.dirs ? `<b>Running trials:</b> ${int(t.in_flight)} in flight, ${fin}` : "Starting up" };
+  }
   /* Groups per task from the trial dirs: n trials in start order make a group (close, not exact); a group whose
      rewards are all equal carries no signal and Miles' nonzero_std filter drops it. */
   function batchFill(r, rows) {
@@ -468,9 +485,10 @@
      waiting for a batch, weight sync, step N) and rollout as trials in flight, on one time axis. Hover reads out
      every lane at that moment; drag across to zoom, click a training step to zoom to it, double-click to reset. */
   const PHM = {};  // run_id -> the drawn model, for the hover readout
+  /* isTrain false (an eval): engine startup and trials in flight only, no trainer lane. */
   function phaseTimeline(r, rows, su, isTrain) {
-    const tr = r.train || {}, ph = tr.phases || [], seen = (su && su.seen) || {};
-    if (!isTrain && !ph.length) return "";
+    const tr = isTrain ? r.train || {} : {}, ph = tr.phases || [], seen = (su && su.seen) || {};
+    if (!isTrain && !rows.length) return "";
     const T0 = seen.container || seen.ray || Math.min(...rows.map(x => x.start || Infinity));
     if (!isFinite(T0)) return "";
     // a run that is over ends its chart at its last activity, not now
@@ -479,8 +497,8 @@
     const T1 = Math.max(tr.exit ? tr.exit.t : ended ? last + 300 : now(), T0 + 900);
     const z = ui.phZoom[r.run_id], t0 = z ? z[0] : T0, t1 = z ? z[1] : T1;
     const W = Math.max(640, Math.min(innerWidth, 1440) - 72), L = 132, R = 10, X = t => L + (W - L - R) * (Math.min(t1, Math.max(t0, t)) - t0) / (t1 - t0);
-    const lane = { start: [6, 18], trainer: [32, 22], rollout: [76, 58] }, H = 160;
-    const M = { t0, t1, T0, T1, L, R, W, H, start: [], trainer: [], pts: [], steps: {} };
+    const lane = isTrain ? { start: [6, 18], trainer: [32, 22], rollout: [76, 58] } : { start: [6, 18], rollout: [46, 88] }, H = 160;
+    const M = { t0, t1, T0, T1, L, R, W, H, isTrain, start: [], trainer: [], pts: [], steps: {} };
     for (const s of stepsOf(r)) M.steps[s.n] = s;
     const labels = [];
     const rect = (t, u, [y, h], fill, label, op = 1, cls = "", data = "") => {
@@ -500,7 +518,7 @@
     });
     // trainer: loading until its first timer, then its phases
     const first = ph.length ? ph[0][1] : null, tStart = seen.ray || T0;
-    if (seen.ray) { M.trainer.push({ a: tStart, b: first || T1, label: "trainer loading", c: "var(--idle)" }); g += rect(tStart, first || T1, lane.trainer, "var(--idle)", "trainer loading", 0.45); }
+    if (seen.ray && isTrain) { M.trainer.push({ a: tStart, b: first || T1, label: "trainer loading", c: "var(--idle)" }); g += rect(tStart, first || T1, lane.trainer, "var(--idle)", "trainer loading", 0.45); }
     let step = 0, batch = 0;
     const n0 = stepsOf(r).length ? stepsOf(r)[0].n : 0;
     for (const [name, a, b0] of ph) {
@@ -556,17 +574,17 @@
       return `<text x="${(end ? W - R : start ? L : x).toFixed(1)}" y="${H - 2}" text-anchor="${end ? "end" : start ? "start" : "middle"}" class="tl-k">${lab}</text>`; };
     for (let t = Math.ceil(t0 / stepS) * stepS; t <= t1; t += stepS) ax += `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${lane.start[0]}" y2="${H - 14}" stroke="var(--grid)"/>${tick(X(t), PT.hm.format(t * 1000))}`;
     if (!tr.exit && !ended && now() <= t1) ax += `<line x1="${X(now()).toFixed(1)}" x2="${X(now()).toFixed(1)}" y1="2" y2="${H - 14}" stroke="var(--ink-3)" stroke-width="1"/>`;
-    const names = [["start", "engine startup"], ["trainer", "trainer"], ["rollout", "trials in flight"]].map(([k, l]) => `<text x="${L - 8}" y="${lane[k][0] + Math.min(lane[k][1], 22) / 2 + 4 + (k === "rollout" ? 14 : 0)}" text-anchor="end" class="tl-l">${l}</text>`).join("");
+    const names = [["start", "engine startup"], ...(isTrain ? [["trainer", "trainer"]] : []), ["rollout", "trials in flight"]].map(([k, l]) => `<text x="${L - 8}" y="${lane[k][0] + Math.min(lane[k][1], 22) / 2 + 4 + (k === "rollout" ? 14 : 0)}" text-anchor="end" class="tl-l">${l}</text>`).join("");
     PHM[r.run_id] = M;
-    const nowTxt = trainerNow(r, su, ended), fill = batchFill(r, rows);
+    const nowTxt = isTrain ? trainerNow(r, su, ended) : evalNow(r, ended), fill = isTrain && batchFill(r, rows);
     const drop = fill && Object.entries(fill.dropped);
     const fillTxt = fill && nowTxt.filling != null ? ` · batch ${nowTxt.filling}: <b>~${Math.min(fill.have, fill.B)}/${fill.B}</b> usable groups of ${fill.n} (estimate from trial rewards)${fill.failed ? `, ${fill.failed} dropped by a failed trial` : ""}` : "";
     const dropTxt = drop && drop.length ? more("phase-drop", `${drop.reduce((a, [, d]) => a + d.n, 0)} groups dropped by the ${esc((r.registry || {}).group_filter || "")} filter`, () => `<div class="muted small">Every reward in the group equal, so no learning signal: ${drop.map(([t, d]) => `<span class="chip">${esc(t)} × ${d.n} (all ${d.r})</span>`).join(" ")}</div>`) : "";
-    return `<div class="panel" data-key="p-phases"><div class="spread"><h2>Phases over time</h2><span class="muted small">${z ? `zoomed to ${hm(t0)} to ${hm(t1)} · <button class="linkish" onclick="MON.phZoom('${esc(r.run_id)}', null)">show the whole run</button>` : "hover for details · drag across to zoom · click a step to zoom to it"}</span></div>
+    return `<div class="panel" data-key="p-phases"><div class="spread"><h2>Phases over time</h2><span class="muted small">${z ? `zoomed to ${hm(t0)} to ${hm(t1)} · <button class="linkish" onclick="MON.phZoom('${esc(r.run_id)}', null)">show the whole run</button>` : `hover for details · drag across to zoom${isTrain ? " · click a step to zoom to it" : ""}`}</span></div>
       <p style="margin:4px 0 8px">${nowTxt.text}${fillTxt}</p>${dropTxt}
       <div class="scroll"><div class="tl-wrap" data-run="${esc(r.run_id)}" style="width:${W}px"><svg class="tl" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:none;display:block">${ax}${g}${names}</svg>
         <div class="tl-cursor" data-keep="cur" style="height:${H - 14}px"></div><div class="tl-sel" data-keep="sel" style="height:${H - 14}px"></div></div></div>
-      <div class="tl-legend muted small"><span><i style="background:var(--idle)"></i>loading</span><span><i style="background:var(--verify)"></i>engine loading weights</span><span><i style="background:var(--good)"></i>engine ready</span><span><i style="background:var(--surface-2);border:1px solid var(--line)"></i>trainer waiting for a batch</span><span><i style="background:var(--warn)"></i>weight sync (engines paused)</span><span><i style="background:var(--accent)"></i>training step</span><span><i style="background:var(--roll)"></i>trials in flight (rollout)</span></div></div>`;
+      <div class="tl-legend muted small"><span><i style="background:var(--idle)"></i>loading</span><span><i style="background:var(--verify)"></i>engine loading weights</span><span><i style="background:var(--good)"></i>engine ready</span>${isTrain ? `<span><i style="background:var(--surface-2);border:1px solid var(--line)"></i>trainer waiting for a batch</span><span><i style="background:var(--warn)"></i>weight sync (engines paused)</span><span><i style="background:var(--accent)"></i>training step</span>` : ""}<span><i style="background:var(--roll)"></i>trials in flight${isTrain ? " (rollout)" : ""}</span></div></div>`;
   }
   /* What every lane of the phases chart was doing at time t. */
   function phaseTip(M, t) {
@@ -581,7 +599,7 @@
       const s = tr.step != null ? M.steps[tr.step] : null;
       h += row("trainer", tr.c, `${esc(tr.label)} <span class="muted">· ${dur(tr.b - tr.a)}${tr.open ? " so far" : ""}</span>`);
       if (s) h += row("", "", `<span class="muted">reward</span> <b>${mean2(s.raw_reward)}</b>${s.response_len != null ? ` <span class="muted">· resp.</span> ${int(s.response_len)} tok` : ""}${s.update_weights_time != null ? ` <span class="muted">· sync</span> ${secs(s.update_weights_time)}` : ""}`);
-    } else h += row("trainer", "", "–");
+    } else if (M.isTrain) h += row("trainer", "", "–");
     h += row("rollout", "var(--roll)", `${n} trial${n === 1 ? "" : "s"} in flight`);
     return h;
   }
@@ -663,13 +681,14 @@
       ...sftKpis(r, k),
       k(start ? `<span data-for="${start}">${dur(now() - start)}</span>` : "–", "Elapsed", lim.hard_stop_h && start ? `limit ${hm(start + lim.hard_stop_h * 3600)}` : ""),
       costKpi(r, k),
-    ].join("") : tr || typeOf(r) === "train" ? [
+    ].join("") : trains(r) ? [
       ...trainKpis(r, k),
       t ? k(t.in_flight, "Trials in flight", `${t.finished} finished · ${t.solved} reward 1`) : "",
       engineKpi(r, att),
       k(start ? `<span data-for="${start}">${dur(now() - start)}</span>` : "–", "Elapsed", lim.hard_stop_h && start ? `limit ${hm(start + lim.hard_stop_h * 3600)}` : ""),
       costKpi(r, k),
     ].join("") : t ? [
+      evalPass(r) && evalPass(r).atk != null ? k(pct(evalPass(r).atk), `pass@${evalPass(r).k}`, `pass@1 ${pct(evalPass(r).at1)} · ${evalPass(r).tasks_k} tasks`) : "",
       k(`${int(t.finished)}<small>/${int(t.expected || t.dirs)}</small>`, "Finished", t.rate_per_min && t.finished >= 10 ? `${t.rate_per_min}/min · ETA ${t.eta_min > 0 ? dur(t.eta_min * 60) : "–"}` : t.last_finish ? `last ${agoTxt(t.last_finish)}` : ""),
       k(int(t.in_flight), "In flight", `${p.agent || 0} agent · ${p.setup || 0} setup · ${p.verifying || 0} verify`),
       k(`${t.solved}<small> / ${t.with_reward || 0}</small>`, "Reward 1", t.tasks_total ? `${t.tasks_solved}/${t.tasks_total} tasks solved` : ""),
@@ -684,7 +703,7 @@
         <div class="runcard-title"><span class="dot t-${r.tone}"></span><a href="#tab=runs&run=${encodeURIComponent(r.key)}">${esc(r.run_id)}</a> <span class="muted" style="font-weight:400">· ${esc(r.status)}</span></div>
         <div class="sub">${esc(reg.title || "")}</div></div>
         <div class="row">${tpill(typeOf(r))}${reg.gpu ? `<span class="chip">${esc(gpuLabel(r))}</span>` : ""}${n ? `<span class="chip">attempt ${n}</span>` : ""}${linksHTML(r)}</div></div>
-      ${tr || typeOf(r) === "train" || isSft(r) ? stepper(su, r) : ""}
+      ${trains(r) || t ? stepper(su, r) : ""}
       <div class="kpis">${kpis}</div>
       ${t ? bar(t, "100%") + barKey(t) : ""}
       ${signalsHTML(r.signals, "card")}
@@ -749,6 +768,9 @@
   // the server owns a run's group and type (monitor/groups.json); these are only their labels and colours
   const TYPES = { train: ["RL training", "RL"], sft: ["SFT", "SFT"], eval: ["Evals", "Eval"], bench: ["Benchmarks", "Bench"], smoke: ["Smokes and probes", "Smoke"], other: ["Folders", "Folder"] };
   const typeOf = r => r.type || "other";
+  // the run trains: its type says so, or it logs trainer steps and is not an eval (an eval launched through the
+  // training launcher with --debug-rollout-only logs an empty trainer too)
+  const trains = r => { const ty = typeOf(r); return ty === "train" || ty === "sft" || (!!r.train && ty !== "eval" && ty !== "bench"); };
   /* "1x None:8" in older manifests means the GPU type wasn't recorded: say "8 GPUs" (or the type a bench summary names). */
   const gpuLabel = r => { const g = (r.registry || {}).gpu; if (!g) return ""; const m = /^(\d+)x None:(\d+)$/.exec(g), e = EV[r.run_id];
     return m ? (e && e.gpu ? `${m[1]}x ${e.gpu}:${m[2]}` : `${+m[1] * +m[2]} GPUs`) : g; };
@@ -941,7 +963,8 @@
       ${cap ? `<div class="muted small">Bar: time used of the ${dur(cap)} trial cap${agentCap && agentCap !== cap ? `, tick at the ${dur(agentCap)} agent limit` : ""}.</div>` : ""}${body}</div>`;
   }
 
-  function tasksHTML(t, cmp) {
+  /* kk: an eval's k; a task's first kk trials are the counted ones, the rest (refill extras) are drawn faded. */
+  function tasksHTML(t, cmp, kk) {
     const ct = cmp ? cmp.tasks : null;
     const prevCell = k => {
       const c = ct && ct[k.task];
@@ -949,35 +972,38 @@
       const [solved, fin] = c, better = k.solved > 0 && solved === 0, worse = k.finished && k.solved === 0 && solved > 0 && k.finished >= fin;
       return `<span style="color:${better ? "var(--good)" : worse ? "var(--bad)" : "inherit"}" title="${esc(cmp.run_id)}: ${solved} solved of ${fin} finished, mean ${c[2] ?? "–"}">${solved}/${fin}</span>`;
     };
-    const tasks = t.tasks || [];
+    const tasks = t.tasks || [], ex = kk && t.extras;
     const o = { key: k => k.task, text: k => k.task, sort: "task", page: 15, toolsTo: true,
-                facets: [["all", () => true], ["solved", k => k.solved > 0], ["unsolved", k => k.finished && !k.solved], ["running", k => k.running > 0], ["with exceptions", k => k.errors > 0],
+                facets: [["all", () => true], ["solved", k => (ex ? k.k_solved : k.solved) > 0], ...(ex ? [["solved only in extras", k => !k.k_solved && k.solved > 0]] : []), ["unsolved", k => k.finished && !k.solved], ["running", k => k.running > 0], ["with exceptions", k => k.errors > 0],
                          ...(ct ? [["changed vs " + cmp.run_id, k => ct[k.task] && (k.solved > 0) !== (ct[k.task][0] > 0) && k.finished]] : [])] };
     const cols = [
       { k: "task", label: "Task", cls: "small c-task", sort: k => k.task, cell: k => `<span class="mono">${esc(k.task)}</span>` },
-      { k: "att", label: "Attempts", cell: k => `<div class="cells">${k.rewards.map(r => `<i title="${r}" style="background:${r >= 1 ? "var(--good)" : r > 0 ? "var(--warn)" : "var(--bad)"}"></i>`).join("")}${"<i style='background:var(--run)'></i>".repeat(k.running)}</div>` },
+      { k: "att", label: kk && t.extras ? "Trials (counted · extras)" : "Attempts", cell: k => `<div class="cells">${(k.cells || []).map((r, i) => {
+        const extra = kk && i >= kk, c = r === "run" ? "var(--run)" : r === "x" || r === "cut" ? "var(--ink-3)" : r >= 1 ? "var(--good)" : r > 0 ? "var(--warn)" : "var(--bad)";
+        return `<i title="${r === "run" ? "in flight" : r === "x" ? "no reward (exception)" : r === "cut" ? "cut off, no result" : "reward " + r}${extra ? " · refill extra, not counted" : ""}" style="background:${c}${extra ? ";opacity:.3" : ""}${kk && i === kk ? ";margin-left:6px" : ""}"></i>`; }).join("")}</div>` },
       { k: "fin", label: "Finished", cls: "num", desc: true, sort: k => k.finished, cell: k => k.finished },
       { k: "run", label: "In flight", cls: "num", desc: true, sort: k => k.running, cell: k => k.running },
       { k: "err", label: "Exceptions", cls: "num", desc: true, sort: k => k.errors, cell: k => k.errors },
-      { k: "solved", label: "Reward 1", cls: "num", desc: true, sort: k => k.solved + (k.mean || 0) / 10, cell: k => k.solved },
+      ...(ex ? [{ k: "ksolved", label: `Solved of ${kk}`, cls: "num", desc: true, sort: k => k.k_solved, cell: k => `<b>${k.k_solved}</b>/${k.k_finished}` }] : []),
+      { k: "solved", label: ex ? "Reward 1, all" : "Reward 1", cls: "num", desc: true, sort: k => k.solved + (k.mean || 0) / 10, cell: k => k.solved },
       { k: "mean", label: "Mean", cls: "num", desc: true, sort: k => k.mean, cell: k => mean2(k.mean) },
       ...(ct ? [{ k: "prev", label: esc(cmp.run_id), cls: "num", desc: true, sort: k => ct[k.task] ? ct[k.task][0] : null, cell: prevCell }] : []),
     ];
     const both = ct ? tasks.filter(k => ct[k.task]) : [];
     const summary = ct ? `vs <a href="#tab=runs&run=${encodeURIComponent(cmp.key)}">${esc(cmp.run_id)}</a>: ${both.filter(k => k.solved).length} tasks solved here, ${both.filter(k => ct[k.task][0]).length} there, on the ${both.length} both ran` : "";
     const body = table("tasks", tasks, cols, o);
-    return `<div class="panel" data-key="p-tasks"><div class="spread"><h2>Per task <span class="muted" style="font-weight:400">${t.tasks_solved}/${t.tasks_total} solved at least once</span></h2><div class="row">${tableTools("tasks", { ...o, rows: tasks })}</div></div>
+    return `<div class="panel" data-key="p-tasks"><div class="spread"><h2>Per task <span class="muted" style="font-weight:400">${ex ? `${tasks.filter(k => k.k_solved).length}/${t.tasks_total} solved in the counted trials` : `${t.tasks_solved}/${t.tasks_total} solved at least once`}</span></h2><div class="row">${tableTools("tasks", { ...o, rows: tasks })}</div></div>
       ${summary ? `<div class="muted small">${summary}</div>` : ""}
-      <div class="barkey" style="margin:0 0 6px"><span><i style="background:var(--good)"></i>reward 1</span><span><i style="background:var(--warn)"></i>partial</span><span><i style="background:var(--bad)"></i>reward 0</span><span><i style="background:var(--run)"></i>in flight</span></div>${body}</div>`;
+      <div class="barkey" style="margin:0 0 6px"><span><i style="background:var(--good)"></i>reward 1</span><span><i style="background:var(--warn)"></i>partial</span><span><i style="background:var(--bad)"></i>reward 0</span><span><i style="background:var(--run)"></i>in flight</span>${ex ? `<span><i style="background:var(--bad);opacity:.3"></i>refill extra (not counted)</span>` : ""}</div>${body}</div>`;
   }
 
-  function finishedHTML(rows) {
+  function finishedHTML(rows, extras) {
     const fin = rows.filter(r => ["done", "error"].includes(r.phase));
     const excs = [...new Set(fin.map(r => r.exception).filter(Boolean))];
     const o = { key: r => r.trial, text: r => r.trial + " " + (r.exception || "") + " " + (r.exception_msg || ""), sort: "finished", dir: -1, page: 15, toolsTo: true,
-                facets: [["all", () => true], ["solved", r => (r.reward || 0) >= 1], ["reward 0", r => r.reward === 0 && !r.exception], ["exceptions", r => !!r.exception], ...excs.map(e => [e, r => r.exception === e])] };
+                facets: [["all", () => true], ...(extras ? [["counted", r => !r.extra], ["refill extras", r => r.extra]] : []), ["solved", r => (r.reward || 0) >= 1], ["reward 0", r => r.reward === 0 && !r.exception], ["exceptions", r => !!r.exception], ...excs.map(e => [e, r => r.exception === e])] };
     const cols = [
-      { k: "task", label: "Trial", sort: r => r.trial, cell: r => `<span class="mono small">${esc(r.task)}</span> <span class="muted small mono">${esc(r.trial.split("__").pop())}</span>` },
+      { k: "task", label: "Trial", sort: r => r.trial, cell: r => `<span class="mono small">${esc(r.task)}</span> <span class="muted small mono">${esc(r.trial.split("__").pop())}</span>${extras && r.extra ? ` <span class="chip" title="Beyond the first k trials of this task: a refill extra, not counted">extra</span>` : ""}` },
       { k: "reward", label: "Reward", cls: "num", desc: true, sort: r => r.reward, cell: r => `<span style="color:${(r.reward || 0) >= 1 ? "var(--good)" : "inherit"}">${r.reward ?? "–"}</span>` },
       { k: "exc", label: "Exception", cls: "small", sort: r => r.exception, cell: r => `<span title="${esc(r.exception_msg)}">${esc(r.exception || "")}</span>${r.exception_msg ? `<div class="muted">${esc(r.exception_msg.slice(0, 120))}</div>` : ""}` },
       { k: "agent", label: "Agent time", cls: "small", desc: true, sort: r => r.agent_s, cell: r => dur(r.agent_s) },
@@ -1026,8 +1052,8 @@
     if (!r) return `<div class="panel">${loaded ? "Run not found." : "loading…"} <a href="#tab=runs">← all runs</a></div>`;
     const sum = runByKey(route.run) || r;  // the summary (status, signals, links, group, type) from the runs topic
     const reg = sum.registry || {}, t = r.trials, rows = r.rows || [], su = S.startup[r.run_id];
-    const type = typeOf(sum), isTrain = !!sum.train || type === "train" || type === "sft", live = isLiveRun(sum);
-    const ev = !isTrain && (type === "eval" || type === "bench") ? evalOf(r.run_id) : null;
+    const type = typeOf(sum), isTrain = trains(sum), live = isLiveRun(sum), pk = !isTrain && t && evalPass(sum);
+    const ev = !isTrain && !pk && (type === "eval" || type === "bench") ? evalOf(r.run_id) : null;
     const peers = S.runs.filter(x => x.group && x.group === sum.group && x.key !== sum.key);
     const jumps = [];
     const J = (k, label) => { jumps.push([k, label]); return ""; };
@@ -1046,6 +1072,11 @@
       hl(`${lastS ? lastS.n + 1 : 0}<small class="muted">/${tr.expected_steps || reg.expected_steps || "?"}</small>`, "Steps done", tr.training_now ? "training now" : ""),
       hl(lastS && lastS.raw_reward != null ? mean2(lastS.raw_reward) : "–", "Reward, last step", steps.length > 1 && steps[0].raw_reward != null ? `step ${steps[0].n}: ${mean2(steps[0].raw_reward)} ${sparkSVG(steps.map(s => s.raw_reward), 64, 14)}` : ""),
     ].join("");
+    else if (pk) head = [
+      pk.k > 1 ? hl(pct(pk.atk), `pass@${pk.k}`, `${pk.tasks_k} tasks${pk.tasks_k < pk.tasks ? ` of ${pk.tasks}` : ""}`) : "",
+      hl(pct(pk.at1), "pass@1", `mean over ${pk.k > 1 ? `each task's ${pk.k} trials` : "tasks"}`),
+      hl(`${pk.tasks_solved}<small class="muted">/${pk.tasks}</small>`, "Tasks solved", pk.k > 1 ? `in at least 1 of ${pk.k} trials` : ""),
+    ].join("");
     else if (ev) { const h = window.Pages.evalHeadline(ev); if (h) head = hl(esc(h.value), esc(h.label), h.sub ? esc(h.sub) : ""); }
     else if (t && t.with_reward) head = hl(mean2(t.mean_reward), "Mean reward", `${int(t.solved)} of ${int(t.with_reward)} trials reward 1${t.tasks_total ? ` · ${t.tasks_solved}/${t.tasks_total} tasks solved` : ""}`);
     head += hl(`<span ${live ? `data-for="${started(sum) || ""}"` : ""}>${dur(runDur(sum))}</span>`, live ? "Running for" : "Ran for", fmt(started(sum)));
@@ -1056,16 +1087,18 @@
       <p style="margin:8px 0 4px">${esc(reg.title || "")}</p>${reg.notes ? `<p class="muted small" style="margin:0 0 6px">${esc(reg.notes)}</p>` : ""}
       <div class="headline">${head}</div>
       <div class="row" style="margin-top:8px">${reg.gpu ? `<span class="chip">${esc(gpuLabel(sum || r))}</span>` : ""}<span class="chip">${esc(r.volume)}/${esc(r.run_id)}</span>${linksHTML(sum, { all: true, noSail: !live })}</div>
-      ${su && live && isTrain ? `<div style="margin-top:10px">${stepper(su, sum)}</div>` : ""}
+      ${su && live && (isTrain || t) ? `<div style="margin-top:10px">${stepper(su, sum)}</div>` : ""}
       ${signalsHTML(sum.signals, "detail")}
-      ${attemptsHTML(sum, () => `${su && !(live && isTrain) ? `<div style="margin:6px 0 8px">${stepper(su, sum)}</div>` : ""}${reg.limits ? `<div class="muted small">limits: ${limitsTxt(reg.limits)}</div>` : ""}${su && su.last ? `<div class="muted small mono" style="margin-top:6px;word-break:break-all">last startup line: ${esc(su.last.slice(0, 260))}</div>` : ""}`)}
+      ${attemptsHTML(sum, () => `${su && !(live && (isTrain || t)) ? `<div style="margin:6px 0 8px">${stepper(su, sum)}</div>` : ""}${reg.limits ? `<div class="muted small">limits: ${limitsTxt(reg.limits)}</div>` : ""}${su && su.last ? `<div class="muted small mono" style="margin-top:6px;word-break:break-all">last startup line: ${esc(su.last.slice(0, 260))}</div>` : ""}`)}
       ${S.watchdogs[r.run_id] ? `<div class="foot">${watchdogLine(r.run_id)}</div>` : ""}
       <div class="jump" data-key="jump">@@JUMP@@</div></div>`;
     let body = "";
     if (isSft(sum)) body += J("p-train", "SFT") + sftPanel(sum);
     else if (isTrain) { body += J("p-train", "Training") + trainPanel(sum); }
-    if (!isTrain && (type === "eval" || type === "bench") && !(ev === null && t)) body += J("p-results", "Results") + window.Pages.evalResults(ev, sum);
-    if (t && !isTrain) body += J("p-tasks", "Per task") + tasksHTML(t, r.compare);
+    if (!isTrain && !pk && (type === "eval" || type === "bench") && !(ev === null && t)) body += J("p-results", "Results") + window.Pages.evalResults(ev, sum);
+    if (pk) body += J("p-results", "Results") + evalPanel(sum, pk);
+    if (t && !isTrain) body += J("p-tasks", "Per task") + tasksHTML(t, r.compare, pk && pk.k);
+    if (t && !isTrain) { const p = phaseTimeline(sum, rows, su, false); if (p) body += J("p-phases", "Phases") + p; }
     const curves = J("curves", "Curves") + `<div id="curves" class="panel" data-key="curves" data-keep="curves-${esc(r.run_id)}"></div>`;
     if (isTrain) body += curves;
     if (isTrain && !isSft(sum)) { const p = phaseTimeline(sum, rows, su, isTrain); if (p) body += J("p-phases", "Phases") + p; }
@@ -1074,7 +1107,7 @@
       const p = t.phases, tile = (v, k, sub) => `<div class="tile"><div class="v" data-flash>${v ?? "–"}</div><div class="k">${k}</div><div class="s">${sub || "&nbsp;"}</div></div>`;
       const nexc = Object.values(t.exceptions).reduce((a, b) => a + b, 0);
       body += J("p-progress", "Trials") + `<div class="panel" data-key="p-progress"><h2>Trials <span class="muted" style="font-weight:400">${int(t.finished)} finished${t.in_flight ? ` · ${t.in_flight} in flight` : ""}</span></h2>${bar(t, "100%")}${barKey(t)}<div style="height:12px"></div>
-        <div class="tiles">${tile(int(t.finished), "Finished", t.expected && t.finished > t.expected ? `<span title="Groups the filter drops are refilled with new tries">plan ${int(t.expected)} + refills</span>` : `of ${int(t.expected || t.dirs)}`)}${tile(int(t.in_flight), "In flight", `${p.agent || 0} agent · ${p.setup || 0} setup`)}${tile(int(t.solved), "Reward 1", `of ${int(t.with_reward || 0)} scored`)}${tile(mean2(t.mean_reward), "Mean reward", `${int(t.nonzero)} above 0`)}
+        <div class="tiles">${tile(int(t.finished), "Finished", pk && t.extras ? `<span title="Trials past each task's first ${pk.k}: not counted">${int(t.finished - t.extras)} counted + ${int(t.extras)} refill extras</span>` : t.expected && t.finished > t.expected ? `<span title="Groups the filter drops are refilled with new tries">plan ${int(t.expected)} + refills</span>` : `of ${int(t.expected || t.dirs)}`)}${tile(int(t.in_flight), "In flight", `${p.agent || 0} agent · ${p.setup || 0} setup`)}${tile(int(t.solved), "Reward 1", `of ${int(t.with_reward || 0)} scored`)}${tile(mean2(t.mean_reward), "Mean reward", `${int(t.nonzero)} above 0`)}
         ${live ? tile(t.rate_per_min ?? "–", "Per min", "30 min avg") + tile(t.eta_min > 0 ? dur(t.eta_min * 60) : "–", "ETA", "at that rate") : ""}</div>
         <p class="muted small">${sum.cost && sum.cost.total && t.finished ? `${usd((sum.cost.estimate || sum.cost.total) / t.finished)} per finished trial · ` : ""}First trial ${fmt(t.first_start)} · last finish ${t.last_finish ? ago(t.last_finish) : "–"} · scanned ${ago(S.updated.runs)}</p>
         ${more("progress-more", `breakdown${nexc ? `, ${plural(nexc, "exception")}` : ""}, finishes over time`, () => `
@@ -1082,7 +1115,7 @@
           ${nexc ? `<h3>Exceptions</h3>${Object.entries(t.exceptions).map(([k, v]) => `<span class="chip">${esc(k)} × ${v}</span>`).join("")}` : ""}
           ${timeline(t)}`)}</div>`;
     }
-    if (t && !isTrain) body += finishedHTML(rows);
+    if (t && !isTrain) body += finishedHTML(rows, !!(pk && t.extras));
     if (!isTrain) body += curves;
     if (rows.length && live) body += J("p-inflight", "In flight") + inflightHTML(rows, reg);
     if (t && isTrain) body += section("trial-lists", "Per task and finished trials", `${t.tasks_total || 0} tasks · ${int(t.finished)} finished`, () => tasksHTML(t, r.compare) + finishedHTML(rows), { open: live });

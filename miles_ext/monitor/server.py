@@ -669,7 +669,9 @@ class Trials:
             }
 
 
-def summarize_trials(rows: list[dict], expected: int | None) -> dict:
+def summarize_trials(rows: list[dict], expected: int | None, k: int | None = None) -> dict:
+    """k (the manifest's n_samples): a task's first k trials by start are the counted ones; later trials of the
+    same task (a refill re-sampling the batch after aborted groups) are marked `extra` and kept apart."""
     now = time.time()
     phases: dict = {}
     for r in rows:
@@ -684,22 +686,47 @@ def summarize_trials(rows: list[dict], expected: int | None) -> dict:
     recent = [t for t in ends if t > now - 1800]
     rate = len(recent) / 30 if recent else 0  # trials per minute over the last 30 min
     tasks: dict = {}
-    for r in rows:
+    for r in sorted(rows, key=lambda r: (r.get("start") or math.inf, r["trial"])):
         t = tasks.setdefault(
             r["task"],
-            {"task": r["task"], "trials": 0, "finished": 0, "solved": 0, "rewards": [], "running": 0, "errors": 0},
+            {
+                "task": r["task"],
+                "trials": 0,
+                "finished": 0,
+                "solved": 0,
+                "rewards": [],
+                "cells": [],
+                "running": 0,
+                "errors": 0,
+                "k_finished": 0,
+                "k_solved": 0,
+            },
         )
+        if k:
+            r["extra"] = t["trials"] >= k
         t["trials"] += 1
-        if r["phase"] in ("done", "error"):
+        done = r["phase"] in ("done", "error")
+        solved = done and (r.get("reward") or 0) >= 1.0
+        # one cell per trial in start order: its reward, "x" (finished without one), "run" (in flight) or
+        # "cut" (stale or unknown), so a cell's index is its trial's start rank and the first k are the counted ones
+        if done:
             t["finished"] += 1
             if r.get("reward") is not None:
                 t["rewards"].append(r["reward"])
-                t["solved"] += r["reward"] >= 1.0
+                t["solved"] += solved
             t["errors"] += r["phase"] == "error"
+            t["cells"].append(r["reward"] if r.get("reward") is not None else "x")
+            if not r.get("extra"):
+                t["k_finished"] += 1
+                t["k_solved"] += solved
         elif r["phase"] not in ("unknown", "stale"):
             t["running"] += 1
+            t["cells"].append("run")
+        else:
+            t["cells"].append("cut")
     for t in tasks.values():
         t["mean"] = round(sum(t["rewards"]) / len(t["rewards"]), 3) if t["rewards"] else None
+        del t["rewards"]
     remaining = (expected - len(fin)) if expected else None
     starts = [r["start"] for r in rows if r.get("start")]
     in_flight = sum(phases.get(k, 0) for k in ("setup", "agent", "verifying"))
@@ -723,6 +750,7 @@ def summarize_trials(rows: list[dict], expected: int | None) -> dict:
         "first_start": min(starts) if starts else None,
         "last_finish": ends[-1] if ends else None,
         "timeline": ends,
+        "extras": sum(1 for r in fin if r.get("extra")) if k else 0,  # finished ones, so finished - extras = counted
         "tasks": sorted(tasks.values(), key=lambda t: t["task"]),
     }
 
@@ -889,7 +917,7 @@ def collect_runs(first: bool):
                 run["app_stopped"] = stopped
                 if stopped:  # its GPU app is gone: whatever has no result now never will
                     rows = [r if r["phase"] in ("done", "error", "stale") else {**r, "phase": "stale"} for r in rows]
-                run["trials"] = summarize_trials(rows, entry.get("expected_trials"))
+                run["trials"] = summarize_trials(rows, entry.get("expected_trials"), entry.get("n_samples"))
                 run["rows"] = rows
                 if ms:
                     trial_events(rid, ms[-1]["app_id"], (prev or {}).get("rows"), rows, entry.get("expected_trials"))
@@ -2255,8 +2283,9 @@ def runs_view() -> list:
 
 
 def pass_at(tasks: list[dict], k: int | None) -> dict | None:
-    """pass@1 and pass@k over the tasks with at least k finished trials (unbiased estimator; reward 1 = solved).
-    k: the manifest's n_samples, else the most finished trials of any task."""
+    """pass@1 and pass@k (unbiased estimator; reward 1 = solved) over each task's counted trials, its first k by
+    start (summarize_trials), on the tasks with at least k of them finished. `all` is the same over every finished
+    trial, refill extras included. k: the manifest's n_samples, else the most finished trials of any task."""
     tasks = [t for t in tasks if t.get("finished")]
     if not tasks:
         return None
@@ -2265,14 +2294,19 @@ def pass_at(tasks: list[dict], k: int | None) -> dict | None:
     def est(n, c, kk):
         return 1.0 if n - c < kk else 1.0 - math.comb(n - c, kk) / math.comb(n, kk)
 
-    full = [t for t in tasks if t["finished"] >= k]
-    return {
-        "k": k,
-        "at1": round(sum(t["solved"] / t["finished"] for t in tasks) / len(tasks), 4),
-        "atk": round(sum(est(t["finished"], t["solved"], k) for t in full) / len(full), 4) if full else None,
-        "tasks": len(tasks),
-        "tasks_k": len(full),
-    }
+    def over(nf, sf):
+        done = [t for t in tasks if t[nf]]
+        full = [t for t in done if t[nf] >= k]
+        return {
+            "at1": round(sum(t[sf] / t[nf] for t in done) / len(done), 4) if done else None,
+            "atk": round(sum(est(t[nf], t[sf], k) for t in full) / len(full), 4) if full else None,
+            "tasks": len(done),
+            "tasks_k": len(full),
+            "tasks_solved": sum(1 for t in done if t[sf]),
+        }
+
+    counted = over("k_finished", "k_solved") if "k_finished" in tasks[0] else over("finished", "solved")
+    return {"k": k, **counted, "all": over("finished", "solved")}
 
 
 def link_evals(runs: list):

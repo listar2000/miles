@@ -160,6 +160,28 @@ def test_pass_at_k_and_eval_links(monkeypatch, tmp_path):
     assert [(e["run_id"], e["step"], e["pass"]["atk"]) for e in runs[0]["evals"]] == [("ev-1", 500, 0.5)]
 
 
+def test_refill_extras_are_left_out_of_pass_at_k(monkeypatch, tmp_path):
+    _manifest(monkeypatch, tmp_path)
+    from miles_ext.monitor import server
+
+    def row(i, start, reward):
+        return {"trial": f"a__{i}", "task": "a", "start": start, "phase": "done", "reward": reward}
+
+    # two counted trials fail (one cut off), a later refill extra solves the task, another is still running
+    rows = [
+        row(3, 30, 1.0),
+        row(1, 10, 0.0),
+        {**row(2, 11, None), "phase": "stale"},
+        {**row(4, 40, None), "phase": "agent"},
+    ]
+    t = server.summarize_trials(rows, 2, 2)
+    assert (t["extras"], [r["extra"] for r in rows]) == (1, [True, False, False, True])
+    assert t["tasks"][0]["cells"] == [0.0, "cut", 1.0, "run"]
+    p = server.pass_at(t["tasks"], 2)
+    # one counted trial finished: the task is left out of pass@2 until both have
+    assert (p["atk"], p["tasks_k"], p["at1"], p["all"]["atk"], p["all"]["tasks_solved"]) == (None, 0, 0.0, 1.0, 1)
+
+
 def test_sft_kind_is_its_own_type(monkeypatch, tmp_path):
     _manifest(monkeypatch, tmp_path)
     from miles_ext.monitor import groups

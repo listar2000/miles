@@ -125,7 +125,9 @@ step), step pace against `hard_stop_h`. It reads "finished" once every expected 
 kind at once; restart the monitor to rebuild its loss curve from the log.
 
 **Evals of its checkpoints.** An eval run says what it evaluates; the SFT run's page lists every such eval with pass@k
-(unbiased, over tasks with at least k finished trials; k = the eval's `n_samples`) and pass@1. In the eval's manifest or
+(unbiased, over tasks with at least k finished trials; k = the eval's `n_samples`) and pass@1. Both count each
+task's first k trials by start: when Miles refills aborted groups by re-sampling the whole batch, the later trials are
+marked refill extras (faded on the eval page) and left out; the page also shows the numbers with them. In the eval's manifest or
 `runs.json` entry: `"evaluates": {"run": "<sft run id>", "step": <steps trained, 0 = base model>, "label": "..."}`, or
 `register.py <eval run id> <eval log> <eval recipe> --evaluates <sft run id>@<step>`. Eval rows with k > 1 show pass@k.
 
@@ -180,6 +182,9 @@ URL passwords, `api_key=`/`token:` values) are scrubbed from every response.
 - **Compare.** Tick two runs of one group (or "Compare with…" on a run page): `#tab=compare&a=<key>&b=<key>`. Facts
   side by side with B's change, per-step training curves overlaid, engine/GPU/trial curves per step or by time since
   start, and per-level, per-arm or per-task tables for evals.
+- **Trial evals** (type `eval` with trial dirs, e.g. a training launch with `--debug-rollout-only`): the headline is
+  pass@k, pass@1 and tasks solved; the page has no training panel or trainer lane, and its phases chart shows engine
+  startup and trials in flight only.
 - **Eval and bench pages.** Result first: the levels table with answer kinds and sampled answers (OOD tasks), the arms
   × concurrency throughput table (ITP/ITR benches), or the checks table (SC checks). Read from
   `<oodtask|inference-throughput|sc058>/<run_id>/summary.json` on the first results volume; cached in `cache/eval/` once the
