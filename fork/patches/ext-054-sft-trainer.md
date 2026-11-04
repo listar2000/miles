@@ -17,9 +17,13 @@ table under `miles_ext/sft/tmax/`, so the next dataset (GLM-5.3-Flash Pi traces)
 - `SftTrainRayActor` is selected with hook-019's `--custom-trainer-actor-class`.
 - Fixed, not configurable: full recompute (selective recompute of MoE activations and norms ran out of memory at
   32K tokens per GPU), one save per epoch, the whole held-out set.
-- The image is the config's published image with the checkout's `miles_ext/` and `experiments/` laid over it,
+- The image is the config's published image (`image`, digest-pinned) or one Modal builds from a pushed fork commit
+  (`commit`, for code no published image has yet), with the checkout's `miles_ext/` and `experiments/` laid over it,
   as the tmax runs did, so an SFT change runs without an image build. Lost: the image alone no longer pins the
-  code; `argv-*.json` in the run dir keeps the config and argv.
+  code; `argv-*.json` in the run dir keeps the config and argv. The overlay cannot add `miles/` code, so
+  `modal_train` refuses an image without hook-019.
+- Presets with one sample per micro-batch (`packed_batches=False`, DeepSeek V4.1) are refused until SFT is
+  verified for them; the renderer supports more families than the trainer.
 - Rejected: an SFT mode of the RL recipe (`recipe.py`): most of its keys (taskset, rollout, harness) mean
   nothing for SFT.
 
