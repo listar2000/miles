@@ -14,6 +14,22 @@ from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQu
 from megatron.core.dist_checkpointing.strategies.torch import TorchDistSaveShardedStrategy
 
 TENSOR_ELEMS = 128 << 20  # 256 MiB of bf16
+PHASES: dict[str, float] = {}  # seconds spent in Megatron's host preload (the copy of every shard to CPU)
+
+
+def _time_preload() -> None:
+    from megatron.core.dist_checkpointing.strategies.filesystem_async import FileSystemWriterAsync
+
+    inner = FileSystemWriterAsync.preload_tensors
+
+    def timed(*a, **k):
+        t = time.monotonic()
+        try:
+            return inner(*a, **k)
+        finally:
+            PHASES["preload_s"] = PHASES.get("preload_s", 0.0) + time.monotonic() - t
+
+    FileSystemWriterAsync.preload_tensors = staticmethod(timed)
 
 
 def _state_dict(gib: int, rank: int, world: int) -> tuple[dict, float]:
@@ -70,6 +86,7 @@ def main() -> None:
     p.add_argument("--verify", action="store_true", help="load the last save back and compare checksums")
     a = p.parse_args()
 
+    _time_preload()
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
@@ -82,7 +99,9 @@ def main() -> None:
             os.makedirs(out, exist_ok=True)
         dist.barrier()
         blocking, background = _save(sd, out, a.threads, a.async_save, queue)
-        saves.append({"blocking_s": round(blocking, 1), "background_s": round(background, 1)})
+        saves.append({"blocking_s": round(blocking, 1), "background_s": round(background, 1)}
+                     | {k: round(v, 1) for k, v in PHASES.items()})
+        PHASES.clear()
     res = {
         "case": a.case,
         "ranks": world,
