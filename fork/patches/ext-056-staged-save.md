@@ -42,7 +42,9 @@ the launcher's uploaders and retention thread (`miles_ext/launch/modal_app.py`),
 `miles_ext/platform/checkpoints.py` (`keep_every`, the Adam-save pin), recipe keys in `miles_ext/recipes/recipe.py`.
 Verify: the trainer log prints `save: iteration N to the node-local stage (...) in S s`, then
 `staged save: node K uploaded iteration N (... GiB/s)` and `tracker -> N`; a relaunch with the same run id resumes.
-Needs `cluster.disk_gib` for one staged save per node beside anything else on local disk. Tests:
+Needs `cluster.disk_gib` for one staged save per node beside anything else on local disk. With `stage_dir`,
+trainer rank 0 must run in container 0 (whose uploader writes the tracker and gates the exit record); the launcher
+sets `MILES_EXT_SAVE_NODE` per container and a save refuses to run otherwise. Tests:
 `miles_ext/tests/test_staged_save.py`.
 
 ## Rerunning the probes
