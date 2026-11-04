@@ -219,8 +219,6 @@ DEFAULTS: dict[str, Any] = {
     # save_optimizer False: saves hold weights only and a resume starts Adam's moments afresh
     # save_rollout_data: each batch the trainer receives goes to <run>/rollout_data/<rollout_id>.pt,
     # so a trainer failure replays on trainer nodes alone (Miles --load-debug-rollout-data)
-    # Megatron only (ext-056): stage_dir: node-local dir each save lands in before a background upload;
-    # optimizer_every: Adam's state in every k-th save only; keep_every: retention also keeps these steps
     "checkpoint": {"save_interval": 10, "keep": 1, "keep_final_full": True, "save_hf": False,
                    "save_optimizer": True, "save_rollout_data": False, "stage_dir": None,
                    "optimizer_every": 1, "keep_every": None},

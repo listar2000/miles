@@ -183,7 +183,7 @@ class Supervisor:
         self.dict, self.keys = progress_dict, P.keys(run_id)
         self.segment, self.deadline, self.commit, self.image = segment, deadline, commit, image
         self.call_id = call_id
-        # pending() is True while a save Miles finished is not in the tracker yet (ext-031 staged saves)
+        # pending() is True while a save Miles finished is not in the tracker yet (ext-056 staged saves)
         self.pending = pending or (lambda: False)
         self.backend, self.num_rollout = backend, recipe["algorithm"]["num_rollout"]
         self.tail = collections.deque(maxlen=TAIL_LINES)

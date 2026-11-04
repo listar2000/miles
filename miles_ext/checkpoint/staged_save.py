@@ -1,9 +1,5 @@
-"""Stage Megatron checkpoints on node-local disk and upload them in the background (patch page ext-056).
-
-Also decides, per save, whether it carries Adam's state (``checkpoint.optimizer_every``): a save with it
-goes straight to the volume (Adam's state does not fit next to the disk-streamed optimizer), every
-other save is staged. Either way ``iter_N/.optimizer`` marks a save that holds Adam's state, so a resume
-knows whether to load it."""
+"""Stage Megatron checkpoints locally, upload completed saves to the results volume, and decide which saves
+carry Adam's state (patch page ext-056)."""
 
 import contextlib
 import os
@@ -23,7 +19,6 @@ COPY_PIECE = 1 << 30  # each upload worker copies one 1 GiB range of a shard at 
 IO_CHUNK = 64 << 20
 UPLOAD_TIMEOUT_SECS = 1800  # how long exit waits for pending uploads
 POLL_SECS = 2
-SETTLE_SECS = 5  # markers of one save land within the barrier's skew; wait this long for stragglers
 ITER = re.compile(r"iter_(\d{7})$")
 MARKER = ".saved-rank"
 
@@ -46,12 +41,12 @@ def _print(msg: str) -> None:
 
 
 def with_optimizer(args, iteration: int) -> bool:
-    """Whether the save at ``iteration`` carries Adam's state: every k-th periodic save, k = OPTIM_EVERY_ENV.
-    Miles saves after rollout ``iteration`` (0-based) when ``iteration + 1`` is a multiple of save_interval."""
+    """Whether the save after rollout ``iteration`` (0-based) carries Adam's state: every save when k =
+    OPTIM_EVERY_ENV is 1, else every k-th periodic save; a save off the interval (final, requested) holds weights only."""
     if args.no_save_optim:
         return False
     every = int(os.environ.get(OPTIM_EVERY_ENV, "1"))
-    return (iteration + 1) % (every * (args.save_interval or 1)) == 0
+    return every == 1 or (iteration + 1) % (every * (args.save_interval or 1)) == 0
 
 
 def has_optimizer(iter_dir: str | Path) -> bool:
@@ -115,9 +110,12 @@ def _copy_pieces(files: list[Path], src_root: Path, dest_root: Path) -> int:
         with open(src, "rb", buffering=0) as fi, open(out, "r+b", buffering=0) as fo:
             end = off + length
             while off < end:
-                data = os.pread(fi.fileno(), min(IO_CHUNK, end - off), off)
-                os.pwrite(fo.fileno(), data, off)
-                off += len(data)
+                data = memoryview(os.pread(fi.fileno(), min(IO_CHUNK, end - off), off))
+                if not data:
+                    raise OSError(f"{src}: unexpected end of file at {off}")
+                while data:
+                    written = os.pwrite(fo.fileno(), data, off)
+                    data, off = data[written:], off + written
             os.fsync(fo.fileno())
 
     with ThreadPoolExecutor(COPY_THREADS) as pool:
@@ -139,15 +137,17 @@ class Uploader:
         commit: Callable[[], None],
         *,
         train_ranks: int,
+        local_ranks: int,
         log=_print,
     ):
         from miles_ext.platform.layout import TRACKER  # trainer ranks import this module without the platform
 
         self.stage, self.ckpt_dir, self.tracker = Path(stage), Path(run_dir) / "checkpoints", TRACKER
         self.run_id, self.node, self.queue, self.commit = run_id, node, queue, commit
-        self.train_ranks, self.log = train_ranks, log
+        self.train_ranks, self.local_ranks, self.log = train_ranks, local_ranks, log
         self.reports: dict[int, dict[int, int]] = {}  # node 0: iteration -> node -> ranks uploaded
-        self.tracked = -1  # node 0: the last iteration it wrote to the tracker
+        self.uploaded: set[int] = set()  # node 0: its own uploads, pending until the tracker covers them
+        self.tracked = -1  # node 0: the last iteration the tracker covers
         self.stop = threading.Event()
         self.stage.mkdir(parents=True, exist_ok=True)
         self.thread = threading.Thread(target=self._loop, daemon=True, name="staged-save-upload")
@@ -157,9 +157,9 @@ class Uploader:
         return self
 
     def _ready(self) -> Path | None:
+        """The oldest staged save every trainer rank of this node has marked."""
         for it in _marked(self.stage):
-            markers = list(it.glob(f"{MARKER}*"))
-            if time.time() - max(m.stat().st_mtime for m in markers) > SETTLE_SECS:
+            if len(list(it.glob(f"{MARKER}*"))) >= self.local_ranks:
                 return it
         return None
 
@@ -169,6 +169,8 @@ class Uploader:
         files = [p for p in it.rglob("*") if p.is_file() and not p.name.startswith(MARKER)]
         size = _copy_pieces(files, it, self.ckpt_dir / it.name)
         self.commit()
+        if self.node == 0:
+            self.uploaded.add(n)  # before the stage goes, so busy() never sees a gap
         self.queue.put((self.node, n, ranks), partition=report_partition(self.run_id))
         shutil.rmtree(it)
         secs = time.monotonic() - began
@@ -187,15 +189,14 @@ class Uploader:
 
         for n in sorted(self.reports):
             if n > self.tracked and sum(self.reports[n].values()) >= self.train_ranks:
+                if n > (read_tracker(self.ckpt_dir.parent) or -1):  # else a later save went to the volume directly
+                    (self.ckpt_dir / self.tracker).write_text(str(n))
+                    self.log(f"staged save: iteration {n} complete on the volume; tracker -> {n}")
                 self.tracked = n
-                if n <= (read_tracker(self.ckpt_dir.parent) or -1):  # a later save went to the volume directly
-                    continue
-                (self.ckpt_dir / self.tracker).write_text(str(n))
-                self.log(f"staged save: iteration {n} complete on the volume; tracker -> {n}")
 
     def busy(self) -> bool:
         """A finished save on this node is not uploaded yet, or (node 0) not in the tracker yet."""
-        return bool(_marked(self.stage)) or any(n > self.tracked for n in self.reports)
+        return bool(_marked(self.stage)) or any(n > self.tracked for n in (*self.reports, *self.uploaded))
 
     def _step(self) -> None:
         it = self._ready()
@@ -245,7 +246,7 @@ class Uploader:
             if time.monotonic() > by:
                 self.log(
                     f"staged save: node {self.node} drain timed out; staged {[p.name for p in _marked(self.stage)]}, "
-                    f"untracked {sorted(n for n in self.reports if n > self.tracked)}"
+                    f"untracked {sorted(n for n in {*self.reports, *self.uploaded} if n > self.tracked)}"
                 )
                 return False
             time.sleep(POLL_SECS)

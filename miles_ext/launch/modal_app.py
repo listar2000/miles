@@ -367,6 +367,7 @@ def _uploader(recipe: dict, run_id: str, run_dir, rank: int):
         completion_queue,
         results_volume.commit,
         train_ranks=R.trainer_gpus(recipe),
+        local_ranks=min(R.GPUS_PER_NODE, R.trainer_gpus(recipe) - rank * R.GPUS_PER_NODE),
     )
 
 
@@ -381,8 +382,13 @@ def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> thr
                 continue
             seen = step
             try:
-                dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
-                                                keep_every=ckpt["keep_every"], final=False)
+                dropped = apply_retention_local(
+                    run_dir,
+                    keep=ckpt["keep"],
+                    keep_final_full=ckpt["keep_final_full"],
+                    keep_every=ckpt["keep_every"],
+                    final=False,
+                )
                 if dropped:
                     results_volume.commit()
                     print(f"retention (tracker {step}): removed {[d['step'] for d in dropped]}", flush=True)
@@ -493,8 +499,11 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         step = read_tracker(run_dir)
         resume = step is not None
         # ext-056: a run saving Adam's state on every k-th save only may resume from a save without it
-        resume_optimizer = not resume or recipe["checkpoint"]["optimizer_every"] == 1 or staged_save.has_optimizer(
-            run_dir / "checkpoints" / iter_dir(step))
+        resume_optimizer = (
+            not resume
+            or recipe["checkpoint"]["optimizer_every"] == 1
+            or staged_save.has_optimizer(run_dir / "checkpoints" / iter_dir(step))
+        )
         args = R.miles_args(recipe, run_id, resume, resume_optimizer) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
         segment = len(list(run_dir.glob("recipe-*.json")))
