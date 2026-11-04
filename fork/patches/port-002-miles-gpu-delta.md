@@ -33,13 +33,17 @@ teleportation"): PP-local owners XOR old and new canonical weights, compress on 
   straight into the pinned host slab in the same layout.
 - fix-080 (found in the full GLM-5.3-Flash split runs): a rank-0 action's error crossed to the other ranks without its notes, so the
   engine's reply to a refused call was lost; it is kept now, and each rank logs its encoding finish and owner seal.
+- fix-083 (trainer host RAM; a full-parameter GLM-5.3-Flash split run was killed at its 2,304 GiB request in step 2): the HF base stayed pinned for the
+  whole run (306 GiB on GLM-5.3-Flash) and the base-relative recovery payload was re-encoded after every sync. After the first
+  commit the base is read from `--hf-checkpoint` when used, and recovery is encoded only for a restarted engine or a save.
+  The recipe's host budget still counts three copies (`GPU_DELTA_HOST_COPIES`) until a GPU run measures the saving.
 
 ## How it is applied
 Opt-in: `--update-weight-transfer-mode gpu-delta` (plus `--update-weight-disk-dir`, a local HF checkpoint, Megatron
 raw exporter, `retract` pause, no LoRA; `miles/utils/gpu_delta/admission.py`). Nothing changes for other modes.
 Verify: the PR's fast tests on CPU in our image (`tests/fast/{backends/megatron_utils,backends/training_utils/weight_update,utils}/gpu_delta`),
 gate E0 for the native path. On a sync: if upstream merged #3894, take upstream's side of every file listed in
-`Touches:` and retire port-002, fix-075 to fix-078 and fix-080; if the PR head moved and we want it, refresh in one commit.
+`Touches:` and retire port-002, fix-075 to fix-078, fix-080 and fix-083; if the PR head moved and we want it, refresh in one commit.
 
 ## Remove when
 radixark/miles#3894 is merged and our main has synced past it; upstream status: open draft PR (2026-11-03).
