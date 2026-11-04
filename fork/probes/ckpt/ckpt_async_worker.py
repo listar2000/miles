@@ -111,7 +111,9 @@ def main() -> None:
         "threads": a.threads,
         "async": a.async_save,
         "saves": saves,
-        "write_gbs_total": round(world * (a.gib << 30) / 1e9 / sum(saves[-1].values()), 3),
+        "write_gbs_total": round(
+            world * (a.gib << 30) / 1e9 / (saves[-1]["blocking_s"] + saves[-1]["background_s"]), 3
+        ),
     }
     if a.verify:
         del sd  # the load needs the GPU memory back

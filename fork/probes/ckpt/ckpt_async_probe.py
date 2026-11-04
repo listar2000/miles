@@ -1,6 +1,4 @@
-"""Measure Megatron checkpoint saves and uploads on one GPU node (H100:8 by default).
-
-CKPT_PROBE_GPU picks another node (e.g. B300:1), CKPT_PROBE_IMAGE another image; ranks = the node's GPUs."""
+"""Measure Megatron checkpoint saves and uploads on a GPU node (usage: fork/patches/ext-056-staged-save.md)."""
 
 import json
 import os
@@ -49,7 +47,7 @@ CASES = {
     "async-nvrx-temporal": (VOL, 8, 8, True, 2, True, False, "nvrx", False, 5),
     "async-mcore-temporal": (VOL, 8, 8, True, 2, True, False, "mcore", False, 5),
 }
-HOG_GIB = {"sync-t1-78-hog": int(os.environ.get("CKPT_PROBE_HOG_GIB", "1700"))}  # host RAM held while saving
+HOG_GIB = {"sync-t1-78-hog": 1700}  # host RAM held while saving
 HOG = "import sys, time; b = bytearray(int(sys.argv[1]) << 30); b[::4096] = b'x' * len(b[::4096]); print('hog ready', flush=True); time.sleep(86400)"
 COPY_JOBS = 16
 DISK_LOAD = (

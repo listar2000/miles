@@ -1,17 +1,4 @@
-"""How a Modal volume's write rate scales with parallel files, against node-local disk, on CPU or GPU containers.
-
-Megatron's sync torch_dist save writes one file per rank from one thread (thread_count is forced to 1), so a
-B300:8 trainer writes 8 streams. This probe times N parallel streams of fake data, each its own file:
-  vol-N     N streams straight to the volume (64 MiB writes, fsync per file), then commit
-  torch-N   the same through torch.save of 256 MiB tensors into each file (Megatron's _write_item pattern)
-  local-N   N streams to node-local disk
-  copy-N    the local-N files copied to the volume N at a time, then commit
-  range-8xK 8 volume files, each written by K threads at disjoint offsets (pwrite), then commit
-One JSON line per case and a SUMMARY. Every byte goes under /vol/ckpt-stream-probe/<case> and is removed.
-
-  modal run fork/probes/ckpt/ckpt_stream_probe.py                 # CPU container
-  CKPT_PROBE_GPU=B300:8 modal run fork/probes/ckpt/ckpt_stream_probe.py
-"""
+"""Measure Modal checkpoint write and copy throughput with parallel streams (usage: fork/patches/ext-056-staged-save.md)."""
 
 import json
 import os
