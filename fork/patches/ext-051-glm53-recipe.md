@@ -39,7 +39,11 @@ Full-parameter split mode is a separate line (its weight transport is not built 
   tokens), the settings of the one-node engine probe of 2026-11-03: median decode per request 80 vs 60 tok/s at 64
   requests per node, 59 vs 56 at 128, with no all-zero R3 rows in either arm (miles-ops `notes/glm53/README.md`). The
   draft is never trained or synced, so acceptance falls as the policy drifts. Off for the 4-layer slice (no NextN
-  layer) and with GPU-delta sync, whose receiver plan has not run with a draft model loaded.
+  layer). With GPU-delta sync the draft is off unless the recipe sets `rollout.speculative: true` (`null`, the default,
+  keeps the draft everywhere else; `false` turns it off). `glm53-flash-split-gpud.yaml` opts in: GPU-delta's
+  data-parallel attention needed fix-082 (an idle hybrid rank in verify), and `run_glm_bench.py --draft` applied 3
+  GPU-delta versions with the draft on, every rank exact against the oracle. Pending E2E validation in that recipe's
+  next run.
 - Not done here: the fused MoE
   runner, a BF16 rollout copy, and LoRA (upstream's native `glm5_next` LoRA spec would apply as is).
 

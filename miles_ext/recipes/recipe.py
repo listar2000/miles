@@ -197,10 +197,11 @@ DEFAULTS: dict[str, Any] = {
     # rollout engines: GPUs per engine (one SGLang server), the format they serve (a key of
     # the preset's precisions), context_length (None: the model's; set, a reply that would
     # overflow it is shortened), max_running_requests (None: SGLang's). speculative: decode with the preset's
-    # draft model when the served precision has one. A full-weight fp8_fp4 run always keeps the trainer's FP4
+    # draft model when the served precision has one; None does so except with GPU-delta sync, true opts GPU-delta
+    # in, false turns the draft off. A full-weight fp8_fp4 run always keeps the trainer's FP4
     # experts on the engine's grid (fix-006, see expert_qat)
     "rollout": {"gpus_per_engine": 1, "precision": None, "context_length": None, "max_running_requests": None,
-                "speculative": True, "weight_sync": "tensor"},
+                "speculative": None, "weight_sync": "tensor"},
     # Megatron disk streaming keeps the derived host tier pinned and the remainder on disk.
     # moment_dtype controls stored moments; grad_dtype controls gradient accumulation.
     "optimizer": {"offload": None, "moment_dtype": None, "grad_dtype": "fp32"},
@@ -363,6 +364,7 @@ FIELD_RULES: dict[str, dict] = {
     "rollout.gpus_per_engine": {"type": "int", "min": 1, "max": 8},
     "rollout.precision": {"type": "str", "nullable": True},
     "rollout.weight_sync": {"type": "str", "enum": ("tensor", "gpu-delta")},
+    "rollout.speculative": {"type": "bool", "nullable": True},
     "rollout.context_length": {"type": "int", "nullable": True, "min": 1},
     "rollout.max_running_requests": {"type": "int", "nullable": True, "min": 1},
     "optimizer.offload": {"type": "str", "nullable": True, "enum": ("disk",)},
@@ -610,10 +612,11 @@ def expert_qat(recipe: dict) -> bool:
 def speculative_algorithm(recipe: dict) -> str | None:
     """The preset's draft algorithm when rollout.speculative is on and the served precision carries a draft."""
     preset = PRESETS[recipe["model"]["preset"]]
-    if not (recipe["rollout"]["speculative"] and preset.speculative_algorithm):
+    speculative = recipe["rollout"]["speculative"]
+    if speculative is False or not preset.speculative_algorithm:
         return None
-    if gpu_delta(recipe):
-        return None  # GPU-delta's receiver plan has not been run with a draft model loaded
+    if speculative is None and gpu_delta(recipe):
+        return None  # a GPU-delta recipe opts in with rollout.speculative true
     if preset.draft_precisions and rollout_precision(recipe) not in preset.draft_precisions:
         return None
     return preset.speculative_algorithm

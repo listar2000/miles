@@ -41,6 +41,7 @@ rollout:
   context_length: 32768
   max_running_requests: 128
   weight_sync: gpu-delta
+  speculative: true  # the release's NextN draft under GPU-delta (fix-082)
 taskset:
   prompts: $MILES_DATA/prompts/stak32.jsonl
   harness: single-turn
