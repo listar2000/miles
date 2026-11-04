@@ -95,7 +95,7 @@ point a Mobius eval at it. Baseline: Qwen3-30B-A3B-Thinking-2507 in the same set
 | [qwen3-30b-128k.yaml](configs/qwen3-30b-128k.yaml) (v1, 2 epochs, stopped at step 50) | all | every reply |
 | [qwen3-30b-128k-b2.yaml](configs/qwen3-30b-128k-b2.yaml) (v2) | all | replies without reasoning in context, untrained ([postprocess.py](postprocess.py)) |
 | [qwen3-30b-128k-b2-t1800.yaml](configs/qwen3-30b-128k-b2-t1800.yaml) (v3) | teacher runs of at most 30 min ([filter_by_time.py](filter_by_time.py): 3,620 of 4,326) | as v2 |
-| [qwen3-30b-128k-b2-r8k.yaml](configs/qwen3-30b-128k-b2-r8k.yaml) (v4) | all | as v2, and replies with over 8,000 characters of reasoning untrained (12% of reasoning replies, 79% of the reasoning text) |
+| [qwen3-30b-128k-b2-r8k.yaml](configs/qwen3-30b-128k-b2-r8k.yaml) (v4) | all | as v2, and replies with over 8,000 characters of reasoning untrained (12% of reasoning replies, 79% of the reasoning text), so the student does not learn to overthink |
 
 v3's held-out set is v2's (all held-out records), so the two validation NLLs compare.
 

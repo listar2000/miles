@@ -19,12 +19,11 @@ def untrain_no_reasoning(record: dict[str, Any]) -> dict[str, Any]:
     return {**record, "steps": steps}
 
 
-LONG_REASONING_CHARS = 8000  # 88% of the teacher's reasoning steps are shorter; the rest hold 79% of its reasoning
+LONG_REASONING_CHARS = 8000
 
 
 def untrain_long_reasoning(record: dict[str, Any]) -> dict[str, Any]:
-    """Keep replies with very long reasoning in the context but out of the loss, so the student does not learn to
-    overthink."""
+    """Exclude replies with long reasoning from the loss while retaining them in context."""
     messages = record["messages"]
     steps = record.get("steps") or [
         {"context": list(range(i)), "completion": i, "train": True}
