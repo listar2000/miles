@@ -46,13 +46,14 @@ import time
 import modal
 
 from miles_ext import stack
+from miles_ext.checkpoint import save_policy
 from miles_ext.launch import split
 from miles_ext.obs import sandbox_profile
 from miles_ext.platform import compile_cache
 from miles_ext.platform.checkpoints import apply_retention_local
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
 from miles_ext.platform.target import compile_cache_volume_name, completion_queue_name
-from miles_ext.platform.layout import read_tracker
+from miles_ext.platform.layout import iter_dir, read_tracker
 from miles_ext.platform.target import Target
 from miles_ext.platform.teardown import sandbox_adapter
 from miles_ext.recipes import recipe as R
@@ -353,6 +354,34 @@ def _ensure_engine(recipe: dict, run_id: str) -> str | None:
     return call_id
 
 
+def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> threading.Event:
+    """Apply checkpoint retention (final=False) each time the tracker moves; set the returned event to stop."""
+    ckpt, stop = recipe["checkpoint"], threading.Event()
+
+    def loop() -> None:
+        seen = read_tracker(run_dir)
+        while not stop.wait(every):
+            if (step := read_tracker(run_dir)) == seen:
+                continue
+            seen = step
+            try:
+                dropped = apply_retention_local(
+                    run_dir,
+                    keep=ckpt["keep"],
+                    keep_final_full=ckpt["keep_final_full"],
+                    keep_every=ckpt["keep_every"],
+                    final=False,
+                )
+                if dropped:
+                    results_volume.commit()
+                    print(f"retention (tracker {step}): removed {[d['step'] for d in dropped]}", flush=True)
+            except Exception as e:  # retention never stops training
+                print(f"retention (tracker {step}) failed: {type(e).__name__}: {e}", flush=True)
+
+    threading.Thread(target=loop, daemon=True, name="retention").start()
+    return stop
+
+
 def _complete_at_launch(recipe: dict, run_id: str, run_dir, backend: str) -> dict:
     """Rank 0 of a segment launched after the run completed: an exit record, no training."""
     from miles_ext.platform import progress as P
@@ -445,8 +474,15 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
     # kernels compiled and tuned by this segment reach the volume while it runs and at exit
     stack_ctx.callback(compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start().stop)
     try:
-        resume = read_tracker(run_dir) is not None
-        args = R.miles_args(recipe, run_id, resume) + ["--save-trigger-sentinel", SENTINEL]
+        step = read_tracker(run_dir)
+        resume = step is not None
+        # a run saving Adam's state on every k-th save only may resume from a save without it (ext-056)
+        resume_optimizer = (
+            not resume
+            or recipe["checkpoint"]["optimizer_every"] == 1
+            or save_policy.has_optimizer(run_dir / "checkpoints" / iter_dir(step))
+        )
+        args = R.miles_args(recipe, run_id, resume, resume_optimizer) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
         segment = len(list(run_dir.glob("recipe-*.json")))
         (run_dir / f"recipe-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(
@@ -491,6 +527,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         # the head's port opens, so clearing here, before the head starts, is safe
         completion_queue.clear(partition=run_id)
         completion_queue.clear(partition=shards.ack_partition(run_id))
+        if FINAL_RETENTION:  # ext-056: prune old saves while training, so a long run does not fill the volume
+            stack_ctx.callback(_retention_while_training(recipe, run_dir).set)
         subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600
@@ -516,6 +554,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         if FINAL_RETENTION and record["reason"] == "success":
             ckpt = recipe["checkpoint"]
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
+                                            keep_every=ckpt["keep_every"],
                                             final=True)
             removed = [f"{d['kind']}:{d['step']}" for d in dropped]
             print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
