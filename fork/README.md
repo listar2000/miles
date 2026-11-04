@@ -54,6 +54,7 @@ Every fork commit has exactly one trailer saying what it is.
 | **Port** (`Fork-Port: port-NNN`) | an open upstream Miles or SGLang PR we need before it merges, carried byte for byte from its head commit | in Miles, at the PR's own paths; in SGLang, one patch file | yes, until the sync that brings the merged PR retires it |
 | **Infra** (`Fork-Infra: <id>`) | fork machinery: image build, tools, the stack pins, docs | `fork/`, `miles_ext/stack.py`, `FORK.md`, `.claude/skills/miles-fork/`, `.claude/skills/miles-review/`, `.claude/skills/miles-use/`, `.claude/rules/fork.md`, `.github/ISSUE_TEMPLATE/` | no (new files only) |
 | **Ext** (`Fork-Ext: ext-NNN`) | new capability: harnesses, recipes, algorithms, sandbox providers | `miles_ext/` | no (new files only) |
+| **Exp** (`Fork-Exp: <folder>`) | one experiment's own code, configs and write-up ([experiments/README.md](../experiments/README.md)) | `experiments/<folder>/` only | no |
 
 Rules for **fixes and hooks** (enforced by `ledger.py check`):
 
@@ -185,6 +186,7 @@ fork/
 .claude/skills/miles-use/  the workflow for agents training with this fork
 .claude/rules/fork.md   tells every agent this is a fork and where to start
 .github/ISSUE_TEMPLATE/ the issue forms of fork/guide/help.md
+experiments/            one folder per experiment: its scripts, configs, write-up (Fork-Exp)
 miles_ext/              extensions (top-level package next to miles/, on PYTHONPATH in the image)
   stack.py              pins: upstream tag, base image digest, Harbor commit, mini-swe-agent, Sail SDK; image repo
   stable.json           the stable versions: name, commit, image digest, date, note
