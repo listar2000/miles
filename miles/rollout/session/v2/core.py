@@ -18,6 +18,7 @@ from miles.rollout.session.core import (
     proxy_result_to_response,
 )
 from miles.rollout.session.errors import SessionNotFoundError, TokenizationError
+from miles.rollout.session.request_args import flatten_content_parts  # [fork fix-081]
 from miles.rollout.session.request_args import filter_turn_args, parse_chat_request
 from miles.rollout.session.samples.codec import COMPUTED_FIELDS_V2, ROLLOUT_SAMPLING_MASK_FIELDS, encode_samples
 from miles.rollout.session.types import GetSessionResponse, SessionRecord
@@ -182,6 +183,7 @@ class SessionCoreV2(SessionCore):
                 raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
             client_args = parse_chat_request(body)
+            client_args = flatten_content_parts(client_args, self.registry.tokenizer)  # [fork fix-081]
             prepared, attach_parent = prepare_token_ids_and_request_args(
                 session,
                 client_args,

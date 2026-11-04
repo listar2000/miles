@@ -1,0 +1,70 @@
+# GLM-5.3-Flash, full-parameter RL in split placement with GPU-delta weight sync (ext-053): one B300:8 trainer
+# node (TP8 EP8, Adam in host memory and on disk, fix-073) and one engine container (two TP4 FP8 engines,
+# attention DP4, triton MoE for R3). Each sync is an LZ4-compressed XOR delta through the results volume.
+# Single-turn STAK prompts, two steps, saves off (a weights save is 642 GB, ~17 min).
+# Needs: the trainer-format base at model.revision on the weights volume (RFC 0004); MILES_DATA = a dir holding
+# prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
+name: glm53-flash-split-gpud
+model:
+  preset: glm-5.3-flash
+  # Not an HF revision: the release 46a050bec1 re-quantized as the trainer exports it (RFC 0004). Against the
+  # release ~95% of FP8 bytes differ (a ~240 GB first delta); against this base the first sync is empty.
+  revision: 29523a33f41b2cea7f85f9288433a50fb506eb39
+cluster:
+  gpu: B300
+  nodes: 1
+  train_gpus: 8
+  cpu: 64
+  # host RAM holds Adam's pinned share (derived from memory_gib, fix-073) beside GPU-delta's three pinned
+  # served-model copies; 2,304 GiB ran out in step 2 of the first full runs. 2,560 GiB is Modal's per-container
+  # cap; split placement sizes the trainer and engine containers separately.
+  memory_gib: 2560
+  disk_gib: 3072  # Adam state host memory does not hold
+  timeout_hours: 4
+  placement: split
+  engine:
+    memory_gib: 768  # fix-079 stages the receiver's arena in HBM; the host cache holds only the small delta
+    disk_gib: 1024
+    timeout_hours: 4
+    idle_minutes: 10
+parallel:
+  tp: 8
+  pp: 1
+  cp: 1  # GLM's DSA refuses context parallelism
+  ep: 8
+optimizer:
+  offload: disk
+  moment_dtype: bf16
+  grad_dtype: bf16
+rollout:
+  gpus_per_engine: 4
+  context_length: 32768
+  max_running_requests: 128
+  weight_sync: gpu-delta
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 2
+  rollout_batch_size: 16
+  n_samples: 4
+  temperature: 1.0
+  max_response_len: 2048
+  max_seq_len: 8192
+  max_tokens_per_gpu: 8192
+  lr: 1.0e-6
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.6  # headroom for the GPU-delta device arena and decode scratch
+  routing_replay: true
+async:
+  max_concurrent_samples: 128
+  pause_generation: retract
+checkpoint:
+  save_interval: 100
+  keep: 1
+  save_optimizer: false
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-glm53
+  wandb_entity: mobiuslab

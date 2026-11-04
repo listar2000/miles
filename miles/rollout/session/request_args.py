@@ -13,9 +13,14 @@ model resolver, which decides which fields inherit or must stay compatible.
 
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache  # [fork fix-081]
 from typing import Any
 
 import orjson
+from sglang.srt.parser.jinja_template_utils import (  # [fork fix-081]
+    detect_jinja_template_content_format,
+    process_content_for_template_format,
+)
 
 from miles.rollout.generate_utils.rollout_topk_logprobs import configure_rollout_topk_logprobs_request
 from miles.rollout.generate_utils.sampling_mask import validate_sampling_support_request
@@ -41,6 +46,33 @@ def parse_chat_request(body: bytes) -> dict[str, Any]:
         return orjson.loads(body) if body else {}
     except orjson.JSONDecodeError as e:
         raise MessageValidationError(f"invalid JSON body: {e}") from e
+
+
+# [fork fix-081] SGLang's chat route flattens a message's text parts into one string for templates that only read
+# string content (Qwen3's renders a list as ""); the session renders the prompt itself, so it does the same first.
+def flatten_content_parts(client_args: dict[str, Any], tokenizer) -> dict[str, Any]:
+    """``client_args`` with list contents flattened as SGLang does for a string-content template, else unchanged."""
+    messages = client_args.get("messages") or []
+    if not any(isinstance(message, dict) and isinstance(message.get("content"), list) for message in messages):
+        return client_args
+    chat_template = getattr(tokenizer, "chat_template", None)
+    # a tokenizer without one string template (None, or a dict of named templates): leave contents to it, as before
+    if not isinstance(chat_template, str) or _template_content_format(chat_template) != "string":
+        return client_args
+    flat = [
+        (
+            process_content_for_template_format(message, "string", [], [], [], [])
+            if isinstance(message, dict) and isinstance(message.get("content"), list)
+            else message
+        )
+        for message in messages
+    ]
+    return {**client_args, "messages": flat}
+
+
+@lru_cache(maxsize=8)
+def _template_content_format(chat_template: str) -> str:
+    return detect_jinja_template_content_format(chat_template)
 
 
 @dataclass(frozen=True)

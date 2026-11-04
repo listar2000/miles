@@ -3,7 +3,8 @@
 `main` is miles-mobius: an upstream Miles release, merged in, plus our
 commits: bug fixes and hooks in upstream files (marked `[fork fix-NNN]` /
 `[fork hook-NNN]`), fork machinery under `fork/` and extensions under
-`miles_ext/` (recipes, Harbor harnesses, the Modal launcher). It runs Miles RL
+`miles_ext/` (recipes, Harbor harnesses, the Modal launcher), and one folder per
+experiment under `experiments/`. It runs Miles RL
 on Modal from any machine with your own credentials.
 
 ## Use it: train with the fork

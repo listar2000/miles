@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-055 | Ext | `taskset.harness: pi-sandbox`: Pi 1.5.0 inside the task sandbox with the Mobius platform's launch (plain loop, 7 built-in tools, compaction off, nothing loaded from task or home), the session server as a custom OpenAI provider | active; remove when the pinned Harbor's Pi takes a custom endpoint | [ext-055-pi-sandbox.md](ext-055-pi-sandbox.md) |
 | ext-053 | Ext | Full-parameter split placement with GPU-delta weight sync through the results volume (`rollout.weight_sync: gpu-delta`) | active; remove with ext-036 | [ext-053-split-gpu-delta.md](ext-053-split-gpu-delta.md) |
 | hook-018 | Hook | GPU-delta receiver mapping for GLM-5.3-Flash: KDA, DSA/MLA, mHC, triton block-FP8 experts, dense FP8 with FP32 scales (DeepGEMM off) | active; remove when SGLang maps glm5_next itself | [hook-018-gpu-delta-glm53.md](hook-018-gpu-delta-glm53.md) |
 | port-002 | Port | Miles GPU-delta weight sync (radixark/miles#3894): `--update-weight-transfer-mode gpu-delta`, trainer-side XOR + GPU compression, publication and receiver coordination | active; remove when the PR is merged and synced | [port-002-miles-gpu-delta.md](port-002-miles-gpu-delta.md) |
@@ -91,4 +92,5 @@ One row per change important enough for its own page (rules: fork/README.md,
 | fix-016 | Fix | Score-centering candidates requested as SGLang's flat base64 arrays instead of nested decoded rows (engine HTTP process 1.0 s -> 0.02 s of CPU per 2k-token call at k=32) | removed in sync-v0.1.3 (upstream #3952) | [fix-016-flat-topk-logprobs.md](fix-016-flat-topk-logprobs.md) |
 | hook-019 | Hook | `--custom-trainer-actor-class`: a run names its trainer Ray actor class (the SFT trainer's validation) | active | [hook-019-custom-trainer-actor-class.md](hook-019-custom-trainer-actor-class.md) |
 | ext-054 | Ext | SFT trainer and Modal launch for prepared shards, driven by one run config (`miles_ext/sft/config.py`); held-out NLL | active | [ext-054-sft-trainer.md](ext-054-sft-trainer.md) |
+| experiments | Infra | `experiments/<folder>` for one experiment's own code, and the `Fork-Exp` commit kind that keeps an experiment commit in its folder | active | [infra-experiments.md](infra-experiments.md) |
 | ext-039 | Ext | Read-only run monitor web page (`miles_ext/monitor/`); `modal_app` registers each launch when `MILES_MONITOR_DIR` is set | active | [ext-039-run-monitor.md](ext-039-run-monitor.md) |

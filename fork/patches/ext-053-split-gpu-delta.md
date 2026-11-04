@@ -18,12 +18,20 @@ delta instead; a GLM-5.3-Flash FP8 step is estimated at about 1.5 to 4 GB (CPU s
   holds the other ranks. No custom protocol (hook-013 stays unused in this mode).
 - `SGLANG_ENABLE_JIT_DEEPGEMM=0` for trainer and engines, so dense FP8 layers keep FP32 block scales on both
   sides (hook-018).
+- Full-model defaults, from the first full GLM-5.3-Flash split runs (2026-11-03):
+  `GPU_DELTA_CODEC` and `GPU_DELTA_INITIAL_SYNC_CODEC` are `lz4` (the outer Zstd pass asked for 46 GiB of
+  scratch HBM beside a full-parameter trainer), `GPU_DELTA_DEVICE_ARENA=1` (fix-079: Modal cannot map
+  HW-decompress host arenas past a small size) and `--update-weights-timeout 5400` (a first sync outlasts
+  Miles' 600 s).
+- The engines serve a trainer-format base, not the release (RFC 0004): against the release the first delta
+  is ~240 GB. Recipe: `glm53-flash-split-gpud`: the trainer container asks for 2,560 GiB (Modal's per-container cap), since GPU-delta
+  pins three served-model copies (~0.9 TB) beside Adam's derived host share (fix-073); 2,304 GiB ran out in step 2.
 - Rejected: posting bytes through the tunnel (~10 MB/s); NCCL between the containers (ext-036).
 
 ## How it is applied
 `miles_ext/recipes/recipe.py` (key, checks, `_split_args`, `trainer_env`), `miles_ext/launch/split/volume_sync.py`
 (`gpu_delta_post_write`), `miles_ext/launch/split/agent.py` (`/reload`). Tests: `miles_ext/tests/test_split_gpu_delta.py`.
-A full-parameter GLM split recipe follows once the GLM preset (ext-051) is on main.
+Recipe `miles_ext/recipes/configs/glm53-flash-split-gpud.yaml`; its base is built as RFC 0004 describes.
 
 ## Remove when
 The launcher no longer needs Miles-side orchestration for separate engine placement (as ext-036).

@@ -70,5 +70,5 @@ def test_context_exhausted_scores_zero_when_switched_on(monkeypatch, tmp_path):
 
 
 def test_deepseek_sandbox_reports_context_exhausted_too(monkeypatch, tmp_path):
-    out = _run(monkeypatch, tmp_path, context_exit.EXIT_STATUS, key=af.deepseek_sandbox.AGENT_EXIT_STATUS)
+    out = _run(monkeypatch, tmp_path, context_exit.EXIT_STATUS, key=af.common.AGENT_EXIT_STATUS)
     assert out["exit_status"] == context_exit.EXIT_STATUS

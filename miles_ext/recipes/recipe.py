@@ -33,11 +33,23 @@ HARNESS_HOST = "mini-swe-agent-host"  # mini-swe-agent loop in the rollout worke
 HARNESS_SINGLE_TURN = "single-turn"  # ext-038: one reply per prompt row, graded in process
 HARNESS_TERMINUS_SANDBOX = "terminus-2-sandbox"  # ext-045: Harbor's Terminus-2 inside the task sandbox
 HARNESS_DEEPSEEK_SANDBOX = "deepseek-sandbox"  # ext-046: DeepSeek's own agent (dsh) inside the task sandbox
-HARNESSES = (HARNESS_SANDBOX, HARNESS_HOST, HARNESS_SINGLE_TURN, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
+HARNESS_PI_SANDBOX = "pi-sandbox"  # ext-055: Pi inside the task sandbox, as the Mobius platform runs it
+HARNESSES = (
+    HARNESS_SANDBOX,
+    HARNESS_HOST,
+    HARNESS_SINGLE_TURN,
+    HARNESS_TERMINUS_SANDBOX,
+    HARNESS_DEEPSEEK_SANDBOX,
+    HARNESS_PI_SANDBOX,
+)
 # reach the model through the session tunnel
-IN_SANDBOX_HARNESSES = (HARNESS_SANDBOX, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
-# compact their context at agent.compact_at_tokens and take their window and reply cap from the recipe
+IN_SANDBOX_HARNESSES = (HARNESS_SANDBOX, HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX, HARNESS_PI_SANDBOX)
+# compact their context at agent.compact_at_tokens
 COMPACTING_HARNESSES = (HARNESS_TERMINUS_SANDBOX, HARNESS_DEEPSEEK_SANDBOX)
+# pi-sandbox's agent.strict_tool_schemas, read by the agent function
+PI_STRICT_TOOLS_ENV = "MILES_EXT_PI_STRICT_TOOLS"
+# take their context window and reply cap from the recipe
+WINDOWED_HARNESSES = (*COMPACTING_HARNESSES, HARNESS_PI_SANDBOX)
 # deepseek-sandbox's compaction keeps this share of (max_seq_len - max_response_len) verbatim (dsh's default)
 DEEPSEEK_RETAIN_RATIO = 0.16
 AGENT_FUNCTIONS = {
@@ -45,6 +57,7 @@ AGENT_FUNCTIONS = {
     HARNESS_HOST: "miles_ext.harbor.agent_function.run",
     HARNESS_TERMINUS_SANDBOX: "miles_ext.harbor.agent_function.run",
     HARNESS_DEEPSEEK_SANDBOX: "miles_ext.harbor.agent_function.run",
+    HARNESS_PI_SANDBOX: "miles_ext.harbor.agent_function.run",
     HARNESS_SINGLE_TURN: "miles_ext.tasks.single_turn.run",
 }
 # Miles' --custom-agent-function-mode per harness: Harbor's agent function forks each trial itself (ext-042)
@@ -53,6 +66,7 @@ AGENT_FUNCTION_MODES = {
     HARNESS_HOST: "inline",
     HARNESS_TERMINUS_SANDBOX: "inline",
     HARNESS_DEEPSEEK_SANDBOX: "inline",
+    HARNESS_PI_SANDBOX: "inline",
     HARNESS_SINGLE_TURN: "subproc",
 }
 # Modal is a Harbor EnvironmentType; Sail is Harbor's provider vendored in
@@ -117,6 +131,9 @@ DEFAULTS: dict[str, Any] = {
         # terminus-2-sandbox, deepseek-sandbox: summarize the context once it holds this many tokens
         # (ext-045, ext-046; runs session server v2)
         "compact_at_tokens": None,
+        # pi-sandbox: send tool schemas in strict form (Pi's compat.supportsStrictMode), as its Z.ai provider does,
+        # for evals that must match traces recorded that way (ext-055)
+        "strict_tool_schemas": False,
     },
     "sandbox": {
         "provider": "modal",  # or "sail"
@@ -259,7 +276,14 @@ SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # 
 # ext-053: GPU-delta through the results volume; models whose SGLang receiver mapping exists (hook-018)
 GPU_DELTA_POST_WRITE = "miles_ext.launch.split.volume_sync.gpu_delta_post_write"
 GPU_DELTA_PRESETS = ("glm-5.3-flash", "glm-5.3-flash-4layer")
-GPU_DELTA_ENV = {"SGLANG_ENABLE_JIT_DEEPGEMM": "0"}  # dense FP8 keeps the checkpoint's FP32 block scales
+GPU_DELTA_ENV = {
+    "SGLANG_ENABLE_JIT_DEEPGEMM": "0",  # dense FP8 keeps the checkpoint's FP32 block scales
+    # avoid the outer Zstd pass: its payload-sized scratch allocation competes with trainer weights
+    "GPU_DELTA_CODEC": "lz4",
+    "GPU_DELTA_INITIAL_SYNC_CODEC": "lz4",
+    "GPU_DELTA_DEVICE_ARENA": "1",  # fix-079: Modal cannot map large HW-decompress host arenas
+}
+GPU_DELTA_SYNC_TIMEOUT_S = 5400  # a full-model first sync outlasts Miles' 600 s default
 # Miles' choices at our pin, minus what this stack cannot run: "ppo" needs a critic the recipe
 # does not build; pause "abort" and --partial-rollout are rejected by Miles in fully async mode.
 # Miles requires --normalize-advantages with the reinforce_plus_plus estimators; miles_args adds it
@@ -462,6 +486,8 @@ def validate(recipe: dict, local_inputs: bool = True) -> None:
             raise ValueError("taskset.prompts is required")
     elif local_inputs and (not (taskset["tasks_dir"] or taskset["tasks_volume"]) or not taskset["prompts"]):
         raise ValueError("taskset.prompts and one of taskset.tasks_dir, taskset.tasks_volume are required")
+    if recipe["agent"]["strict_tool_schemas"] and taskset["harness"] != HARNESS_PI_SANDBOX:
+        raise ValueError(f"agent.strict_tool_schemas needs taskset.harness {HARNESS_PI_SANDBOX}")
     if (compact_at := recipe["agent"]["compact_at_tokens"]) is not None:
         if taskset["harness"] not in COMPACTING_HARNESSES:
             raise ValueError(f"agent.compact_at_tokens needs taskset.harness in {COMPACTING_HARNESSES}")
@@ -841,9 +867,11 @@ def harbor_env(recipe: dict, run_id: str) -> dict[str, str]:
         env["HARBOR_ENV_BUILD_TIMEOUT_MULTIPLIER"] = str(multiplier)
     if agent["cwd"]:
         env["MSWEA_CWD"] = agent["cwd"]
+    if agent["strict_tool_schemas"]:
+        env[PI_STRICT_TOOLS_ENV] = "1"
     if agent["context_exhausted_scores_zero"]:
         env["MILES_EXT_CONTEXT_EXHAUSTED_SCORES_ZERO"] = "1"
-    if recipe["taskset"]["harness"] in COMPACTING_HARNESSES:
+    if recipe["taskset"]["harness"] in WINDOWED_HARNESSES:
         # the harness's context limit (its compaction and context checks) and reply cap; upstream's defaults are 32k/8k
         env["AGENT_MAX_INPUT_TOKENS"] = str(recipe["algorithm"]["max_seq_len"])
         env["AGENT_MAX_OUTPUT_TOKENS"] = str(recipe["algorithm"]["max_response_len"])
@@ -1003,6 +1031,7 @@ def _split_args(recipe: dict, run_id: str) -> str:
         dp = recipe["rollout"]["gpus_per_engine"]
         return f"""--rollout-external-engine-addrs {addrs}
         --sglang-enable-dp-attention --sglang-dp-size {dp}
+        --update-weights-timeout {GPU_DELTA_SYNC_TIMEOUT_S}
         --update-weight-transfer-mode gpu-delta --update-weight-delta-encoding xor
         --update-weight-disk-dir {RESULTS / run_id / "gpu_delta"}
         --custom-update-weight-post-write-path {GPU_DELTA_POST_WRITE}"""

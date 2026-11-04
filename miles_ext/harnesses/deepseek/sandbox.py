@@ -1,6 +1,5 @@
 """`taskset.harness: deepseek-sandbox`: DeepSeek's own agent (dsh) inside the task sandbox (ext-046, see its patch page)."""
 
-import asyncio
 import json
 import shlex
 import tempfile
@@ -25,7 +24,7 @@ BIN = f"{DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
 FILES = "/tmp/miles-deepseek"  # patch, compat shim and task, uploaded per run
 EVENTS = (EnvironmentPaths.agent_dir / "deepseek-sandbox.jsonl").as_posix()  # dsh --json events
 STDERR = (EnvironmentPaths.agent_dir / "deepseek-sandbox.stderr.txt").as_posix()
-AGENT_EXIT_STATUS = "agent_exit_status"  # agent metadata key the agent function reads
+AGENT_EXIT_STATUS = common.AGENT_EXIT_STATUS
 
 # dsh's Messages requests without the fields Miles' adapter rejects, sent untimed: the session server answers only
 # once the whole reply is generated, past fetch's 300 s headers timeout (patch page)
@@ -73,16 +72,7 @@ _NODE_OK = (
     'node -e \'const [a,b]=process.versions.node.split(".").map(Number); '
     f"process.exit(a>{NODE_MIN[0]}||a==={NODE_MIN[0]}&&b>={NODE_MIN[1]}?0:1)' 2>/dev/null"
 )
-_LOAD_NVM = 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; '
-# root: curl for nvm (Alpine: its own Node, since nvm's builds need glibc)
-ROOT_INSTALL = (
-    "if command -v apk >/dev/null 2>&1; then apk add --no-cache curl bash nodejs npm;"
-    " elif ! command -v curl >/dev/null 2>&1; then"
-    "  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y curl;"
-    "  elif command -v dnf >/dev/null 2>&1; then dnf install -y curl;"
-    "  elif command -v yum >/dev/null 2>&1; then yum install -y curl; fi;"
-    " fi"
-)
+_LOAD_NVM = common.LOAD_NVM
 # agent user: Node from Harbor's nvm snippet unless the image has one new enough, then dsh; skips what is in place
 AGENT_INSTALL = (
     "set -euo pipefail; "
@@ -204,16 +194,7 @@ class SandboxDeepSeek(common.PublicSetup, BaseInstalledAgent):
         return NAME
 
     async def install(self, environment: BaseEnvironment) -> None:
-        # safe to repeat: each step skips what is already in place (as mini-swe-agent's install retries)
-        for attempt in range(1, common.INSTALL_ATTEMPTS + 1):
-            try:
-                await self.exec_as_root(environment, command=ROOT_INSTALL, env={"DEBIAN_FRONTEND": "noninteractive"})
-                return await self.exec_as_agent(environment, command=AGENT_INSTALL)
-            except NonZeroAgentExitCodeError as e:
-                if attempt == common.INSTALL_ATTEMPTS:
-                    raise
-                self.logger.warning(f"harness install attempt {attempt} failed, retrying: {str(e)[:200]}")
-                await asyncio.sleep(common.INSTALL_BACKOFF_SECS * attempt)
+        await common.install(self, environment, AGENT_INSTALL)
 
     async def _upload(self, environment: BaseEnvironment, name: str, text: str) -> str:
         with tempfile.NamedTemporaryFile("w") as f:

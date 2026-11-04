@@ -16,6 +16,9 @@ image. Code reaches the image in one way only: as a commit of this repo
   [fork/README.md](../README.md) ("Kinds of change"). They come down to new
   files only, plugged in through extension points. The
   [miles-fork skill](../../.claude/skills/miles-fork/SKILL.md) has the steps.
+- **Code for one experiment** (its data filters, configs, one-off scripts and
+  write-up) lives in `experiments/<folder>/`, not in `miles_ext/`; see
+  [experiments/README.md](../../experiments/README.md).
 - Loading a package from outside this repo is not supported yet. If you need it,
   open an issue ([help.md](help.md)).
 
@@ -25,7 +28,7 @@ image. Code reaches the image in one way only: as a commit of this repo
 | --- | --- | --- |
 | A different algorithm setting (estimator, clipping, loss, KL, staleness, filters) | recipe `algorithm.*` fields | nothing new |
 | A new loss | Miles' `--loss-type custom_loss` with `--custom-loss-function-path`. `algorithm.loss` allows only `policy_loss` and `score_centering` today, so this also needs a new recipe field (an Ext change to `recipe.py`) | `miles_ext/<area>/` |
-| A new agent harness | a new `taskset.harness` value in `HARNESSES` (`miles_ext/recipes/recipe.py`) and the agent function it maps to (today: mini-swe-agent in the sandbox or on the host, Terminus-2 and DeepSeek's dsh in the sandbox, and `single-turn`) | a new `miles_ext/harnesses/<harness>/` (its Harbor agent class, pins and assets; `harnesses/common.py` has the in-sandbox setup) |
+| A new agent harness | a new `taskset.harness` value in `HARNESSES` (`miles_ext/recipes/recipe.py`) and the agent function it maps to (today: mini-swe-agent in the sandbox or on the host, Terminus-2, DeepSeek's dsh and Pi in the sandbox, and `single-turn`) | a new `miles_ext/harnesses/<harness>/` (its Harbor agent class, pins and assets; `harnesses/common.py` has the in-sandbox setup) |
 | A new reward for agent tasks | the task's own Harbor verifier (its tests). `miles_ext/harbor/reward.py` just passes Harbor's verdict on | the task set (yours) |
 | A new single-turn task type | a verifier in `VERIFIERS` (`miles_ext/tasks/single_turn.py`) | `miles_ext/tasks/` |
 | A new task set | Harbor task dirs plus a prompt file | your project; `taskset.tasks_volume` to keep it on a Modal volume |
