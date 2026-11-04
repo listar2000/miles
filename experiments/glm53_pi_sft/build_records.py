@@ -1,8 +1,4 @@
-"""SFT records from the raw eval exports: the filters of README.md "Filters and decisions", then the ATIF connector,
-one eval at a time, skipping evals already in ``records/_manifest.jsonl``.
-
-    PYTHONPATH=<miles checkout> python experiments/glm53_pi_sft/build_records.py [--root ~/data/sft-glm53-pi]
-"""
+"""Build filtered SFT records from raw evaluation exports."""
 
 from __future__ import annotations
 

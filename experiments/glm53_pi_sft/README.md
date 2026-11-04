@@ -24,10 +24,13 @@ tasksets tb-2-v3-2 to v3-8) into Qwen3-30B-A3B-Thinking-2507 with Miles SFT.
 
 ## Pipeline
 
-1. **Raw export** ([export_raw.sh](export_raw.sh)): every trial of an eval (all outcomes) in Harbor layout,
+Data lives outside the repo, in `~/data/sft-glm53-pi/` on the devbox: `raw/`, `records/`.
+
+1. **Raw export** ([export_raw.sh](export_raw.sh) `<eval-uuid>...`): every trial of an eval (all outcomes) in Harbor layout,
    `mobius eval traces <id> --download-dir`, once per eval id (`.done` marker). Trials with trace status
    `missing` are runtime errors; Mobius then reports `complete: false`, which is expected.
-2. **Records** ([build_records.py](build_records.py)): filters, then `miles_ext.sft.connectors.atif`, one
+2. **Records** (`PYTHONPATH=<miles checkout> python experiments/glm53_pi_sft/build_records.py [--root ~/data/sft-glm53-pi]`):
+   filters, then `miles_ext.sft.connectors.atif`, one
    `records/<eval_id>.jsonl` + `.val.jsonl` + reports per eval and a line in `records/_manifest.jsonl`. New
    evals are picked up by running it again. Then `modal volume put` the records folder.
 3. **Shards**: `MILES_SFT_CONFIG=experiments/glm53_pi_sft/configs/qwen3-30b-128k.yaml python -m modal run -m miles_ext.sft.modal_prepare`.
@@ -89,5 +92,5 @@ point a Mobius eval at it. Baseline: Qwen3-30B-A3B-Thinking-2507 in the same set
 
 | Run | Config | Result |
 | --- | --- | --- |
-| `smoke-sft-glm53pi-q3-128k` | qwen3-30b-128k, 2 steps | loss 1.156 -> 1.151, held-out NLL 1.153 -> 1.030 |
-| `sft-glm53pi-q3-128k-ep2` | qwen3-30b-128k | launched 2026-11-04 01:25 UTC |
+| Two-step smoke | qwen3-30b-128k, 2 steps | loss 1.156 -> 1.151, held-out NLL 1.153 -> 1.030 |
+| Two-epoch training | qwen3-30b-128k | launched 2026-11-04 01:25 UTC |
