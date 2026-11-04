@@ -191,6 +191,7 @@ class TestSaveLoRaBranch:
     ):
         from miles.backends.megatron_utils.model import save
 
+        mock_get_args.return_value.custom_megatron_save_context_path = None  # [fork hook-020]
         model = [MagicMock()]
         save(42, model, MagicMock(), MagicMock())
 
@@ -208,10 +209,52 @@ class TestSaveLoRaBranch:
     ):
         from miles.backends.megatron_utils.model import save
 
+        mock_get_args.return_value.custom_megatron_save_context_path = None  # [fork hook-020]
         model = [MagicMock()]
         save(42, model, MagicMock(), MagicMock())
 
         mock_save_ckpt.assert_called_once()
+
+    # [fork hook-020] begin
+    @patch(f"{_MODEL_MODULE}.save_model_hashes")
+    @patch(f"{_MODEL_MODULE}.enable_forward_pre_hook")
+    @patch(f"{_MODEL_MODULE}.disable_forward_pre_hook")
+    @patch(f"{_MODEL_MODULE}.should_disable_forward_pre_hook", return_value=False)
+    @patch(f"{_MODEL_MODULE}.get_args")
+    @patch(f"{_MODEL_MODULE}.save_checkpoint")
+    @patch(f"{_MODEL_MODULE}.is_lora_model", return_value=False)
+    def test_save_runs_inside_the_save_context_and_its_exit_sees_a_failure(
+        self, mock_is_lora, mock_save_ckpt, mock_get_args, mock_should, mock_disable, mock_enable, mock_save_hashes
+    ):
+        import contextlib
+
+        import pytest
+
+        from miles.backends.megatron_utils.model import save
+
+        events = []
+
+        @contextlib.contextmanager
+        def ctx(args, iteration):
+            events.append(("enter", iteration))
+            try:
+                yield
+            except RuntimeError:
+                events.append(("failed", iteration))
+                raise
+            events.append(("exit", iteration))
+
+        mock_get_args.return_value.custom_megatron_save_context_path = "ctx.path"
+        mock_save_ckpt.side_effect = lambda *a, **k: events.append(("save", a[0]))
+        with patch("miles.utils.function_registry.load_function", return_value=ctx):
+            save(7, [MagicMock()], MagicMock(), MagicMock())
+            mock_save_ckpt.side_effect = RuntimeError("disk full")
+            with pytest.raises(RuntimeError):
+                save(8, [MagicMock()], MagicMock(), MagicMock())
+
+        assert events == [("enter", 7), ("save", 7), ("exit", 7), ("enter", 8), ("failed", 8)]
+
+    # [fork hook-020] end
 
 
 # ---------------------------------------------------------------------------
