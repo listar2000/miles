@@ -1,6 +1,7 @@
 """Run Miles' GPU-delta benchmark with GLM-5.3-Flash serving settings and FP8 mutations."""
 
 import hashlib
+import os
 import sys
 
 import numpy as np
@@ -30,6 +31,13 @@ bench.SERVER_ARGS = {
     "skip_server_warmup": True,
     "reasoning_parser": "glm45",
 }
+if os.environ.get("GLM_BENCH_DRAFT") == "1":  # the release's NextN layer as an EAGLE draft (preset glm-5.3-flash)
+    bench.SERVER_ARGS.update(
+        speculative_algorithm="EAGLE",
+        speculative_num_steps=3,
+        speculative_eagle_topk=1,
+        speculative_num_draft_tokens=4,
+    )
 bench.SERVER_ENV = {
     "SGLANG_ENABLE_JIT_DEEPGEMM": "0",
     "SGLANG_HEALTH_CHECK_TIMEOUT": "900",

@@ -15,31 +15,34 @@ SRC = "/w/zai-org--GLM-5.3-Flash/46a050bec13002ad29ee795c16e61cf4fa3c4a9c"
 SLICE_CFG = "/w/CharyZeng--GLM-5.3-Flash-4layer/7fb7883207fe73ea04430ac392f6ffe2b9f936c4/config.json"
 DST = "/w/gpudelta/GLM-5.3-Flash-fp8-4layer"
 KEEP = {0: 0, 3: 1, 4: 2, 7: 3}
+# with mtp: the release's NextN layer (45) follows the four kept layers, as SGLang's draft loader expects
+MTP_DST, MTP_LAYER = "/w/gpudelta/GLM-5.3-Flash-fp8-4layer-mtp", 45
 LAYER = re.compile(r"(\.layers\.)(\d+)(\.)")
 
 
-def remap(name):
+def remap(name, keep=KEEP):
     m = LAYER.search(name)
     if not m or "visual" in name or "vision" in name:
         return name
     old = int(m.group(2))
-    if old not in KEEP:
+    if old not in keep:
         return None
-    return name[: m.start(2)] + str(KEEP[old]) + name[m.end(2) :]
+    return name[: m.start(2)] + str(keep[old]) + name[m.end(2) :]
 
 
 @app.function(image=image, volumes={"/w": vol}, cpu=16, memory=131072, timeout=7200)
-def build():
+def build(mtp: bool = False):
     import shutil
 
     from safetensors import safe_open
     from safetensors.torch import save_file
 
-    os.makedirs(DST, exist_ok=True)
+    dst, keep = (MTP_DST, {**KEEP, MTP_LAYER: len(KEEP)}) if mtp else (DST, KEEP)
+    os.makedirs(dst, exist_ok=True)
     idx = json.load(open(f"{SRC}/model.safetensors.index.json"))["weight_map"]
     groups = {}
     for name, f in idx.items():
-        new = remap(name)
+        new = remap(name, keep)
         if new is None:
             continue
         m = LAYER.search(new)
@@ -55,10 +58,10 @@ def build():
             with safe_open(f"{SRC}/{f}", framework="pt") as h:
                 for name, new in pairs:
                     out[new] = h.get_tensor(name)
-        save_file(out, f"{DST}/{shard}", metadata={"format": "pt"})
+        save_file(out, f"{dst}/{shard}", metadata={"format": "pt"})
         weight_map.update({k: shard for k in out})
         print(g, len(out), shard, flush=True)
-    json.dump({"metadata": {}, "weight_map": weight_map}, open(f"{DST}/model.safetensors.index.json", "w"), indent=1)
+    json.dump({"metadata": {}, "weight_map": weight_map}, open(f"{dst}/model.safetensors.index.json", "w"), indent=1)
 
     full = json.load(open(f"{SRC}/config.json"))
     sl = json.load(open(SLICE_CFG))
@@ -74,25 +77,27 @@ def build():
         "num_nextn_predict_layers",
     ):
         tc[k] = stc[k]
+    if mtp:
+        tc["num_nextn_predict_layers"] = 1
     q = cfg.get("quantization_config") or tc.get("quantization_config")
     mods = []
     for m in q.get("modules_to_not_convert", []):
-        new = remap(m) if LAYER.search(m) else m
+        new = remap(m, keep) if LAYER.search(m) else m
         if new is not None:
             mods.append(new)
     q["modules_to_not_convert"] = mods
-    json.dump(cfg, open(f"{DST}/config.json", "w"), indent=2)
+    json.dump(cfg, open(f"{dst}/config.json", "w"), indent=2)
     for f in os.listdir(SRC):
         if f.endswith((".json", ".jinja", ".txt", ".model", ".py")) and f not in (
             "config.json",
             "model.safetensors.index.json",
         ):
-            shutil.copy(f"{SRC}/{f}", f"{DST}/{f}")
-    open(f"{DST}/.ready", "w").write("release 46a050be layers 0,3,4,7 -> 0-3\n")
+            shutil.copy(f"{SRC}/{f}", f"{dst}/{f}")
+    open(f"{dst}/.ready", "w").write(f"release 46a050be layers {sorted(keep)} -> 0-{len(keep) - 1}\n")
     vol.commit()
-    return sorted(os.listdir(DST))
+    return sorted(os.listdir(dst))
 
 
 @app.local_entrypoint()
-def main():
-    print(build.remote())
+def main(mtp: bool = False):
+    print(build.remote(mtp))

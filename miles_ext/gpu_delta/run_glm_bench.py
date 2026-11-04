@@ -40,7 +40,7 @@ image = (
     ephemeral_disk=1048576,
     volumes={"/w": weights.read_only(), "/results": results},
 )
-def bench(tag: str, model: str, extra: list):
+def bench(tag: str, model: str, extra: list, draft: bool = False):
     out = f"/results/_probes/glm-bench-{tag}"
     os.makedirs(out, exist_ok=True)
     cmd = [
@@ -62,7 +62,11 @@ def bench(tag: str, model: str, extra: list):
         "31000",
         *extra,
     ]
-    env = {**os.environ, "PYTHONPATH": "/root/miles:/sgl-workspace/sglang/python"}
+    env = {
+        **os.environ,
+        "PYTHONPATH": "/root/miles:/sgl-workspace/sglang/python",
+        "GLM_BENCH_DRAFT": "1" if draft else "0",
+    }
     with open(f"{out}/bench.log", "w") as log:
         rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, cwd="/root/miles").returncode
     subprocess.run(
@@ -75,8 +79,8 @@ def bench(tag: str, model: str, extra: list):
 
 
 @app.local_entrypoint()
-def main(tag: str, model: str = "/w/gpudelta/GLM-5.3-Flash-fp8-4layer", validate: bool = True):
-    rc, tail = bench.remote(tag, model, ["--validate-final-target"] if validate else [])
+def main(tag: str, model: str = "/w/gpudelta/GLM-5.3-Flash-fp8-4layer", validate: bool = True, draft: bool = False):
+    rc, tail = bench.remote(tag, model, ["--validate-final-target"] if validate else [], draft)
     print(tail)
     if rc:
         raise SystemExit(f"benchmark failed (exit {rc}); logs in miles-rl-results:/_probes/glm-bench-{tag}/")
