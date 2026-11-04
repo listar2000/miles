@@ -46,11 +46,12 @@ def _committer(stop: threading.Event, run: Path, weights: Path, every: int = 600
 
 def _finish_hf_exports(run: Path, weights: Path) -> None:
     for d in sorted((run / "hf").glob("iter_*")):
-        if not (d / "model.safetensors.index.json").exists() or (d / "tokenizer_config.json").exists():
+        if not (d / "model.safetensors.index.json").exists() or (d / ".serving_meta").exists():
             continue  # still being written, or finished
         for name in HF_META:
             if (weights / name).exists():
                 shutil.copyfile(weights / name, d / name)
+        (d / ".serving_meta").touch()  # only after every file is in place
 
 
 @app.function(
