@@ -106,6 +106,17 @@ def test_a_save_uploads_once_every_local_rank_marked_it(tmp_path, monkeypatch):
     assert sorted(p.name for p in up.stage.glob("iter_*")) == ["iter_0000002"]
 
 
+def test_rank_0_outside_container_0_is_refused(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setenv(S.STAGE_ENV, str(tmp_path / "stage"))
+    monkeypatch.setenv(S.NODE_ENV, "1")
+    _rank(monkeypatch, 0)
+    with pytest.raises(RuntimeError, match="container 0"):
+        with S.context(Namespace(save=str(tmp_path / "vol"), no_save_optim=True, save_interval=1), 0):
+            pass
+
+
 def test_busy_until_the_tracker_is_written(tmp_path, monkeypatch):
     q = FakeQueue()
     up = _uploader(tmp_path, 0, q, train_ranks=1)

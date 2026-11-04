@@ -466,7 +466,7 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
         uploader.start()
     try:
         _wait_for_port(head_ip, 6379, timeout=600)
-        subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
+        subprocess.run(start + [f"--address={head_ip}:6379"], env={**env, staged_save.NODE_ENV: str(rank)}, check=True)
         if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
             raise RuntimeError("Miles training failed on the head node; see the App logs")
     finally:
@@ -555,7 +555,11 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             uploader.start()
         if FINAL_RETENTION:  # ext-056: prune old saves while training, so a long run does not fill the volume
             stack_ctx.callback(_retention_while_training(recipe, run_dir).set)
-        subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
+        subprocess.run(
+            start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"],
+            env={**env, staged_save.NODE_ENV: "0"},
+            check=True,
+        )
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600
         while ray.cluster_resources().get("GPU", 0) < nodes * R.GPUS_PER_NODE:

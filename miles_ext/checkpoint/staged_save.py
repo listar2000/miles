@@ -13,6 +13,7 @@ from pathlib import Path
 
 STAGE_ENV = "MILES_EXT_SAVE_STAGE"  # node-local stage dir; unset: every save goes to the volume
 OPTIM_EVERY_ENV = "MILES_EXT_SAVE_OPTIM_EVERY"  # Adam's state on every k-th save (1: every save)
+NODE_ENV = "MILES_EXT_SAVE_NODE"  # the container a trainer rank runs in (set by the launcher)
 OPTIM_MARKER = ".optimizer"
 COPY_THREADS = 32
 COPY_PIECE = 1 << 30  # each upload worker copies one 1 GiB range of a shard at a time
@@ -75,6 +76,8 @@ def context(args, iteration: int):
     began = time.monotonic()
     staged = bool(stage) and not optim
     rank = dist.get_rank()
+    if stage and rank == 0 and os.environ.get(NODE_ENV, "0") != "0":
+        raise RuntimeError("staged saves need trainer rank 0 in container 0, whose uploader writes the tracker")
     if stage:  # every rank enters the collective save before any rank marks it done
         (stage / RANKS).mkdir(parents=True, exist_ok=True)
         (stage / RANKS / str(rank)).touch()
@@ -162,9 +165,10 @@ class Uploader:
 
     def _ready(self) -> Path | None:
         """The oldest staged save every trainer rank registered on this node has marked."""
-        registered = len(list((self.stage / RANKS).iterdir())) if (self.stage / RANKS).is_dir() else 0
         for it in _marked(self.stage):
-            if len(list(it.glob(f"{MARKER}*"))) >= registered:
+            marked = len(list(it.glob(f"{MARKER}*")))
+            # read after a marker exists: every rank of the save registered before any marked it done
+            if marked >= len(list((self.stage / RANKS).iterdir())):
                 return it
         return None
 
