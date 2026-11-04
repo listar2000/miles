@@ -46,11 +46,12 @@ def _print(msg: str) -> None:
 
 
 def with_optimizer(args, iteration: int) -> bool:
-    """Whether the save at ``iteration`` carries Adam's state: every k-th save interval, k = OPTIM_EVERY_ENV."""
+    """Whether the save at ``iteration`` carries Adam's state: every k-th periodic save, k = OPTIM_EVERY_ENV.
+    Miles saves after rollout ``iteration`` (0-based) when ``iteration + 1`` is a multiple of save_interval."""
     if args.no_save_optim:
         return False
     every = int(os.environ.get(OPTIM_EVERY_ENV, "1"))
-    return iteration % (every * (args.save_interval or 1)) == 0
+    return (iteration + 1) % (every * (args.save_interval or 1)) == 0
 
 
 def has_optimizer(iter_dir: str | Path) -> bool:
