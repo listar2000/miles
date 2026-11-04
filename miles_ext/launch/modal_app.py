@@ -46,7 +46,7 @@ import time
 import modal
 
 from miles_ext import stack
-from miles_ext.checkpoint import staged_save
+from miles_ext.checkpoint import save_policy
 from miles_ext.launch import split
 from miles_ext.obs import sandbox_profile
 from miles_ext.platform import compile_cache
@@ -354,22 +354,6 @@ def _ensure_engine(recipe: dict, run_id: str) -> str | None:
     return call_id
 
 
-def _uploader(recipe: dict, run_id: str, run_dir, rank: int):
-    """This node's background upload of staged saves (``checkpoint.stage_dir``), or None."""
-    stage = recipe["checkpoint"]["stage_dir"]
-    if not stage:
-        return None
-    return staged_save.Uploader(
-        stage,
-        run_dir,
-        run_id,
-        rank,
-        completion_queue,
-        results_volume.commit,
-        train_ranks=R.trainer_gpus(recipe),
-    )
-
-
 def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> threading.Event:
     """Apply checkpoint retention (final=False) each time the tracker moves; set the returned event to stop."""
     ckpt, stop = recipe["checkpoint"], threading.Event()
@@ -461,18 +445,13 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
     threading.Thread(target=shards.worker_commits, daemon=True, args=(
         run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
-    uploader = _uploader(recipe, run_id, run_dir, rank)
-    if uploader:
-        uploader.start()
     try:
         _wait_for_port(head_ip, 6379, timeout=600)
-        subprocess.run(start + [f"--address={head_ip}:6379"], env={**env, staged_save.NODE_ENV: str(rank)}, check=True)
+        subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
         if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
             raise RuntimeError("Miles training failed on the head node; see the App logs")
     finally:
         stop.set()
-        if uploader:  # rank 0 waits for this node's uploads before it releases the workers
-            uploader.drain(staged_save.UPLOAD_TIMEOUT_SECS)
         results_volume.commit()
         saver.stop()
 
@@ -490,18 +469,18 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
 
     nodes = SHAPE["nodes"]
     succeeded = False
-    record = supervisor = uploader = None
+    record = supervisor = None
     stack_ctx = contextlib.ExitStack()
     # kernels compiled and tuned by this segment reach the volume while it runs and at exit
     stack_ctx.callback(compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start().stop)
     try:
         step = read_tracker(run_dir)
         resume = step is not None
-        # ext-056: a run saving Adam's state on every k-th save only may resume from a save without it
+        # a run saving Adam's state on every k-th save only may resume from a save without it (ext-056)
         resume_optimizer = (
             not resume
             or recipe["checkpoint"]["optimizer_every"] == 1
-            or staged_save.has_optimizer(run_dir / "checkpoints" / iter_dir(step))
+            or save_policy.has_optimizer(run_dir / "checkpoints" / iter_dir(step))
         )
         args = R.miles_args(recipe, run_id, resume, resume_optimizer) + ["--save-trigger-sentinel", SENTINEL]
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -512,13 +491,11 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                         "resume": resume, "segment": segment, "deadline": deadline, "recipe": recipe,
                         "argv": args}, indent=1)
         )
-        uploader = _uploader(recipe, run_id, run_dir, 0)
         commit = shards.head_commit(run_id, nodes, P.progress_dict(TARGET), completion_queue, results_volume.commit,
                                     key=P.keys(run_id)["commit"])
         supervisor = Supervisor(run_id, recipe, run_dir, progress_dict=P.progress_dict(TARGET), segment=segment,
                                 deadline=deadline, commit=commit, image=_image_info(),
-                                backend=backend, call_id=modal.current_function_call_id(),
-                                pending=uploader.busy if uploader else None)
+                                backend=backend, call_id=modal.current_function_call_id())
         supervisor.heartbeat()
         if R.needs_tunnel(recipe):
             # in-sandbox agents reach the session servers through one public tunnel;
@@ -550,16 +527,9 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         # the head's port opens, so clearing here, before the head starts, is safe
         completion_queue.clear(partition=run_id)
         completion_queue.clear(partition=shards.ack_partition(run_id))
-        completion_queue.clear(partition=staged_save.report_partition(run_id))
-        if uploader:
-            uploader.start()
         if FINAL_RETENTION:  # ext-056: prune old saves while training, so a long run does not fill the volume
             stack_ctx.callback(_retention_while_training(recipe, run_dir).set)
-        subprocess.run(
-            start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"],
-            env={**env, staged_save.NODE_ENV: "0"},
-            check=True,
-        )
+        subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600
         while ray.cluster_resources().get("GPU", 0) < nodes * R.GPUS_PER_NODE:
@@ -595,8 +565,6 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                 supervisor.finish("error", None, note=f"launcher: {type(e).__name__}: {e}"[:2000])
         raise
     finally:
-        if uploader:  # a failed run still uploads the saves that finished
-            uploader.drain(staged_save.UPLOAD_TIMEOUT_SECS)
         stack_ctx.close()
         results_volume.commit()
         _terminate_task_sandboxes(recipe, run_id)

@@ -20,7 +20,7 @@ import re
 
 import modal
 
-from miles_ext.checkpoint.staged_save import has_optimizer
+from miles_ext.checkpoint.save_policy import has_optimizer
 from miles_ext.platform.layout import iter_dir, read_tracker, read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target
@@ -103,11 +103,12 @@ def retention_plan(saves: list[dict], *, keep: int, keep_final_full: bool, final
     one the run resumes from; HF exports are kept. At the end (``final=True``):
     keep the final HF export, and the final full save if ``keep_final_full`` or if there
     is no HF export yet.
-    Pinned steps, and full saves whose step is a multiple of ``keep_every``, are never deleted."""
+    Pinned steps, and the full saves after every ``keep_every``-th rollout (Megatron's ``iter_N`` follows
+    0-based rollout N), are never deleted."""
     if keep < 1:
         raise ValueError("keep must be >= 1")
     if keep_every:
-        pinned = (*pinned, *(s["step"] for s in saves if s["kind"] == "full" and s["step"] % keep_every == 0))
+        pinned = (*pinned, *(s["step"] for s in saves if s["kind"] == "full" and (s["step"] + 1) % keep_every == 0))
     full = sorted((s for s in saves if s["kind"] == "full"), key=lambda s: -s["step"])
     hf = sorted((s for s in saves if s["kind"] == "hf"), key=lambda s: -s["step"])
     drop = []
