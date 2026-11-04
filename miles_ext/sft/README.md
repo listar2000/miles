@@ -16,6 +16,44 @@ the record format is in its "The record" section and in `record.py`.
 | `prepare.py` | the offline CLI: records to token shards, `prompts.jsonl`, `samples.jsonl`, `manifest.json` |
 | `rollout.py` | `--rollout-function-path miles_ext.sft.rollout.generate_rollout`: prepared samples for `--debug-train-only` training |
 | `parity.py` | `compare`: a served sample against the render of the same record |
+| `config.py` | the SFT run config (YAML): preset, pinned image, records and shards on a volume, schedule; the Miles argv |
+| `train.py` | the driver (`python -m miles_ext.sft.train <Miles args>`): Miles' loop for `--debug-train-only`, plus held-out NLL |
+| `val.py` | `SftTrainRayActor`: validation ids run forward-only and log `val/nll` |
+| `modal_prepare.py`, `modal_train.py` | the config's records to shards on a Modal CPU container, then SFT on one H200:8 node |
+
+## Training on Modal
+
+A run config (YAML, `config.py`) drives both steps. Keys, with defaults where they have one:
+
+```yaml
+model: qwen3-30b-a3b-thinking-2507   # a preset (miles_ext/recipes/presets.py) with a megatron_model_type
+image: docker.io/starlimobius/miles-mobius@sha256:...   # pinned by digest
+data:
+  volume: miles-rl-datasets
+  records: sft/<dataset>/records     # *.jsonl train records, *.val.jsonl held out, _* ignored
+  shards: sft/<dataset>/<name>       # modal_prepare writes train/ and val/ here
+  max_tokens: 131072                 # longer samples are dropped whole
+train: {epochs: 2, batch: 128, lr: 2.0e-5, decay: linear, warmup: 0.03, cp: 2}  # the defaults; decay linear (to 0) or cosine (to lr/10)
+val: {interval: 20}                  # held-out NLL every 20 steps (default), before the first and after the last
+tracking: {wandb_project: miles-sft} # smoke-/debug- run ids log to miles-smoke
+```
+
+```bash
+export MILES_SFT_CONFIG=<config.yaml> MILES_WEIGHTS_VOLUME=... MILES_RESULTS_VOLUME=... MILES_DOTENV_DIR=<dir with .env>
+python -m modal run -m miles_ext.sft.modal_prepare [--tests]             # records -> shards (CPU)
+python -m modal run --detach -m miles_ext.sft.modal_train --run-id <id>  # [--num-rollout N] for a short run
+```
+
+- Layout: one H200:8 node, TP1, CP `train.cp`, EP8, full recompute, `max_tokens / cp` packed tokens per GPU.
+  Exercised: Qwen3-30B-A3B-Thinking-2507 at 128K with CP4. Rendering supports the families below.
+- Weights: `/models/<preset dir>` on `MILES_WEIGHTS_VOLUME`. One save per epoch.
+- Outputs on `MILES_RESULTS_VOLUME` under `<run id>/`: `checkpoints/` (Megatron, weights only),
+  `hf/iter_NNNNNNN/` (an HF export per save, with the base's tokenizer and configs), `argv-*.json`.
+- The same run id again resumes from the last checkpoint's weights with a fresh optimizer state.
+- Code: the image plus this checkout's `miles_ext/` and `experiments/`, laid over it at launch, so the image
+  digest alone does not identify the code; `argv-*.json` keeps the config and argv.
+
+## Offline
 
 ```bash
 python -m miles_ext.sft.prepare --input data.jsonl --output /data/sft-run \
@@ -53,9 +91,9 @@ python -m miles_ext.sft.connectors.atif --input /jobs/my-harbor-job --output /da
 models stay in the context untrained. `--token-ids` copies ATIF `completion_token_ids`; use it
 only when the trajectories were sampled by a model with the trained model's tokenizer.
 
-Not here yet: other connectors (Nemotron-style datasets, Miles rollout dumps), and launching
-SFT through the fork's recipes on Modal.
+Not here yet: other connectors (Nemotron-style datasets, Miles rollout dumps), multi-node SFT,
+and evaluating an SFT export (serve `hf/iter_*` with an RL recipe's eval).
 
 Tests: `python -m pytest miles_ext/tests/test_sft_record.py miles_ext/tests/test_sft_render.py
-miles_ext/tests/test_sft_prepare.py miles_ext/tests/test_sft_connector_atif.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
+miles_ext/tests/test_sft_prepare.py miles_ext/tests/test_sft_connector_atif.py miles_ext/tests/test_sft_config.py` run offline; `test_sft_render_hub.py` needs the Hugging Face
 Hub for the real Qwen3 and DeepSeek V4.1 tokenizers.
