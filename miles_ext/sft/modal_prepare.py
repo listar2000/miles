@@ -46,8 +46,8 @@ def prepare(config_yaml: str, tests: bool) -> dict[str, str]:
         subprocess.run(["python", "-m", "pytest", "-q", "-x", *TESTS], cwd=str(stack.MILES_SRC), check=True)
     manifests = {}
     for split, inputs in splits(Path(sft_config.DATA_MOUNT / cfg.data.records)).items():
-        if not inputs:
-            continue
+        if not inputs:  # training validates before its first step, so both splits are required
+            raise ValueError(f"no {split} records (*.jsonl / *.val.jsonl) under {cfg.data.records}")
         out = Path(cfg.shards) / split
         argv = [
             "python",
@@ -64,6 +64,8 @@ def prepare(config_yaml: str, tests: bool) -> dict[str, str]:
         ]
         for f in inputs:
             argv += ["--input", f]
+        for proc in cfg.data.postprocess:
+            argv += ["--postprocess", proc]
         subprocess.run(argv, cwd=str(stack.MILES_SRC), check=True)
         manifests[split] = (out / "manifest.json").read_text()
     data_volume.commit()
