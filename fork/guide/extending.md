@@ -35,6 +35,7 @@ image. Code reaches the image in one way only: as a commit of this repo
 | A new sandbox provider | Harbor environment through `import_path` | `miles_ext/sandboxes/`; see `docs/developer/adding-a-sandbox-provider.md` |
 | A new model | a preset in `miles_ext/recipes/presets.py` | maintainers: open an issue first |
 | SFT data from another format (Harbor ATIF, ...) | a connector that yields records ([RFC 0003](../rfcs/0003-sft-record-connectors.md)); ATIF: `python -m miles_ext.sft.connectors.atif` | `miles_ext/sft/connectors/` ([README](../../miles_ext/sft/README.md)) |
+| SFT training | an SFT run config: `python -m modal run -m miles_ext.sft.modal_prepare`, then `-m miles_ext.sft.modal_train` | your config; see [miles_ext/sft/README.md](../../miles_ext/sft/README.md) |
 | SFT data, or SFT support for another model family | records as in [RFC 0002](../rfcs/0002-tito-aware-sft-tokenization.md), prepared by `python -m miles_ext.sft.prepare`; a family needs the tests in `miles_ext/tests/test_sft_render.py` (and maybe a `tokenize_completion` override) | your records; `miles_ext/sft/` ([README](../../miles_ext/sft/README.md)) |
 
 Miles' own extension points and their signatures are documented upstream in
