@@ -114,6 +114,6 @@ TB 2.1 in Pi (87 tasks x 2, strict tool schemas, 30-min agent limit, exactly 2 t
 | base | 12/174 (6.9%) | 8/87 | 2 |
 | v2 | 9/174 (5.2%) | 7/87 | 133 |
 | v3 | 6/174 (3.4%) | 6/87 | 147 |
-| v2, 28 concurrent agents, 8K reply cap | 7/174 (4.0%) | see below | 19 (122 replies hit 8K) |
+| v2, 28 concurrent agents, 8K reply cap | 7/174 (4.0%) | 7/87 | 19 (122 replies hit 8K) |
 
 v1 (epoch 1) under each task's own limit, first two trials per task: 8/172 (4.7%), pass@2 7/87 (base 14/174, 8/87).
