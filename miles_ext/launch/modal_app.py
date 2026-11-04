@@ -367,7 +367,6 @@ def _uploader(recipe: dict, run_id: str, run_dir, rank: int):
         completion_queue,
         results_volume.commit,
         train_ranks=R.trainer_gpus(recipe),
-        local_ranks=min(R.GPUS_PER_NODE, R.trainer_gpus(recipe) - rank * R.GPUS_PER_NODE),
     )
 
 

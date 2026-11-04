@@ -21,6 +21,7 @@ UPLOAD_TIMEOUT_SECS = 1800  # how long exit waits for pending uploads
 POLL_SECS = 2
 ITER = re.compile(r"iter_(\d{7})$")
 MARKER = ".saved-rank"
+RANKS = ".ranks"  # stage/.ranks/<rank>: the trainer ranks on this node, registered as each enters a save
 
 
 def report_partition(run_id: str) -> str:
@@ -42,7 +43,8 @@ def _print(msg: str) -> None:
 
 def with_optimizer(args, iteration: int) -> bool:
     """Whether the save after rollout ``iteration`` (0-based) carries Adam's state: every save when k =
-    OPTIM_EVERY_ENV is 1, else every k-th periodic save; a save off the interval (final, requested) holds weights only."""
+    OPTIM_EVERY_ENV is 1, else every k-th periodic save; a save off the interval (final, requested) holds weights only.
+    """
     if args.no_save_optim:
         return False
     every = int(os.environ.get(OPTIM_EVERY_ENV, "1"))
@@ -72,6 +74,10 @@ def context(args, iteration: int):
             _print(f"staged save: iteration {iteration} waited {time.monotonic() - waited:.0f}s for the last upload")
     began = time.monotonic()
     staged = bool(stage) and not optim
+    rank = dist.get_rank()
+    if stage:  # every rank enters the collective save before any rank marks it done
+        (stage / RANKS).mkdir(parents=True, exist_ok=True)
+        (stage / RANKS / str(rank)).touch()
     if staged:
         target.mkdir(parents=True, exist_ok=True)  # Megatron creates it on rank 0 only, which may be another node
         args.save = str(stage)
@@ -80,7 +86,6 @@ def context(args, iteration: int):
         yield
     finally:
         args.save, args.no_save_optim = saved_to, no_optim
-    rank = dist.get_rank()
     if optim and rank == 0:
         (Path(args.save) / f"iter_{iteration:07d}" / OPTIM_MARKER).touch()
     if staged:
@@ -137,14 +142,13 @@ class Uploader:
         commit: Callable[[], None],
         *,
         train_ranks: int,
-        local_ranks: int,
         log=_print,
     ):
         from miles_ext.platform.layout import TRACKER  # trainer ranks import this module without the platform
 
         self.stage, self.ckpt_dir, self.tracker = Path(stage), Path(run_dir) / "checkpoints", TRACKER
         self.run_id, self.node, self.queue, self.commit = run_id, node, queue, commit
-        self.train_ranks, self.local_ranks, self.log = train_ranks, local_ranks, log
+        self.train_ranks, self.log = train_ranks, log
         self.reports: dict[int, dict[int, int]] = {}  # node 0: iteration -> node -> ranks uploaded
         self.uploaded: set[int] = set()  # node 0: its own uploads, pending until the tracker covers them
         self.tracked = -1  # node 0: the last iteration the tracker covers
@@ -157,9 +161,10 @@ class Uploader:
         return self
 
     def _ready(self) -> Path | None:
-        """The oldest staged save every trainer rank of this node has marked."""
+        """The oldest staged save every trainer rank registered on this node has marked."""
+        registered = len(list((self.stage / RANKS).iterdir())) if (self.stage / RANKS).is_dir() else 0
         for it in _marked(self.stage):
-            if len(list(it.glob(f"{MARKER}*"))) >= self.local_ranks:
+            if len(list(it.glob(f"{MARKER}*"))) >= registered:
                 return it
         return None
 

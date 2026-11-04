@@ -48,8 +48,7 @@ def _save(stage, iteration, ranks, owner, monkeypatch):
         assert args.save == "/vol/run/checkpoints"
 
 
-
-def _uploader(tmp_path, node, q, commits=None, train_ranks=4, local_ranks=2):
+def _uploader(tmp_path, node, q, commits=None, train_ranks=4):
     return S.Uploader(
         tmp_path / f"stage{node}",
         tmp_path / "vol" / "run",
@@ -58,7 +57,6 @@ def _uploader(tmp_path, node, q, commits=None, train_ranks=4, local_ranks=2):
         q,
         lambda: (commits if commits is not None else []).append(node),
         train_ranks=train_ranks,
-        local_ranks=local_ranks,
         log=lambda *_: None,
     )
 
@@ -97,9 +95,11 @@ def test_a_repeated_report_does_not_count_twice(tmp_path, monkeypatch):
 
 
 def test_a_save_uploads_once_every_local_rank_marked_it(tmp_path, monkeypatch):
-    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=2, local_ranks=2)
+    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=2)
+    (up.stage / S.RANKS).mkdir()
+    (up.stage / S.RANKS / "1").touch()  # rank 1 of this node is inside the save, not done yet
     _save(up.stage, 1, [0], True, monkeypatch)
-    assert up.drain(timeout=0) is False  # rank 1 of this node has not marked iteration 1
+    assert up.drain(timeout=0) is False
     _save(up.stage, 1, [1], False, monkeypatch)
     (up.stage / "iter_0000002").mkdir()  # a save cut short: no marker, never uploaded
     assert up.drain(timeout=5) is True
@@ -108,7 +108,7 @@ def test_a_save_uploads_once_every_local_rank_marked_it(tmp_path, monkeypatch):
 
 def test_busy_until_the_tracker_is_written(tmp_path, monkeypatch):
     q = FakeQueue()
-    up = _uploader(tmp_path, 0, q, train_ranks=1, local_ranks=1)
+    up = _uploader(tmp_path, 0, q, train_ranks=1)
     _save(up.stage, 1, [0], True, monkeypatch)
     up._upload(up._ready())  # uploaded and reported, the report not yet collected
     assert up.busy()
@@ -126,7 +126,7 @@ def test_busy_until_the_tracker_is_written(tmp_path, monkeypatch):
 
 
 def test_next_save_waits_for_the_upload(tmp_path, monkeypatch):
-    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=1, local_ranks=1)
+    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=1)
     _save(up.stage, 1, [0], True, monkeypatch)
     monkeypatch.setattr(S, "POLL_SECS", 0.01)
     done = threading.Event()
@@ -186,7 +186,7 @@ def test_adam_state_goes_in_every_kth_save_straight_to_the_volume(tmp_path, monk
 
 
 def test_an_upload_does_not_move_the_tracker_back(tmp_path, monkeypatch):
-    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=1, local_ranks=1)
+    up = _uploader(tmp_path, 0, FakeQueue(), train_ranks=1)
     _save(up.stage, 2, [0], True, monkeypatch)
     tracker = tmp_path / "vol" / "run" / "checkpoints" / "latest_checkpointed_iteration.txt"
     tracker.parent.mkdir(parents=True)
