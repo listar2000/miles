@@ -6,7 +6,7 @@ from typing import Any
 
 
 def untrain_no_reasoning(record: dict[str, Any]) -> dict[str, Any]:
-    """Keep replies without reasoning in the context but out of the loss (decision B2)."""
+    """Keep replies without reasoning in the context but out of the loss."""
     messages = record["messages"]
     steps = record.get("steps") or [
         {"context": list(range(i)), "completion": i, "train": True}
