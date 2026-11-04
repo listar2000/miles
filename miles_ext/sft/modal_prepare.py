@@ -64,6 +64,8 @@ def prepare(config_yaml: str, tests: bool) -> dict[str, str]:
         ]
         for f in inputs:
             argv += ["--input", f]
+        for proc in cfg.data.postprocess:
+            argv += ["--postprocess", proc]
         subprocess.run(argv, cwd=str(stack.MILES_SRC), check=True)
         manifests[split] = (out / "manifest.json").read_text()
     data_volume.commit()

@@ -33,6 +33,7 @@ data:
   records: sft/<dataset>/records     # *.jsonl train records, *.val.jsonl held out, _* ignored
   shards: sft/<dataset>/<name>       # modal_prepare writes train/ and val/ here
   max_tokens: 131072                 # longer samples are dropped whole
+  postprocess: []                    # record processors by dotted path, applied by prepare in order
 train: {epochs: 2, batch: 128, lr: 2.0e-5, decay: linear, warmup: 0.03, cp: 2}  # the defaults; decay linear (to 0) or cosine (to lr/10)
 val: {interval: 20}                  # held-out NLL every 20 steps (default), before the first and after the last
 tracking: {wandb_project: miles-sft} # smoke-/debug- run ids log to miles-smoke

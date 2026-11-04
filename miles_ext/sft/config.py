@@ -24,6 +24,7 @@ class Data:
     records: str
     shards: str
     max_tokens: int
+    postprocess: tuple[str, ...] = ()  # record processors by dotted path (prepare --postprocess), in order
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,7 @@ def load(path: str | Path) -> SftConfig:
         model=raw["model"],
         image=raw.get("image"),
         commit=raw.get("commit"),
-        data=Data(**raw["data"]),
+        data=Data(**{**raw["data"], "postprocess": tuple(raw["data"].get("postprocess", ()))}),
         wandb_project=raw["tracking"]["wandb_project"],
         train=Train(**raw.get("train", {})),
         val=Val(**raw.get("val", {})),

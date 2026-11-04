@@ -56,3 +56,8 @@ def test_argv_carries_layout_schedule_and_preset_args(tmp_path):
     assert flag("--prompt-data") == "/datasets/sft/d/q-128k/train/prompts.jsonl"
     assert flag("--custom-trainer-actor-class") == "miles_ext.sft.val.SftTrainRayActor"
     assert "--load" not in argv
+
+
+def test_postprocessors_reach_the_prepare_argv(tmp_path):
+    raw = {**BASE, "data": {**BASE["data"], "postprocess": ["pkg.mod.fn"]}}
+    assert sft_config.load(_write(tmp_path, raw)).data.postprocess == ("pkg.mod.fn",)
