@@ -35,9 +35,10 @@ HF_META = (
 )
 
 
-def _committer(stop: threading.Event, every: int = 600) -> None:
+def _committer(stop: threading.Event, run: Path, weights: Path, every: int = 600) -> None:
     while not stop.wait(every):
         try:
+            _finish_hf_exports(run, weights)  # each save's export becomes servable on the next tick
             results_volume.commit()
         except Exception as e:  # a commit racing a checkpoint write retries on the next tick
             print(f"results commit: {type(e).__name__}: {e}", flush=True)
@@ -45,6 +46,8 @@ def _committer(stop: threading.Event, every: int = 600) -> None:
 
 def _finish_hf_exports(run: Path, weights: Path) -> None:
     for d in sorted((run / "hf").glob("iter_*")):
+        if not (d / "model.safetensors.index.json").exists() or (d / "tokenizer_config.json").exists():
+            continue  # still being written, or finished
         for name in HF_META:
             if (weights / name).exists():
                 shutil.copyfile(weights / name, d / name)
@@ -97,7 +100,7 @@ def train(config_yaml: str, run_id: str, num_rollout: int, save_interval: int) -
         ["ray", "start", "--head", f"--num-gpus={sft_config.GPUS}", "--disable-usage-stats"], env=env, check=True
     )
     stop = threading.Event()
-    threading.Thread(target=_committer, args=(stop,), daemon=True).start()
+    threading.Thread(target=_committer, args=(stop, run, Path(cfg.weights)), daemon=True).start()
     try:
         print("argv: " + " ".join(argv), flush=True)
         rc = subprocess.run(
