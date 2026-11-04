@@ -2,7 +2,7 @@
 """The fork's ledger, read from the commit series itself.
 
 Every fork commit carries a ``Fork-<Kind>: <id>`` trailer (Fix, Hook, Port, Infra,
-Ext) and, for fixes and hooks, ``Touches:`` (upstream files it edits), ``Evidence:``,
+Ext, Exp) and, for fixes and hooks, ``Touches:`` (upstream files it edits), ``Evidence:``,
 ``Upstream-Status:`` and ``Remove-When:``. A port (an open upstream PR carried as is)
 has ``Touches:``, ``Upstream-PR: <url>@<head sha>`` and ``Remove-When:``. Git keeps these through a rebase,
 so the history is the record and nothing has to be kept in sync by hand.
@@ -19,7 +19,8 @@ so the history is the record and nothing has to be kept in sync by hand.
      that differ from the upstream base are the ones fixes and hooks declare in ``Touches:``;
   2. every declared file carries a ``[fork <id>]`` marker for each commit touching it;
   3. every fork commit has exactly one ``Fork-*`` trailer; fixes and hooks touch
-     only upstream files, infra and extensions only the fork's own paths;
+     only upstream files, infra and extensions only the fork's own paths, and an
+     experiment (``Fork-Exp: <folder>``) only its own ``experiments/<folder>/``;
   4. every file in fork/vendored.json (third-party code copied verbatim) still
      has the git blob of its upstream source (also checked by ``markers``);
   5. an SGLang fix or hook is one patch, ``fork/deps/sglang/<id>-<slug>.patch``,
@@ -69,6 +70,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OWN_PATHS = (
     "fork/",
     "miles_ext/",
+    "experiments/",
     "FORK.md",
     ".claude/skills/miles-fork/",
     ".claude/skills/miles-review/",
@@ -78,7 +80,7 @@ OWN_PATHS = (
     ".github/pull_request_template.md",
     ".github/workflows/miles-mobius-image.yml",
 )
-KINDS = ("Fix", "Hook", "Port", "Infra", "Ext")
+KINDS = ("Fix", "Hook", "Port", "Infra", "Ext", "Exp")
 UPSTREAM_KINDS = ("Fix", "Hook", "Port")  # the only kinds allowed to edit upstream files
 MARKER = re.compile(r"\[fork ((?:fix|hook|port)-\d{3})\]")
 SGLANG_PATCHES = "fork/deps/sglang/"
@@ -89,6 +91,7 @@ ID_FORMATS = {
     "Hook": r"hook-\d{3}",
     "Port": r"port-\d{3}",
     "Ext": r"ext-\d{3}",
+    "Exp": r"[a-z0-9]+(?:_[a-z0-9]+)*",  # the experiment's folder under experiments/
     "Infra": r"[a-z0-9]+(?:[.-][a-z0-9]+)*",
 }
 
@@ -341,7 +344,7 @@ def cmd_check(base: str, merge: bool = False) -> int:
     for c in series:
         if c.kind is None:
             hint = "; a fixup! subject must name a commit of this series" if FIXUP.fullmatch(c.subject) else ""
-            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Port/Infra/Ext trailer{hint}")
+            problems.append(f"{c.sha} {c.subject!r}: needs exactly one Fork-Fix/Hook/Port/Infra/Ext/Exp trailer{hint}")
             continue
         if "Retires" in c.trailers and not (c.kind == "Infra" and c.fork_id.startswith("sync-")) and (
             c.kind not in UPSTREAM_KINDS
@@ -389,6 +392,12 @@ def cmd_check(base: str, merge: bool = False) -> int:
                 if removes and only_removes(c.sha, f, base):
                     continue  # removing our code leaves nothing to mark
                 declared.setdefault(f, set()).add(c.fork_id)
+        elif c.kind == "Exp":
+            for f in c.files:
+                if not f.startswith(f"experiments/{c.fork_id}/"):
+                    problems.append(
+                        f"{c.sha} {c.fork_id}: an experiment commit touches only experiments/{c.fork_id}/ ({f})"
+                    )
         else:
             for f in c.files:
                 if not own(f):

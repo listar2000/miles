@@ -16,6 +16,9 @@ image. Code reaches the image in one way only: as a commit of this repo
   [fork/README.md](../README.md) ("Kinds of change"). They come down to new
   files only, plugged in through extension points. The
   [miles-fork skill](../../.claude/skills/miles-fork/SKILL.md) has the steps.
+- **Code for one experiment** (its data filters, configs, one-off scripts and
+  write-up) lives in `experiments/<folder>/`, not in `miles_ext/`; see
+  [experiments/README.md](../../experiments/README.md).
 - Loading a package from outside this repo is not supported yet. If you need it,
   open an issue ([help.md](help.md)).
 
