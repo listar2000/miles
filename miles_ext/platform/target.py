@@ -108,11 +108,6 @@ def helper_app_name(target: Target) -> str:
     return check_own_name(f"{scope_of(target)}helpers", "helper app") if target.name_id else "miles-platform"
 
 
-def completion_queue_name(target: Target) -> str:
-    """The trainer's completion queue (partitions per run id): ``rl-<env>-completion`` with a name id."""
-    return check_own_name(f"{scope_of(target)}completion", "queue") if target.name_id else "miles-fork-completion"
-
-
 def compile_cache_volume_name(target: Target) -> str:
     """The volume that keeps compiled kernels between runs (``compile_cache``): ``rl-<env>-compile-cache``
     with a name id, else ``miles-compile-cache``. Shared by every run of the environment."""

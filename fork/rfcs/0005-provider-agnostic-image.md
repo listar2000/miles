@@ -40,7 +40,7 @@ One trainer gang is one cluster with a fast private interconnect (RDMA for more 
 providers or regions. Rollout nodes can be heterogeneous and come from anywhere. Miles' trainer ranks form one
 torch.distributed group whose collectives run every step, while engines are independent replicas behind a router.
 
-A node gives back: rank 0's session proxy (29999) and registry (30999), a rollout node's proxy (32999) with `/health`;
+A node gives back: rank 0's session proxy (29999) and registry (30999), a rollout node's proxy (32999) with `/healthz`;
 under `/results/<run_id>/` the checkpoints, HF exports, `exit.json`, `exits.jsonl` and launch records; exit code 0 for
 done or segment end (relaunch resumes), non-zero with a reason in `exit.json`.
 
@@ -57,8 +57,10 @@ may call is the sandbox provider the recipe names, plus the adapters below, load
 3. **Membership:** rollout nodes register with rank 0 over HTTP and beat, on upstream's
    `--custom-inference-engine-provider-path`. A missed node is dropped and its in-flight samples retried. When to add or
    drop nodes is the caller's decision; the image reports load and accepts whoever registers.
-4. **Run state:** `get`, `put`, `delete` for what the caller reads. Coordination inside the trainer gang moves to Ray's
-   key-value store on the head, and split lifecycle rides the registry link.
+4. **Run state:** `get`, `put`, `delete` for what the caller reads. Coordination inside the trainer gang moves to a small
+   HTTP service on rank 0, on the gang's private network like Ray's ports, and split lifecycle rides the registry link.
+   Ray's key-value store was the first plan; a driver that loses the GCS can take its process down before a worker's
+   last commit, and these calls are simple enough not to need it.
 
 Adapters run inside a node and launch nothing, so they stay in the image and load by dotted path. Endpoints need no
 interface: nodes listen on fixed ports behind tokens, and the caller exposes them.
@@ -80,7 +82,7 @@ unchanged, and one smoke passes.
 | 0 | This RFC, `miles_ext/node`, contract tests with no Modal in the interpreter | none |
 | 1 | Storage interface; every commit and reload goes through it | Qwen3.5-9B, 2 steps |
 | 2 | Split: the rollout role and the registry; the engine reads no Dict | split recipe, per-run approval |
-| 3 | Trainer gang from env; worker release and shard tokens through Ray's store | 2-node Qwen3.5-9B |
+| 3 | Trainer gang from env; worker release and shard tokens through rank 0's gang server | 2-node Qwen3.5-9B |
 | 4 | Elastic pool on the engine provider hook; late joiners; load in the status file | second rollout node mid-run |
 | 5 | `python -m miles_ext.node` for every role and job; wrappers read `manifest` | Qwen3.5-9B, 2 steps |
 | 6 | Launching code leaves the image source | decided by the owner |

@@ -15,12 +15,16 @@ through the Volume API (``read_tracker_volume``); nothing else parses it. A LoRA
 writes no tracker, so for one these return the step Miles resumes it from instead.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from pathlib import Path
-
-import modal
+from typing import TYPE_CHECKING
 
 from miles_ext.platform.target import Target
+
+if TYPE_CHECKING:
+    import modal
 
 TRACKER = "latest_checkpointed_iteration.txt"
 
@@ -44,6 +48,8 @@ def read_tracker(run_dir: str | Path) -> int | None:
 
 
 def read_tracker_volume(volume: modal.Volume, run_id: str) -> int | None:
+    import modal
+
     try:
         return int(b"".join(volume.read_file(tracker_path(run_id))).decode().strip())
     except (FileNotFoundError, modal.exception.NotFoundError, ValueError):
@@ -73,9 +79,13 @@ def iter_dir(step: int) -> str:
 
 
 def results_volume(target: Target) -> modal.Volume:
+    import modal
+
     return modal.Volume.from_name(target.results_volume, environment_name=target.modal_environment)
 
 
 def weights_volume(target: Target, create: bool = False) -> modal.Volume:
+    import modal
+
     return modal.Volume.from_name(target.weights_volume, environment_name=target.modal_environment,
                                   create_if_missing=create)

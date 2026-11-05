@@ -2,7 +2,26 @@
 
 from miles_ext.recipes import recipe as R
 
+# ---- gang: trainer nodes, as torchrun's RANK, WORLD_SIZE, MASTER_ADDR ----
+NODE_RANK_ENV = "MILES_NODE_RANK"
+NNODES_ENV = "MILES_NNODES"
+HEAD_ADDR_ENV = "MILES_HEAD_ADDR"
+NODE_IP_ENV = "MILES_NODE_IP"
+
 STORAGE_ENV = "MILES_STORAGE"  # miles_ext.node.storage
+STATE_ENV = "MILES_STATE"  # miles_ext.node.state
+
+# ---- optional, for the caller's own records ----
+CALL_ID_ENV = "MILES_CALL_ID"  # names this segment in the exit record
+SANDBOX_ENVIRONMENT_ENV = "MILES_SANDBOX_ENVIRONMENT"  # the sandbox provider's environment, for exit cleanup
+FINAL_RETENTION_ENV = (
+    "MILES_FINAL_RETENTION"  # "1": prune checkpoints as the recipe says; a caller that retains itself sets "0"
+)
+
+SESSION_URL_ENV = (
+    "MILES_SESSION_PUBLIC_URL"  # in-sandbox harnesses: the public URL that reaches rank 0's session proxy
+)
+DEADLINE_ENV = "MILES_SEGMENT_DEADLINE"  # epoch seconds: save and exit before it (SIGTERM does the same)
 
 # ---- rollout pool (split) ----
 TRAINER_URL_ENV = "MILES_TRAINER_URL"  # where a rollout node reaches rank 0's registry
@@ -13,6 +32,7 @@ ROLLOUT_URL_ENV = "MILES_ROLLOUT_PUBLIC_URL"  # the public URL that reaches this
 # ---- ports a node opens ----
 SESSION_PROXY_PORT = R.PROXY_PORT  # rank 0, in-sandbox harnesses
 REGISTRY_PORT = 30999  # rank 0, split
+GANG_PORT = 30998  # rank 0 of more than one node, private to the gang's network like Ray's ports
 ROLLOUT_PROXY_PORT = 32999  # a rollout node: its engines and sync agent, behind one token
 
 COMPILE_CACHE_MOUNT = "/compile-cache"

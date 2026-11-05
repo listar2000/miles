@@ -7,8 +7,9 @@ Two places hold it, so a reader never depends on the trainer being alive:
   id, then rank 0's heartbeat replaces it every ``HEARTBEAT_SECS``),
   ``active:<run_id>`` (the live segment's call id: at most one segment per run),
   ``lease:<run_id>`` (written by the caller, see ``renew_lease``) and
-  ``exit:<run_id>`` (the exit record) and ``commit:<run_id>`` (multi-node commit
-  requests, see ``shards``); teardown deletes all of them;
+  ``exit:<run_id>`` (the exit record); teardown deletes all of them, and
+  ``commit:<run_id>``, which only runs before ext-064 wrote here (it now names the
+  commit request in rank 0's gang server, see ``shards``);
 - the results volume: ``<run_id>/exit.json`` (the newest exit record) and
   ``<run_id>/exits.jsonl`` (one line per segment), next to the checkpoints.
 
@@ -18,16 +19,20 @@ after its final save still reads as complete, and a relaunch of it returns
 without starting a cluster.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import time
-
-import modal
+from typing import TYPE_CHECKING
 
 from miles_ext.platform.layout import read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target, check_own_name, scope_of
 from miles_ext.recipes import recipe as R
+
+if TYPE_CHECKING:
+    import modal
 
 HEARTBEAT_SECS = 30
 STALE_HEARTBEAT_SECS = 5 * 60
@@ -70,6 +75,8 @@ def keys(run_id: str) -> dict:
 
 
 def progress_dict(target: Target, create: bool = True) -> modal.Dict:
+    import modal
+
     return modal.Dict.from_name(progress_dict_name(target), environment_name=target.modal_environment,
                                 create_if_missing=create)
 
@@ -88,6 +95,8 @@ def renew_lease(run_id: str, target: Target | dict | None, ttl_seconds: float) -
 
 def call_running(call_id: str | None) -> bool:
     """Whether a Modal function call (a segment) is still running."""
+    import modal
+
     if not call_id:
         return False
     try:
@@ -109,6 +118,8 @@ def delete_keys(run_id: str, target: Target) -> list[str]:
 
 
 def _read_json(volume: modal.Volume, path: str):
+    import modal
+
     try:
         return json.loads(b"".join(volume.read_file(path)))
     except (FileNotFoundError, modal.exception.NotFoundError, ValueError):
@@ -117,6 +128,8 @@ def _read_json(volume: modal.Volume, path: str):
 
 def _launch_record(volume: modal.Volume, run_id: str) -> dict | None:
     """The newest ``recipe-*.json`` the trainer wrote when a segment started."""
+    import modal
+
     try:
         names = sorted(e.path.rsplit("/", 1)[-1] for e in volume.listdir(run_id)
                        if re.fullmatch(r"recipe-\d{8}-\d{6}\.json", e.path.rsplit("/", 1)[-1]))

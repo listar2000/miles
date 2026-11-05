@@ -20,7 +20,7 @@ These are settings, not a save strategy: every save still goes straight to `--sa
 
 ## How it is applied
 `miles_ext/checkpoint/save_policy.py` (`context` for hook-020, `with_optimizer`, `has_optimizer`), the recipe keys in
-`miles_ext/recipes/recipe.py`, `_retention_while_training` and the resume check in `miles_ext/launch/modal_app.py`, and
+`miles_ext/recipes/recipe.py`, `_retention_while_training` and the resume check in `miles_ext/node/trainer.py`, and
 `keep_every` in `miles_ext/platform/checkpoints.py`. Verify: `retention (tracker N): removed [...]` in the launcher log,
 `iter_N/.optimizer` on the saves that carry Adam's state. Tests: `miles_ext/tests/test_save_policy.py`.
 

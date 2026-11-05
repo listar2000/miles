@@ -106,11 +106,10 @@ def test_option_a_guard(change):
 
 
 def test_option_a_helper_and_queue_names():
-    from miles_ext.platform.target import completion_queue_name, helper_app_name
+    from miles_ext.platform.target import helper_app_name
     t = Target.of(OPTION_A)
-    assert helper_app_name(t) == "rl-dev-helpers" and completion_queue_name(t) == "rl-dev-completion"
+    assert helper_app_name(t) == "rl-dev-helpers"
     assert helper_app_name(Target.of(DEV)) == "miles-platform"  # dev keeps its names until cleanup
-    assert completion_queue_name(Target.of(DEV)) == "miles-fork-completion"
 
 
 def test_compile_cache_volume_names():
@@ -415,7 +414,7 @@ def test_validate_shallow_resolves_argv():
 def test_launcher_final_retention_switch():
     src = (ROOT / "miles_ext/launch/modal_app.py").read_text()
     assert '"0" if TARGET.secret_name else "1"' in src  # platform runs (per-run secret) retain themselves
-    assert 'if FINAL_RETENTION and record["reason"] == "success":' in src
+    assert 'if final_retention and record["reason"] == "success":' in (ROOT / "miles_ext/node/trainer.py").read_text()
 
 
 # r6: named training knobs, field checks, reserved flags

@@ -99,8 +99,8 @@ def _function_source(path: str, name: str) -> str:
 
 
 @pytest.mark.parametrize("path,name", [
-    ("miles_ext/launch/modal_app.py", "_terminate_task_sandboxes"),
-    ("miles_ext/launch/modal_app.py", "_terminate_app_sandboxes"),
+    ("miles_ext/node/trainer.py", "_terminate_task_sandboxes"),
+    ("miles_ext/node/trainer.py", "_terminate_app_sandboxes"),
     ("miles_ext/platform/teardown.py", "resource_names"),
 ])
 def test_cleanup_code_has_no_pattern_matching(path, name):
@@ -113,7 +113,8 @@ def test_cleanup_code_has_no_pattern_matching(path, name):
 
 def test_teardown_module_has_no_pattern_matching():
     """The adapters (Modal, Sail) and the GPU stop address exact names only."""
-    src = (ROOT / "miles_ext/platform/teardown.py").read_text().split('"""', 2)[2]  # skip the docstring
-    for banned in ("startswith", "fnmatch", "glob", "re.match", "re.search", "find("):
-        assert banned not in src, f"teardown.py uses {banned!r}"
-    assert src.count("check_own_app_name") >= 2  # both adapters
+    for path in ("miles_ext/platform/teardown.py", "miles_ext/sandboxes/cleanup.py"):
+        src = (ROOT / path).read_text().split('"""', 2)[2]  # skip the docstring
+        for banned in ("startswith", "fnmatch", "glob", "re.match", "re.search", "find("):
+            assert banned not in src, f"{path} uses {banned!r}"
+    assert (ROOT / "miles_ext/sandboxes/cleanup.py").read_text().count("check_own_app_name") >= 2  # both adapters

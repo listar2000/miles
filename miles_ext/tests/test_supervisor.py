@@ -235,10 +235,10 @@ def test_segment_timeout():
 
 def test_trainer_short_circuits_on_every_rank():
     """The completion check sits before the rank split, so workers never wait for a Ray head."""
-    src = (importlib.import_module("miles_ext.tests.test_platform").ROOT / "miles_ext/launch/modal_app.py").read_text()
-    body = src[src.index("def train("):]
-    assert body.index("P.is_complete(") < body.index("if rank != 0:")
-    assert '"--save-trigger-sentinel", SENTINEL' in body
+    src = (importlib.import_module("miles_ext.tests.test_platform").ROOT / "miles_ext/node/trainer.py").read_text()
+    body = src[src.index("def run("):]
+    assert body.index("P.is_complete(") < body.index("if gang.rank != 0:")
+    assert '"--save-trigger-sentinel", SENTINEL' in src
 
 
 def test_event_tail_follows_a_replaced_file(tmp_path):
@@ -392,8 +392,3 @@ def test_gpu_app_per_run_is_exact(run_id, per_run):
     from miles_ext.platform.target import gpu_app_is_per_run
     assert gpu_app_is_per_run(run_id, Target.of({**DEV, "app_name": "miles-fork"} if not per_run else
                                                 {**DEV, "app_name": f"mdev-{run_id}"})) is per_run
-
-
-def test_trainer_clears_the_completion_queue_before_the_head():
-    src = (importlib.import_module("miles_ext.tests.test_platform").ROOT / "miles_ext/launch/modal_app.py").read_text()
-    assert src.index("completion_queue.clear(partition=run_id)") < src.index('start + ["--head"')

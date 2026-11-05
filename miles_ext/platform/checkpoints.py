@@ -16,15 +16,19 @@ can be deleted.
 These calls use the Modal Volume API, so they run anywhere (no container).
 """
 
-import re
+from __future__ import annotations
 
-import modal
+import re
+from typing import TYPE_CHECKING
 
 from miles_ext.checkpoint.save_policy import has_optimizer
 from miles_ext.platform.layout import iter_dir, read_tracker, read_tracker_volume
 from miles_ext.platform.layout import results_volume as _volume
 from miles_ext.platform.target import Target
 from miles_ext.recipes import recipe as R
+
+if TYPE_CHECKING:
+    import modal
 
 KINDS = {"full": "checkpoints", "hf": "hf"}
 ITER_RE = r"iter_(\d{7})"
@@ -52,11 +56,15 @@ def checkpoint_path(run_id: str, step: int, kind: str) -> str:
 
 
 def _bytes(volume: modal.Volume, path: str) -> int:
+    import modal
+
     return sum(e.size for e in volume.listdir(path, recursive=True) if e.type == modal.volume.FileEntryType.FILE)
 
 
 def list_checkpoints(run_id: str, target: Target | dict | None, *, sizes: bool = True) -> list[dict]:
     """``[{step, kind, path, bytes}]``, newest first within each kind."""
+    import modal
+
     target = Target.of(target)
     volume, out = _volume(target), []
     for kind, sub in KINDS.items():
@@ -88,6 +96,8 @@ def delete_checkpoint(run_id: str, step: int, kind: str, target: Target | dict |
 
 
 def _remove(volume: modal.Volume, path: str) -> dict:
+    import modal
+
     try:
         volume.remove_file(path, recursive=True)
     except (FileNotFoundError, modal.exception.NotFoundError):
@@ -143,6 +153,8 @@ def apply_retention(run_id: str, target: Target | dict | None, *, keep: int = 1,
                     final: bool = False, pinned: tuple[int, ...] = (), dry_run: bool = False,
                     keep_every: int | None = None) -> list[dict]:
     """Delete what ``retention_plan`` says; returns the deleted (or, dry run, the planned) saves."""
+    import modal
+
     target = Target.of(target)
     volume = _volume(target)
     saves = list_checkpoints(run_id, target, sizes=False)
@@ -226,6 +238,8 @@ def finalize_hf_command(run_id: str, step: int, origin_hf_dir: str) -> list[str]
 def finalize_hf(run_id: str, recipe: dict, target: Target | dict | None, *, step: int | None = None) -> dict:
     """FSDP: convert the final (or given) full save to HF weights at ``<run_id>/hf/iter_N``,
     in a CPU container of the fork image. Megatron runs already have HF exports (``checkpoint.save_hf``)."""
+    import modal
+
     from miles_ext.platform import functions
 
     target = Target.of(target)

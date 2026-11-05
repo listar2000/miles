@@ -1,10 +1,14 @@
 """Images the platform functions run in."""
 
-import os
+from __future__ import annotations
 
-import modal
+import os
+from typing import TYPE_CHECKING
 
 from miles_ext import stack
+
+if TYPE_CHECKING:
+    import modal
 
 IMAGE_ENV = "MILES_EXT_IMAGE"  # the registry image a container runs (unset when Modal built it)
 TRAINER_ENV = "MILES_MOBIUS_TRAINER"  # what the run asked for: latest or stable-YYYY-MM-DD (set by launch)
@@ -34,6 +38,8 @@ def fork_image(commit: str | None = None, image: str | None = None) -> modal.Ima
     """The published fork image: ``image`` (a ``repo@sha256:...`` from ``versions.resolve``)
     or else ``stack.FORK_IMAGE``; or the same image built by Modal from a pushed fork
     commit (what ``fork/docker/build.py`` would publish)."""
+    import modal
+
     if commit and image:
         raise ValueError("pass a fork commit or an image, not both")
     if image:

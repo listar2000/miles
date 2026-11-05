@@ -25,7 +25,7 @@ the launcher and the sync assumed one node in four places.
   and Modal gave rank 0 the lowest IP in that 2-node run (10.100.0.1, worker .2). This PR does not change that.
 
 ## How it is applied
-`miles_ext/recipes/recipe.py` (`_validate_split`, `optimizer_host_gib`), `miles_ext/launch/modal_app.py` (`_split_links`,
+`miles_ext/recipes/recipe.py` (`_validate_split`, `optimizer_host_gib`), `miles_ext/node/trainer.py` (`_split_links`,
 `_worker`, `_head`), `miles_ext/platform/checkpoints.py`, `miles_ext/launch/split/relay.py`, `miles_ext/launch/split/volume_sync.py`.
 Tests: `miles_ext/tests/test_split.py`, `test_split_gpu_delta.py`, `test_split_volume_sync.py`,
 `test_optimizer_host_gib.py`, `test_platform.py`. A multi-node split run has not run yet; see the PR for its status.
