@@ -229,6 +229,7 @@ def main():
                     help="no build: add this tag to an existing image (--image repo@sha256:...)")
     ap.add_argument("--image", default=None, help="with --mark-stable: the image, pinned by digest (copied into "
                     "stack.IMAGE_REPO when it is elsewhere)")
+    ap.add_argument("--also-tag", default=None, help="a moving tag to point at this image once it passes its check")
     ap.add_argument("--repo", default=None, help="Docker Hub repository (default: $DOCKERHUB_USERNAME/miles)")
     ap.add_argument("--workdir", default=None, help="keep layer tarballs here (a retry with the same pins reuses the deps layer)")
     args = ap.parse_args()
@@ -241,6 +242,8 @@ def main():
         repo = f"docker.io/{args.repo}" if args.repo else stack.IMAGE_REPO
     if args.mark_stable:
         return mark_stable(args, repo, user, token)
+    if args.also_tag and (args.also_tag == LATEST_TAG or re.fullmatch(STABLE_RE, args.also_tag)):
+        raise SystemExit(f"--also-tag {args.also_tag}: {LATEST_TAG} moves with --main, stable tags with --mark-stable")
     commit = git("rev-parse", args.commit)
     if git("diff", commit, "--", SGLANG_PATCHES) or git("ls-files", "--others", "--", SGLANG_PATCHES):
         raise SystemExit(
@@ -325,10 +328,12 @@ def main():
         if args.main:  # latest: what a run with trainer "latest" resolves to (miles_ext/platform/versions.py)
             check_image(f"{repo}@{digest}")  # versions.resolve's form, a different Modal image definition
             run_crane("tag", f"{target}@{digest}", LATEST_TAG)
+        if args.also_tag:
+            run_crane("tag", f"{target}@{digest}", args.also_tag)
     print(f"pushed {pushed} in {(time.monotonic() - t0) / 60:.1f} min\n"
           f'FORK_IMAGE = "{target}@{digest}"')
     print(json.dumps({"release": args.release, "version": version, "commit": commit, "image": f"{target}@{digest}",
-                      "moved": LATEST_TAG if args.main else None}))
+                      "moved": LATEST_TAG if args.main else args.also_tag}))
 
 
 def mark_stable(args, repo: str, user: str, token: str) -> None:

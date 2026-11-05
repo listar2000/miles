@@ -1,17 +1,17 @@
-# Builds main's tip into docker.io/starlimobius/miles-mobius (an immutable per-commit tag, then moves :main).
+# Builds main's tip (and, for RFC 0005, migration's on tags of its own) into docker.io/starlimobius/miles-mobius (an immutable per-commit tag, then moves :main).
 # fork/docker/build.py does the work; the deps layer is installed in a Modal container of the base image.
 name: miles-mobius image
 
 on:
   push:
-    branches: [main]
+    branches: [main, migration]  # migration: RFC 0005's caller-side testing, on its own tags
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: miles-mobius-image
+  group: miles-mobius-image-${{ github.ref_name }}
   cancel-in-progress: true  # build.py only builds origin/main's tip, so an older push has nothing left to build
 
 jobs:
@@ -35,5 +35,10 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
-          python fork/docker/build.py --main --commit "$GITHUB_SHA" | tee build.log
+          if [ "$GITHUB_REF_NAME" = migration ]; then
+            python fork/docker/build.py --repo starlimobius/miles-mobius --commit "$GITHUB_SHA" \
+              --release "migration-${GITHUB_SHA:0:10}" --also-tag migration | tee build.log
+          else
+            python fork/docker/build.py --main --commit "$GITHUB_SHA" | tee build.log
+          fi
           tail -n 1 build.log | jq -r '"Pushed `\(.image)` and moved `:\(.moved)` to it."' >> "$GITHUB_STEP_SUMMARY"
