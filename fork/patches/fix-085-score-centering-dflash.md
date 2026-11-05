@@ -26,7 +26,10 @@ head, 64 samples x 512 tokens per engine, re-scored by prefill on the plain engi
 | Selected-token mean abs(logprob - prefill) | 0.086 | 0.100 |
 | Tokens per verify | 3.9 | - |
 
-No adapter was loaded, so this does not show the draft under a moved policy; the end-to-end run does.
+No adapter was loaded in that check. End to end, with score centering, MIS, top-p replay, LoRA rank 32, lr 1e-4 and zero
+staleness on one B300:8 (`glm53-flash-lora-dflash2.yaml`): 5 rollouts ran clean, the train/rollout log-prob gap went
+0.026, 0.028, 0.035, 0.038, 0.039 as the largest adapter weight grew to 5e-4, 0 of 113,434 R3 rows were all zero on the
+last rollout, and accept length held at about 3.9.
 
 ## How it is applied
 `miles/utils/score_centering.py` and its test, marked `[fork fix-085]`. Verify:
