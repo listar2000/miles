@@ -7,6 +7,7 @@ repeated answer tag). Tasks come from a seed, so a set is reproducible.
   python stackvm.py make --out tasks.jsonl --per-level 32 --seed 1026 --levels 4,5
   python stackvm.py selftest
 """
+
 import argparse
 import json
 import random
@@ -14,6 +15,7 @@ import re
 
 MOD = 97
 MAX_DEPTH = 8  # stack items, so the answer stays short
+
 
 def spec(mod):
     return f"""You will run a program written in STAK, a small stack language. The stack holds whole numbers from 0 to {mod - 1};
@@ -38,12 +40,27 @@ REP k {{ ... }}   run the block inside the braces k times (blocks can be nested)
 
 Every program is valid: no instruction ever runs on a stack that is too short."""
 
+
 INSTRUCTION = """Give the final stack from top to bottom, numbers separated by single spaces, inside one answer tag, as the last
 thing you write. For example, if the stack ends as bottom..top 5 0 12, answer <answer>12 0 5</answer>."""
 
 # op -> (items it needs, net change in stack size)
-OPS = {"PUSH": (0, 1), "POP": (1, -1), "DUP": (1, 1), "SWAP": (2, 0), "OVER": (2, 1), "ROT": (3, 0), "SINK": (1, 0),
-       "FLIP": (1, 0), "ADD": (2, -1), "SUB": (2, -1), "MUL": (2, -1), "NEG": (1, 0), "HALF": (1, 0), "CMP": (2, -1)}
+OPS = {
+    "PUSH": (0, 1),
+    "POP": (1, -1),
+    "DUP": (1, 1),
+    "SWAP": (2, 0),
+    "OVER": (2, 1),
+    "ROT": (3, 0),
+    "SINK": (1, 0),
+    "FLIP": (1, 0),
+    "ADD": (2, -1),
+    "SUB": (2, -1),
+    "MUL": (2, -1),
+    "NEG": (1, 0),
+    "HALF": (1, 0),
+    "CMP": (2, -1),
+}
 
 # level -> straight-line instructions, REP blocks, max nesting, executed-instruction range, modulus, max REP count
 LEVELS = {
@@ -197,10 +214,21 @@ def make(out, per_level, seed, levels):
     for level in levels:
         for i in range(per_level):
             prog, stack, executed = make_task(rng, level)
-            rows.append({"prompt": [{"role": "user", "content": prompt_text(prog, LEVELS[level]["mod"])}],
-                         "metadata": {"task": TASK, "label": answer_of(stack), "level": level,
-                                      "id": f"L{level}-{i:03d}", "seed": seed, "executed": executed, "mod": LEVELS[level]["mod"],
-                                      "program": render(prog)}})
+            rows.append(
+                {
+                    "prompt": [{"role": "user", "content": prompt_text(prog, LEVELS[level]["mod"])}],
+                    "metadata": {
+                        "task": TASK,
+                        "label": answer_of(stack),
+                        "level": level,
+                        "id": f"L{level}-{i:03d}",
+                        "seed": seed,
+                        "executed": executed,
+                        "mod": LEVELS[level]["mod"],
+                        "program": render(prog),
+                    },
+                }
+            )
     with open(out, "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
@@ -216,25 +244,30 @@ def selftest():
     assert run([("PUSH", 2), ("REP", 3, [("DUP", None), ("ADD", None)])])[0] == [16]
     assert run([("PUSH", 4), ("PUSH", 9), ("CMP", None)])[0] == [1]
     assert answer_of([5, 0, 12]) == "12 0 5"
-    for resp, want in [("<think>maybe <answer>1</answer></think>\nSo <answer>12 0 5</answer>", (1, "ok")),
-                       ("<answer>12 00 5</answer>", (1, "ok")),
-                       ("<answer> 12  0\n5 </answer>", (1, "ok")),
-                       ("<answer>12 0</answer>", (0, "wrong")),
-                       ("<answer>12 0 5 0</answer>", (0, "wrong")),
-                       ("12 0 5", (0, "no_answer")),
-                       ("<answer>12 0 5</answer> or <answer>5 0 12</answer>", (0, "multi_answer")),
-                       ("<answer>12, 0, 5</answer>", (0, "bad_format")),
-                       ("<answer>-3</answer>", (0, "bad_format")),
-                       ("<answer></answer>", (0, "bad_format")),
-                       ("<think>long reasoning cut off <answer>12 0 5", (0, "no_answer"))]:
+    for resp, want in [
+        ("<think>maybe <answer>1</answer></think>\nSo <answer>12 0 5</answer>", (1, "ok")),
+        ("<answer>12 00 5</answer>", (1, "ok")),
+        ("<answer> 12  0\n5 </answer>", (1, "ok")),
+        ("<answer>12 0</answer>", (0, "wrong")),
+        ("<answer>12 0 5 0</answer>", (0, "wrong")),
+        ("12 0 5", (0, "no_answer")),
+        ("<answer>12 0 5</answer> or <answer>5 0 12</answer>", (0, "multi_answer")),
+        ("<answer>12, 0, 5</answer>", (0, "bad_format")),
+        ("<answer>-3</answer>", (0, "bad_format")),
+        ("<answer></answer>", (0, "bad_format")),
+        ("<think>long reasoning cut off <answer>12 0 5", (0, "no_answer")),
+    ]:
         assert grade(resp, "12 0 5") == want, (resp, grade(resp, "12 0 5"))
     rows = make("/dev/null", 32, 1026, list(LEVELS))
     for r in rows:
         lab = r["metadata"]["label"]
         assert grade(f"<answer>{lab}</answer>", lab) == (1, "ok")
     assert len({r["metadata"]["program"] for r in rows}) == len(rows)
-    print("selftest ok;", {lv: sorted(r["metadata"]["executed"] for r in rows if r["metadata"]["level"] == lv)[16]
-                           for lv in LEVELS}, "median executed per level")
+    print(
+        "selftest ok;",
+        {lv: sorted(r["metadata"]["executed"] for r in rows if r["metadata"]["level"] == lv)[16] for lv in LEVELS},
+        "median executed per level",
+    )
 
 
 if __name__ == "__main__":
