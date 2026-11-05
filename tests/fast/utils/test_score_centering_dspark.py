@@ -15,6 +15,7 @@ def test_only_exact_drafts_are_allowed(algorithm: str, monkeypatch: pytest.Monke
             validate_score_centering_args(_args(sglang_speculative_algorithm=other))
 
 
+# [fork fix-085]
 @pytest.mark.parametrize("field", ["single", "acc"])
 def test_dflash_with_lowered_thresholds_is_refused(field: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SGLANG_SIMULATE_ACC_LEN", raising=False)
