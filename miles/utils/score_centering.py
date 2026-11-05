@@ -1,10 +1,25 @@
 """Configuration contracts for score centering (arXiv:2609.20807)."""
 
+import json
 import math
 import os
 from argparse import Namespace
+from pathlib import Path
 
 from miles.utils.rollout_topk_logprobs import validate_rollout_topk_logprobs_sampling
+
+
+def _validate_dflash_draft(args: Namespace) -> None:  # [fork fix-085]
+    if (
+        getattr(args, "sglang_speculative_accept_threshold_single", 1.0) != 1.0
+        or getattr(args, "sglang_speculative_accept_threshold_acc", 1.0) != 1.0
+    ):
+        raise ValueError("Score centering with DFLASH requires acceptance thresholds of 1.0: lower ones are not exact")
+    config = Path(getattr(args, "sglang_speculative_draft_model_path", None) or "") / "config.json"
+    if not config.is_file() or "DFlash2DraftModel" not in json.loads(config.read_text()).get("architectures", []):
+        raise ValueError(
+            f"Score centering with DFLASH requires a local DFlash2 draft (no DFlash2DraftModel in {config})"
+        )
 
 
 def validate_score_centering_args(args: Namespace) -> None:
@@ -36,9 +51,12 @@ def validate_score_centering_args(args: Namespace) -> None:
         "use_opd": "distillation composition is not supported",
         "custom_convert_samples_to_train_data_path": "custom converters skip rollout top-k logprobs validation",
     }
-    # [fork fix-058] DSpark samples exactly from the target and reports logprobs and top-k from its verify
-    # logits; other speculative modes stay refused (fork/patches/fix-058-score-centering-dspark.md).
-    if str(getattr(args, "sglang_speculative_algorithm", None) or "").upper() == "DSPARK":
+    # [fork fix-058] [fork fix-085] Score centering requires exact target sampling and matching verify logprobs.
+    # DFLASH must keep its acceptance thresholds at 1.0 and use DFlash2's selector, the checked path.
+    algorithm = str(getattr(args, "sglang_speculative_algorithm", None) or "").upper()
+    if algorithm == "DFLASH":
+        _validate_dflash_draft(args)
+    if algorithm in ("DSPARK", "DFLASH"):
         if float(os.environ.get("SGLANG_SIMULATE_ACC_LEN") or -1) > 0:
             raise ValueError("Score centering requires SGLANG_SIMULATE_ACC_LEN unset: forced acceptance is not exact")
         del incompatible["sglang_speculative_algorithm"]
