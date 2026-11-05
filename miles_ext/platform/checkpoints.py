@@ -192,9 +192,9 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
     return plan
 
 
-def remove_other_node_shards(volume, results_root, dropped: list[dict], nodes: int) -> None:
-    """Rank 0's retention deletes only its view of the volume; drop the other nodes' shards of ``dropped`` saves
-    from the volume too. Call after rank 0 committed its deletion. A failure never stops training."""
+def remove_other_node_shards(storage, results_root, dropped: list[dict], nodes: int) -> None:
+    """Rank 0's retention deletes only its view of the storage (``miles_ext.node.storage``); drop the other nodes'
+    shards of ``dropped`` saves too. Call after rank 0 committed its deletion. A failure never stops training."""
     from pathlib import Path
 
     if nodes == 1:
@@ -202,9 +202,7 @@ def remove_other_node_shards(volume, results_root, dropped: list[dict], nodes: i
     for save in dropped:
         path = str(Path(save["path"]).relative_to(results_root))
         try:
-            volume.remove_file(path, recursive=True)
-        except modal.exception.NotFoundError:
-            pass
+            storage.remove(path)
         except Exception as e:
             print(f"retention: removing {path}: {type(e).__name__}: {e}", flush=True)
 

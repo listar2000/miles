@@ -48,6 +48,9 @@ import modal
 from miles_ext import stack
 from miles_ext.checkpoint import save_policy
 from miles_ext.launch import split
+from miles_ext.node import contract as C
+from miles_ext.node import storage as node_storage
+from miles_ext.node.adapters.modal_volume import VOLUMES_ENV
 from miles_ext.obs import sandbox_profile
 from miles_ext.platform import compile_cache
 from miles_ext.platform.checkpoints import apply_retention_local, remove_other_node_shards
@@ -140,10 +143,20 @@ else:
     image = fork_image(FROM_COMMIT or None, IMAGE or None)
     if (LAUNCH or {}).get("trainer"):
         image = image.env({TRAINER_ENV: LAUNCH["trainer"]})
+MOUNTED_VOLUMES = {
+    str(R.MODELS): TARGET.weights_volume,
+    str(R.RESULTS): TARGET.results_volume,
+    str(compile_cache.MOUNT): compile_cache_volume_name(TARGET),
+}
+NODE_ENV = {
+    C.STORAGE_ENV: node_storage.MODAL_VOLUME,
+    VOLUMES_ENV: json.dumps(MOUNTED_VOLUMES),
+}
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),
                                   _TARGET_ENV: json.dumps(TARGET.as_dict(), sort_keys=True),
-                                  _RETENTION_ENV: "1" if FINAL_RETENTION else "0"})
+                                  _RETENTION_ENV: "1" if FINAL_RETENTION else "0",
+                                  **NODE_ENV})
 INPUTS_ON_VOLUME = ((LAUNCH or {}).get("inputs") == "volume") if modal.is_local() else \
     os.environ.get(_INPUTS_ENV) == "volume"
 # taskset.tasks_volume: every function mounts that volume read-only (the container gets its name back
@@ -272,8 +285,8 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     rank = cluster.container_rank()
     ips = cluster.container_ips(family="ipv4")
     head_ip, node_ip = ips[0], ips[rank]
-    models_volume.reload()
-    results_volume.reload()  # see checkpoints committed by an earlier container
+    node_storage.for_mount(R.MODELS).refresh()
+    node_storage.for_mount(R.RESULTS).refresh()  # see checkpoints committed by an earlier container
     if INPUTS_ON_VOLUME:
         _inputs(run_id, tasks=R.reads_task_dirs(recipe))
     # a relaunch of a finished run (the caller's timer fired after the final save): every
@@ -312,9 +325,10 @@ if SPLIT:
 
         recipe = R.from_dict(recipe)
         _check_shape(recipe)
-        models_volume.reload()
+        node_storage.for_mount(R.MODELS).refresh()
         compile_cache.restore(_compile_cache_key())
-        saver = compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start()
+        cache_commit = node_storage.for_mount(compile_cache.MOUNT).commit
+        saver = compile_cache.Saver(_compile_cache_key(), cache_commit).start()
         env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": _pythonpath()}
         try:
             return split_engine.serve(
@@ -322,7 +336,7 @@ if SPLIT:
                 run_id,
                 progress=P.progress_dict(TARGET),
                 env=env,
-                results_volume=results_volume,
+                storage=node_storage.for_mount(R.RESULTS),
                 call_id=modal.current_function_call_id(),
             )
         finally:
@@ -356,7 +370,7 @@ def _ensure_engine(recipe: dict, run_id: str) -> str | None:
 
 def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> threading.Event:
     """Apply checkpoint retention (final=False) each time the tracker moves; set the returned event to stop."""
-    ckpt, stop = recipe["checkpoint"], threading.Event()
+    ckpt, stop, storage = recipe["checkpoint"], threading.Event(), node_storage.for_mount(R.RESULTS)
 
     def loop() -> None:
         seen = read_tracker(run_dir)
@@ -373,8 +387,8 @@ def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> thr
                     final=False,
                 )
                 if dropped:
-                    results_volume.commit()
-                    remove_other_node_shards(results_volume, R.RESULTS, dropped, SHAPE["nodes"])
+                    storage.commit()
+                    remove_other_node_shards(storage, R.RESULTS, dropped, SHAPE["nodes"])
                     print(f"retention (tracker {step}): removed {[d['step'] for d in dropped]}", flush=True)
             except Exception as e:  # retention never stops training
                 print(f"retention (tracker {step}) failed: {type(e).__name__}: {e}", flush=True)
@@ -396,7 +410,7 @@ def _complete_at_launch(recipe: dict, run_id: str, run_dir, backend: str) -> dic
               "next_rollout_id": P.next_rollout_id(backend, tracker), "metrics": {},
               "image": _image_info(), "note": "already complete at launch", "tail": []}
     write_exit_record(run_dir, record)
-    results_volume.commit()
+    node_storage.for_mount(R.RESULTS).commit()
     with contextlib.suppress(Exception):
         d, keys = P.progress_dict(TARGET), P.keys(run_id)
         d[keys["exit"]] = record
@@ -440,7 +454,7 @@ def _split_links(recipe: dict, run_id: str, run_dir, env: dict, stack_ctx: conte
     from miles_ext.launch.split import relay, volume_sync
     from miles_ext.platform import progress as P
 
-    stack_ctx.callback(volume_sync.commit_watcher(results_volume.commit).set)
+    stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.RESULTS).commit).set)
     relay_proc, _, agent_url = relay.connect(
         recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
     )
@@ -457,9 +471,11 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
 
     stop = threading.Event()
     stack_ctx = contextlib.ExitStack()
-    saver = compile_cache.Saver(_compile_cache_key(), cache_volume.commit, node=rank).start()
+    storage = node_storage.for_mount(R.RESULTS)
+    cache_commit = node_storage.for_mount(compile_cache.MOUNT).commit
+    saver = compile_cache.Saver(_compile_cache_key(), cache_commit, node=rank).start()
     threading.Thread(target=shards.worker_commits, daemon=True, args=(
-        run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
+        run_id, rank, P.progress_dict(TARGET), completion_queue, storage.commit, stop),
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
     try:
         if SPLIT:  # first: the head opens its port only after the engines serve, which can take longer than this wait
@@ -471,7 +487,7 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
     finally:
         stack_ctx.close()
         stop.set()
-        results_volume.commit()
+        storage.commit()
         saver.stop()
 
 
@@ -490,8 +506,10 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
     succeeded = False
     record = supervisor = None
     stack_ctx = contextlib.ExitStack()
-    # kernels compiled and tuned by this segment reach the volume while it runs and at exit
-    stack_ctx.callback(compile_cache.Saver(_compile_cache_key(), cache_volume.commit).start().stop)
+    storage = node_storage.for_mount(R.RESULTS)
+    # kernels compiled and tuned by this segment reach the storage while it runs and at exit
+    cache_commit = node_storage.for_mount(compile_cache.MOUNT).commit
+    stack_ctx.callback(compile_cache.Saver(_compile_cache_key(), cache_commit).start().stop)
     try:
         step = read_tracker(run_dir)
         resume = step is not None
@@ -510,7 +528,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                         "resume": resume, "segment": segment, "deadline": deadline, "recipe": recipe,
                         "argv": args}, indent=1)
         )
-        commit = shards.head_commit(run_id, nodes, P.progress_dict(TARGET), completion_queue, results_volume.commit,
+        commit = shards.head_commit(run_id, nodes, P.progress_dict(TARGET), completion_queue, storage.commit,
                                     key=P.keys(run_id)["commit"])
         supervisor = Supervisor(run_id, recipe, run_dir, progress_dict=P.progress_dict(TARGET), segment=segment,
                                 deadline=deadline, commit=commit, image=_image_info(),
@@ -571,8 +589,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
                                             keep_every=ckpt["keep_every"],
                                             final=True)
-            results_volume.commit()
-            remove_other_node_shards(results_volume, R.RESULTS, dropped, SHAPE["nodes"])
+            storage.commit()
+            remove_other_node_shards(storage, R.RESULTS, dropped, SHAPE["nodes"])
             removed = [f"{d['kind']}:{d['step']}" for d in dropped]
             print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
         return record
@@ -583,7 +601,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         raise
     finally:
         stack_ctx.close()
-        results_volume.commit()
+        storage.commit()
         _terminate_task_sandboxes(recipe, run_id)
         for _ in range(nodes - 1):
             completion_queue.put(succeeded, partition=run_id)

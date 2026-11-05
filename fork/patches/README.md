@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-062 | Ext | Storage interface: every node-side commit and refresh goes through `miles_ext.node.storage`, posix by default, a Modal volume through its adapter | active | [ext-062-node-storage.md](ext-062-node-storage.md) |
 | ext-061 | Ext | The image's node entry: `python -m miles_ext.node`, the contract's names and `manifest` (RFC 0005) | active | [ext-061-node-contract.md](ext-061-node-contract.md) |
 | ext-060 | Ext | Single-turn graders by dotted path in `metadata.task` | active | [ext-060-single-turn-grader-paths.md](ext-060-single-turn-grader-paths.md) |
 | ext-059 | Ext | `cluster.placement: split` with N trainer nodes: relays and commits on every node, GPU-delta budget per node | active; remove with ext-036 | [ext-059-split-trainer-nodes.md](ext-059-split-trainer-nodes.md) |

@@ -105,7 +105,7 @@ def _wait_healthy(ports: list[int], procs: list[subprocess.Popen]):
         time.sleep(POLL_SECS)
 
 
-def serve(recipe: dict, run_id: str, *, progress, env: dict, results_volume, call_id: str | None) -> dict:
+def serve(recipe: dict, run_id: str, *, progress, env: dict, storage, call_id: str | None) -> dict:
     """Start the engines, publish the tunnel, serve until the trainer is done or gone. Returns the end state."""
     from miles_ext.launch.split.agent import Agent
 
@@ -122,7 +122,7 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, results_volume, cal
             print(f"engine: {cmd}", flush=True)
             procs.append(_start_engine(cmd, engine_env))
         _wait_healthy(ports, procs)
-        agent = Agent(ports, gpus_per_engine=spec["gpus_per_engine"], results_volume=results_volume)
+        agent = Agent(ports, gpus_per_engine=spec["gpus_per_engine"], storage=storage)
         agent.start(agent_port)
         token = secrets.token_urlsafe(24)
         proxy = subprocess.Popen(

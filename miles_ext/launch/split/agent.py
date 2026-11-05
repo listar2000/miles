@@ -1,4 +1,4 @@
-"""Engine side of the split adapter sync (ext-037): replay each sync from the volume into the engines."""
+"""Engine side of the split adapter sync (ext-037): replay each sync from the shared storage into the engines."""
 
 import asyncio
 import json
@@ -14,9 +14,9 @@ TENSORS = "adapter.safetensors"
 class Agent:
     """The engine container's sync endpoint: /connect (the trainer is there) and /push (apply one sync)."""
 
-    def __init__(self, engine_ports: list[int], *, gpus_per_engine: int, results_volume):
+    def __init__(self, engine_ports: list[int], *, gpus_per_engine: int, storage):
         self.engine_ports, self.gpus_per_engine = engine_ports, gpus_per_engine
-        self.results_volume = results_volume
+        self.storage = storage
         self.lock = asyncio.Lock()
 
     def start(self, port: int) -> None:
@@ -56,9 +56,9 @@ class Agent:
             async with self.lock:
                 try:
                     t0 = time.monotonic()
-                    await asyncio.to_thread(self.results_volume.reload)
+                    await asyncio.to_thread(self.storage.refresh)
                     if not Path(body["dir"]).is_dir():
-                        raise FileNotFoundError(f"{body['dir']} not on the volume after reload")
+                        raise FileNotFoundError(f"{body['dir']} not on the storage after refresh")
                 except Exception as e:
                     return web.json_response({"ok": False, "error": f"{type(e).__name__}: {e}"[:2000]})
             return web.json_response({"ok": True, "reload_s": time.monotonic() - t0})
@@ -80,7 +80,7 @@ class Agent:
         from safetensors.torch import load_file
 
         t0 = time.monotonic()
-        await asyncio.to_thread(self.results_volume.reload)
+        await asyncio.to_thread(self.storage.refresh)
         manifest = json.loads((sync_dir / MANIFEST).read_text())
         tensors = await asyncio.to_thread(load_file, str(sync_dir / TENSORS))
         t1 = time.monotonic()

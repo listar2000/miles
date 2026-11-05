@@ -2,6 +2,8 @@
 
 from miles_ext.recipes import recipe as R
 
+STORAGE_ENV = "MILES_STORAGE"  # miles_ext.node.storage
+
 # ---- ports a node opens ----
 SESSION_PROXY_PORT = R.PROXY_PORT  # rank 0, in-sandbox harnesses
 REGISTRY_PORT = 30999  # rank 0, split

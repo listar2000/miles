@@ -563,16 +563,14 @@ def test_unknown_recipe_key_is_a_recipe_error():
 def test_retention_removes_other_node_shards_on_multi_node_runs():
     from unittest.mock import Mock
 
-    from modal.exception import NotFoundError
-
     dropped = [{"path": "/results/run1/checkpoints/iter_0000002"}, {"path": "/results/run1/checkpoints/iter_0000004"}]
-    volume = Mock()
-    volume.remove_file.side_effect = [NotFoundError("gone"), None]
-    C.remove_other_node_shards(volume, "/results", dropped, nodes=2)
-    assert [c.args[0] for c in volume.remove_file.call_args_list] == [
+    storage = Mock()
+    storage.remove.side_effect = [RuntimeError("a failure never stops training"), None]
+    C.remove_other_node_shards(storage, "/results", dropped, nodes=2)
+    assert [c.args[0] for c in storage.remove.call_args_list] == [
         "run1/checkpoints/iter_0000002",
         "run1/checkpoints/iter_0000004",
     ]
     single = Mock()
     C.remove_other_node_shards(single, "/results", dropped, nodes=1)
-    single.remove_file.assert_not_called()
+    single.remove.assert_not_called()
