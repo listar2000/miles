@@ -591,8 +591,9 @@ def _validate_sampling(recipe: dict) -> None:
     if bounded and spec and spec not in EXACT_SAMPLING_DRAFTS:
         raise ValueError(f"top-p or top-k replay needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec}: "
                          "SGLang refuses return_sampling_mask with it; set rollout.speculative false")
-    if algo["loss"] == "score_centering" and spec and spec != "DSPARK":
-        raise ValueError(f"score_centering accepts DSpark only, not {spec} (fix-058); set rollout.speculative false")
+    if algo["loss"] == "score_centering" and spec and spec not in EXACT_SAMPLING_DRAFTS:
+        raise ValueError(f"score_centering needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec} "
+                         "(fix-058, fix-085); set rollout.speculative false")
 
 
 def _validate_rollout(recipe: dict) -> None:
