@@ -1,7 +1,9 @@
 # STAK overfit on DeepSeek-V4.1-Flash LoRA
 
-Our only clean overfit so far, kept as a repeatable experiment: a rank-32 LoRA on DeepSeek-V4.1-Flash raises reward on 32
-fixed prompts. Started as loose files on 2026-10-26; formalized here 2026-11-05.
+Our only clean overfit so far: training on 32 fixed questions until the model answers nearly all of them. An overfit
+checks that the training loop can raise reward at all. STAK is a made-up stack language: each question is a short program,
+and the answer is its final stack. The model is DeepSeek-V4.1-Flash with a rank-32 LoRA, a small trainable adapter over
+frozen weights. First run 2026-10-26 from loose files; kept here as an example since 2026-11-05.
 
 ## Data
 
@@ -12,6 +14,8 @@ grader's dotted path, which `miles_ext.tasks.single_turn` imports.
 
 Other single-turn recipes (`glm53-flash-4layer-smoke`, `glm53-flash-split-gpud`, `glm53-flash-stak`) can use this file as
 their payload with `MILES_DATA` set to this folder. Their code does not import this experiment.
+
+To make a new task set: `python stackvm.py make --out tasks.jsonl --per-level 32 --seed 1026 --levels 4,5`.
 
 ## Recipes
 
@@ -28,9 +32,9 @@ runs always serve the adapter. These files have not run on the current image; th
 
 ## Results
 
-| Run | Image | Reward | Notes |
-| --- | --- | --- | --- |
-| `overfit-stak-nosc-1026-a1` | `pr-ext038-d311deeb0f` | 0.58 to 0.97 by batch 11 | 14 steps, then stopped at the money cap; 0.78 at batch 14 as replies passed the 8k cap, which scores 0 |
-| `overfit-stak-sc-1026-a1` | same | 0.58 to 0.93 by batch 6 | 13 steps; 0.29 at batch 10, 0.92 by batch 13 |
+| Score centering | Reward | Notes |
+| --- | --- | --- |
+| off | 0.58 to 0.97 by batch 11 | 14 steps, then stopped at the money cap; 0.78 at batch 14 as replies passed the 8k cap, which scores 0 |
+| on | 0.58 to 0.93 by batch 6 | 13 steps, then stopped at the money cap; 0.29 at batch 10, 0.92 by batch 13 |
 
-About 13.3 min per step and ~$485 per run. W&B `mobiuslab/miles-dsv41`, tag `exp:overfit-stak`.
+Both ran on image `pr-ext038-d311deeb0f`. About 13.3 min per step and ~$485 per run. W&B `mobiuslab/miles-dsv41`, tag `exp:overfit-stak`.

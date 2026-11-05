@@ -20,6 +20,7 @@ HERE = Path(__file__).parent
         ("<answer> 12  0\n5 </answer>", (1, "ok")),
         ("<answer>12 0</answer>", (0, "wrong")),
         ("<answer>5 0 12</answer>", (0, "wrong")),
+        ("<answer>12 0 5 0</answer>", (0, "wrong")),
         ("12 0 5", (0, "no_answer")),
         ("<think>cut off before answering <answer>12 0 5", (0, "no_answer")),
         ("<answer>12 0 5</answer> or <answer>5 0 12</answer>", (0, "multi_answer")),

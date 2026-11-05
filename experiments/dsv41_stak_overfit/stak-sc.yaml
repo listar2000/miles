@@ -1,4 +1,4 @@
-# STAK overfit, score centering on: the 2026-10-26 recipe (overfit-stak-sc-1026-a1), DeepSeek-V4.1-Flash LoRA r32, thinking off.
+# STAK overfit on DeepSeek-V4.1-Flash LoRA r32; score centering on, thinking off.
 name: dsv41-flash-overfit-stak-sc
 model:
   preset: deepseek-v4.1-flash
@@ -12,7 +12,7 @@ cluster:
   timeout_hours: 5
 parallel:
   tp: 4
-  pp: 1  # adapter sync to separate engines needs PP 1 (hook-011)
+  pp: 1
   cp: 2
   ep: 8
 lora:
@@ -28,7 +28,7 @@ taskset:
   harness: single-turn
 algorithm:
   mode: fully_async
-  num_rollout: 20  # both runs were stopped at a money cap after 13-14 steps
+  num_rollout: 20
   rollout_batch_size: 32
   n_samples: 8
   temperature: 1.0
@@ -44,7 +44,7 @@ algorithm:
   grpo_std_normalization: false
   per_token_loss: true
   loss: score_centering
-  is_correction: mis  # MIS token mask over mis_bounds [0.5, 5.0] (default)
+  is_correction: mis
   top_logprobs: 64  # support mode: array width; must hold top-k 32 plus cutoff ties
 async:
   max_concurrent_samples: 256

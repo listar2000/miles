@@ -1,12 +1,5 @@
-"""Made-up stack language tasks: generator, interpreter and verifier.
+"""Generate, execute and grade STAK stack-language tasks."""
 
-Every task is one program in a small invented language; the model reads the spec, runs the program in its head and
-answers with the final stack. Reward is 1 for an exact match of the stack, 0 otherwise (also 0 for a missing or
-repeated answer tag). Tasks come from a seed, so a set is reproducible.
-
-  python stackvm.py make --out tasks.jsonl --per-level 32 --seed 1026 --levels 4,5
-  python stackvm.py selftest
-"""
 
 import argparse
 import json
@@ -244,20 +237,6 @@ def selftest():
     assert run([("PUSH", 2), ("REP", 3, [("DUP", None), ("ADD", None)])])[0] == [16]
     assert run([("PUSH", 4), ("PUSH", 9), ("CMP", None)])[0] == [1]
     assert answer_of([5, 0, 12]) == "12 0 5"
-    for resp, want in [
-        ("<think>maybe <answer>1</answer></think>\nSo <answer>12 0 5</answer>", (1, "ok")),
-        ("<answer>12 00 5</answer>", (1, "ok")),
-        ("<answer> 12  0\n5 </answer>", (1, "ok")),
-        ("<answer>12 0</answer>", (0, "wrong")),
-        ("<answer>12 0 5 0</answer>", (0, "wrong")),
-        ("12 0 5", (0, "no_answer")),
-        ("<answer>12 0 5</answer> or <answer>5 0 12</answer>", (0, "multi_answer")),
-        ("<answer>12, 0, 5</answer>", (0, "bad_format")),
-        ("<answer>-3</answer>", (0, "bad_format")),
-        ("<answer></answer>", (0, "bad_format")),
-        ("<think>long reasoning cut off <answer>12 0 5", (0, "no_answer")),
-    ]:
-        assert grade(resp, "12 0 5") == want, (resp, grade(resp, "12 0 5"))
     rows = make("/dev/null", 32, 1026, list(LEVELS))
     for r in rows:
         lab = r["metadata"]["label"]
