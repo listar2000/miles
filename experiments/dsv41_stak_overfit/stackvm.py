@@ -1,6 +1,5 @@
 """Generate, execute and grade STAK stack-language tasks."""
 
-
 import argparse
 import json
 import random
