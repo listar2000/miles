@@ -41,8 +41,8 @@ line and the env vars the rollout workers read.
   weights at `/models/...` and outputs at `/results/<run_id>`.
 - Prompt rows for the Harbor harnesses: `{"prompt": ..., "metadata": {"instance_id": "<task dir>"}}`.
   Upstream's [SWE agent example](../../docs/examples/swe-agent-harbor-docker.md)
-  describes the same format. Rows for `single-turn` carry `metadata.task` and
-  `metadata.label` instead (`miles_ext/tasks/single_turn.py`).
+  describes the same format. Rows for `single-turn` carry `metadata.task` (the dotted
+  path of a grader) and `metadata.label` instead (`miles_ext/tasks/single_turn.py`).
 
 ## Overrides at launch
 

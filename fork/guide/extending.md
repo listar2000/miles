@@ -30,7 +30,7 @@ image. Code reaches the image in one way only: as a commit of this repo
 | A new loss | Miles' `--loss-type custom_loss` with `--custom-loss-function-path`. `algorithm.loss` allows only `policy_loss` and `score_centering` today, so this also needs a new recipe field (an Ext change to `recipe.py`) | `miles_ext/<area>/` |
 | A new agent harness | a new `taskset.harness` value in `HARNESSES` (`miles_ext/recipes/recipe.py`) and the agent function it maps to (today: mini-swe-agent in the sandbox or on the host, Terminus-2, DeepSeek's dsh and Pi in the sandbox, and `single-turn`) | a new `miles_ext/harnesses/<harness>/` (its Harbor agent class, pins and assets; `harnesses/common.py` has the in-sandbox setup) |
 | A new reward for agent tasks | the task's own Harbor verifier (its tests). `miles_ext/harbor/reward.py` just passes Harbor's verdict on | the task set (yours) |
-| A new single-turn task type | a verifier in `VERIFIERS` (`miles_ext/tasks/single_turn.py`) | `miles_ext/tasks/` |
+| A new single-turn task type | a `grade(reply, label)` function; each prompt row names it by dotted path in `metadata.task` (`miles_ext/tasks/single_turn.py`) | with its experiment, `experiments/<name>/` |
 | A new task set | Harbor task dirs plus a prompt file | your project; `taskset.tasks_volume` to keep it on a Modal volume |
 | A new sandbox provider | Harbor environment through `import_path` | `miles_ext/sandboxes/`; see `docs/developer/adding-a-sandbox-provider.md` |
 | A new model | a preset in `miles_ext/recipes/presets.py` | maintainers: open an issue first |
