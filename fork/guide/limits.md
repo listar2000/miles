@@ -27,8 +27,8 @@ a recipe.
 
 ## Algorithms
 
-- `algorithm.loss: score_centering` accepts DSpark speculative decoding and refuses
-  every other speculative mode ([fix-058](../patches/fix-058-score-centering-dspark.md)).
+- `algorithm.loss: score_centering` accepts DSpark and DFlash2 speculative decoding and refuses every other
+  speculative mode ([fix-058](../patches/fix-058-score-centering-dspark.md), [fix-085](../patches/fix-085-score-centering-dflash.md)).
 - Top-p and top-k replay need no draft or a DFlash-family draft (DSpark, DFlash2); recipes refuse them with EAGLE
   ([ext-067](../patches/ext-067-glm53-dflash2.md)).
 - `advantage_estimator: ppo` is not available: recipes build no critic (`ADVANTAGE_ESTIMATORS` in `recipe.py`).
