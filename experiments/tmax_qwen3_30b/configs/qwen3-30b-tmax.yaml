@@ -1,0 +1,16 @@
+model: qwen3-30b-a3b-thinking-2507
+image: docker.io/starlimobius/miles-mobius@sha256:57da688241e00c792472324ef15b8cc84c67e786facca5964488d1d5bd046365  # main@94b1f92a20
+data:
+  volume: miles-rl-datasets
+  records: sft/tmax-qwen3-30b-recipe/records
+  shards: sft/tmax-qwen3-30b-recipe/shards
+  max_tokens: 65536
+train:
+  epochs: 2
+  batch: 128
+  lr: 2.0e-5
+  decay: linear
+  warmup: 0.03
+  cp: 2
+val: {interval: 20}
+tracking: {wandb_project: miles-sft}
