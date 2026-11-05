@@ -38,7 +38,14 @@ def validate_score_centering_args(args: Namespace) -> None:
     }
     # [fork fix-058] DSpark samples exactly from the target and reports logprobs and top-k from its verify
     # logits; other speculative modes stay refused (fork/patches/fix-058-score-centering-dspark.md).
-    if str(getattr(args, "sglang_speculative_algorithm", None) or "").upper() == "DSPARK":
+    # [fork fix-085] DFlash2's selector accepts with DSpark's kernel, when its thresholds stay at the exact 1.0.
+    algorithm = str(getattr(args, "sglang_speculative_algorithm", None) or "").upper()
+    if algorithm == "DFLASH" and (
+        getattr(args, "sglang_speculative_accept_threshold_single", 1.0) != 1.0
+        or getattr(args, "sglang_speculative_accept_threshold_acc", 1.0) != 1.0
+    ):
+        raise ValueError("Score centering with DFLASH requires acceptance thresholds of 1.0: lower ones are not exact")
+    if algorithm in ("DSPARK", "DFLASH"):
         if float(os.environ.get("SGLANG_SIMULATE_ACC_LEN") or -1) > 0:
             raise ValueError("Score centering requires SGLANG_SIMULATE_ACC_LEN unset: forced acceptance is not exact")
         del incompatible["sglang_speculative_algorithm"]

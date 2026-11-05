@@ -6,13 +6,21 @@ from tests.fast.fixtures.score_centering_fixtures import _args
 from miles.utils.score_centering import validate_score_centering_args
 
 
-@pytest.mark.parametrize("algorithm", ["DSPARK", "dspark"])
-def test_only_dspark_is_allowed(algorithm: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("algorithm", ["DSPARK", "dspark", "DFLASH"])
+def test_only_exact_drafts_are_allowed(algorithm: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SGLANG_SIMULATE_ACC_LEN", raising=False)
     validate_score_centering_args(_args(sglang_speculative_algorithm=algorithm))
-    for other in ("EAGLE", "EAGLE3", "NGRAM", "DFLASH"):
+    for other in ("EAGLE", "EAGLE3", "NGRAM"):
         with pytest.raises(ValueError, match="sglang-speculative-algorithm"):
             validate_score_centering_args(_args(sglang_speculative_algorithm=other))
+
+
+@pytest.mark.parametrize("field", ["single", "acc"])
+def test_dflash_with_lowered_thresholds_is_refused(field: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SGLANG_SIMULATE_ACC_LEN", raising=False)
+    args = _args(sglang_speculative_algorithm="DFLASH", **{f"sglang_speculative_accept_threshold_{field}": 0.5})
+    with pytest.raises(ValueError, match="thresholds"):
+        validate_score_centering_args(args)
 
 
 @pytest.mark.parametrize("value,refused", [("3.5", True), ("1", True), ("-1", False), ("", False)])
