@@ -17,3 +17,4 @@ or a design that several changes follow.
 | [0002 SFT data tokenized the way the model sees it when served](0002-tito-aware-sft-tokenization.md) | accepted 2026-11-01; implemented (ext-048, hook-017) |
 | [0003 Connectors from other data formats to SFT records, with Harbor ATIF first](0003-sft-record-connectors.md) | accepted 2026-11-01; implemented (ext-049) |
 | [0004 Engines serve the trainer's own FP8 bytes, so the first GPU-delta sync is empty](0004-trainer-format-gpu-delta-base.md) | accepted 2026-11-03; base built for GLM-5.3-Flash, launcher step to build |
+| [0005 This repository is the source of one image; callers place its nodes](0005-provider-agnostic-image.md) | accepted 2026-11-05; in progress on `migration` |

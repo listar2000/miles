@@ -8,16 +8,10 @@ when the run's sandboxes are on Sail: Harbor's Sail provider reads
 
 import modal
 
+from miles_ext.node.contract import required_secrets as required_keys
 from miles_ext.platform.target import Target, run_secret_name
 
 ALLOWED_KEYS = ("WANDB_API_KEY", "HF_TOKEN", "SAIL_API_KEY")
-
-
-def required_keys(recipe: dict) -> list[str]:
-    keys = ["WANDB_API_KEY"]
-    if recipe["sandbox"]["provider"] == "sail":
-        keys.append("SAIL_API_KEY")
-    return keys
 
 
 def secret_values(recipe: dict, values: dict[str, str]) -> dict[str, str]:
