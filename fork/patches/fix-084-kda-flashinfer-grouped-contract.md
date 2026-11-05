@@ -5,13 +5,14 @@ On SM100/SM103 a KDA model with a gate lower bound (GLM-5.3-Flash) defaults to F
 `recurrent_kda` uses its grouped kernel when no sequence in the packed batch extends more than one token, which happens
 with the radix cache on. That kernel binds `dt_bias` as flat `[H*K]` and reads the state pool as bf16; our pin passes
 `[H, 128]` and an fp32 pool. The scheduler dies:
-`RuntimeError: Expected strides[leading_dim] == 1, but got 128` (glm53-lora-1105-a1, rollout 2, 33 s after the first
-adapter sync; `flashinfer/kda_kernels/recurrent_kda.py:1009`).
+`RuntimeError: Expected strides[leading_dim] == 1, but got 128` (full GLM-5.3-Flash LoRA on one B300:8, rollout 2, 33 s
+after the first adapter sync; `flashinfer/kda_kernels/recurrent_kda.py:1009`). The same run with this patch finished all
+5 rollouts.
 It has nothing to do with LoRA. Upstream's GLM launchers turn the radix cache off, and ext-051 keeps it on for the
 session server, so any of our GLM recipes can hit it. n_samples of one prompt make the fully cached prefix common.
 
 ## Decision
-Take #45018's two source changes: flatten `dt_bias`, and route batches with `num_tokens <= num_seqs` to Triton. Its unit
+Copy #45018's two source changes: flatten `dt_bias`, and route batches with `num_tokens <= num_seqs` to Triton. Its unit
 test is left out, since `apply.py` patches the image's source only.
 - Rejected: `--sglang-linear-attn-prefill-backend triton` in the preset, which slows every prefill.
 - Rejected: `--sglang-disable-radix-cache`, which the session server needs off (ext-051).
