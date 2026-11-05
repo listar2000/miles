@@ -156,6 +156,9 @@ DEFAULTS: dict[str, Any] = {
         "rollout_batch_size": 8,
         "n_samples": 8,
         "temperature": 1.0,
+        # sampling bounds, replayed in training; top_p needs top_k (SGLang returns the support only then)
+        "top_p": None,
+        "top_k": None,
         "max_response_len": 4096,
         "max_seq_len": 32768,
         "lr": 1e-6,
@@ -344,6 +347,8 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.rollout_batch_size": {"type": "int", "min": 1},
     "algorithm.n_samples": {"type": "int", "min": 1},
     "algorithm.temperature": {"type": "number", "min": 0},
+    "algorithm.top_p": {"type": "number", "nullable": True, "min": 0, "max": 1},
+    "algorithm.top_k": {"type": "int", "nullable": True, "min": 1},
     "algorithm.max_response_len": {"type": "int", "min": 1},
     "algorithm.max_seq_len": {"type": "int", "min": 1},
     "algorithm.lr": {"type": "number", "min": 0, "exclusive_min": True},
@@ -576,7 +581,22 @@ def rollout_precision(recipe: dict) -> str:
     return recipe["rollout"]["precision"] or next(iter(PRESETS[recipe["model"]["preset"]].precisions))
 
 
+def _validate_sampling(recipe: dict) -> None:
+    """Combinations SGLang or Miles would only refuse after the engines start."""
+    algo, spec = recipe["algorithm"], speculative_algorithm(recipe)
+    flags = set(recipe["extra_args"])
+    if algo["top_p"] is not None and algo["top_k"] is None:
+        raise ValueError("algorithm.top_p needs algorithm.top_k: top-p alone does not bound the returned support")
+    bounded = algo["top_p"] is not None or algo["top_k"] is not None or flags & {"--rollout-top-p", "--rollout-top-k"}
+    if bounded and spec and spec not in EXACT_SAMPLING_DRAFTS:
+        raise ValueError(f"top-p or top-k replay needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec}: "
+                         "SGLang refuses return_sampling_mask with it; set rollout.speculative false")
+    if algo["loss"] == "score_centering" and spec and spec != "DSPARK":
+        raise ValueError(f"score_centering accepts DSpark only, not {spec} (fix-058); set rollout.speculative false")
+
+
 def _validate_rollout(recipe: dict) -> None:
+    _validate_sampling(recipe)
     preset, roll = PRESETS[recipe["model"]["preset"]], recipe["rollout"]
     precision, gpus = rollout_precision(recipe), int(roll["gpus_per_engine"])
     if precision not in preset.precisions:
@@ -614,6 +634,10 @@ def expert_qat(recipe: dict) -> bool:
     """A full-weight run on fp8_fp4 engines keeps its FP4 experts on the engine's grid (fix-006); LoRA leaves
     the experts frozen."""
     return rollout_precision(recipe) == FP8_FP4 and not recipe["lora"]["rank"]
+
+
+# Drafts whose committed tokens SGLang can report as exact samples with their support (spec_sampling_mask.py).
+EXACT_SAMPLING_DRAFTS = ("DFLASH", "DSPARK")
 
 
 def speculative_algorithm(recipe: dict) -> str | None:
@@ -730,6 +754,8 @@ def _lora_args(recipe: dict) -> str:
         args += f" --target-modules {lora['target_modules']}"
     if spec := PRESETS[recipe["model"]["preset"]].lora_spec_path:
         args += f" --custom-lora-spec-path {spec}"
+    if exclude := PRESETS[recipe["model"]["preset"]].lora_exclude_modules:
+        args += f" --exclude-modules {exclude}"
     return args
 
 
@@ -788,13 +814,18 @@ def reads_task_dirs(recipe: dict) -> bool:
     return not is_single_turn(recipe) and tasks_volume(recipe) is None
 
 
+def weights_path(hf_repo: str, revision: str) -> Path:
+    """A checkpoint's directory on the weights volume (miles_ext.platform.weights key)."""
+    return MODELS / f"{hf_repo.replace('/', '--')}/{revision}"
+
+
 def model_dir(recipe: dict) -> Path:
     preset = PRESETS[recipe["model"]["preset"]]
     if preset.train_dir_name and rollout_precision(recipe) != FP8_FP4:
         # BF16 engines serve the trainer's BF16 copy: the released checkpoint would load as FP8 dense
         return MODELS / preset.train_dir_name
     if revision := recipe["model"].get("revision"):
-        return MODELS / f"{preset.hf_repo.replace('/', '--')}/{revision}"  # miles_ext.platform.weights key
+        return weights_path(preset.hf_repo, revision)
     return MODELS / preset.dir_name
 
 
@@ -978,6 +1009,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool =
         --rollout-shuffle --num-rollout {algo["num_rollout"]}
         --rollout-batch-size {batch} --n-samples-per-prompt {n} --global-batch-size {batch * n}
         --rollout-temperature {algo["temperature"]}
+        {f"--rollout-top-p {algo['top_p']}" if algo["top_p"] is not None else ""}
+        {f"--rollout-top-k {algo['top_k']}" if algo["top_k"] is not None else ""}
         --rollout-max-response-len {algo["max_response_len"]} --max-seq-len {algo["max_seq_len"]}
 
         --advantage-estimator {algo["advantage_estimator"]}
@@ -1121,7 +1154,9 @@ def _rollout_args(recipe: dict) -> str:
     if expert_qat(recipe):
         args += " --mxfp4-qat-routed-experts"  # fix-006
     if spec := speculative_algorithm(recipe):
-        args += f" --sglang-speculative-algorithm {spec} {PRESETS[recipe['model']['preset']].speculative_args}"
+        args += f" --sglang-speculative-algorithm {spec} {preset.speculative_args}"
+        if preset.speculative_draft:
+            args += f" --sglang-speculative-draft-model-path {weights_path(*preset.speculative_draft)}"
     return args
 
 
