@@ -1,4 +1,4 @@
-"""ext-038: single-turn tasks (taskset.harness single-turn) and the STAK verifier."""
+"""ext-038: single-turn tasks (taskset.harness single-turn)."""
 
 import asyncio
 import json
@@ -9,35 +9,20 @@ import pytest
 import yaml
 
 from miles_ext.recipes import recipe as R
-from miles_ext.tasks import single_turn, stackvm
+from miles_ext.tasks import single_turn
 
 ROOT = Path(__file__).resolve().parents[2]
+EXACT = f"{__name__}.exact_match"
+
+
+def exact_match(reply: str, label: str) -> tuple[int, str]:
+    return (1, "ok") if reply == label else (0, "wrong")
 
 
 def _recipe(**taskset) -> dict:
     spec = yaml.safe_load((ROOT / "miles_ext/recipes/configs/dsv41-flash-tb4-overfit16.yaml").read_text())
     spec["taskset"] = {"harness": R.HARNESS_SINGLE_TURN, "prompts": "/host/prompts.jsonl", **taskset}
     return R.from_dict(spec)
-
-
-@pytest.mark.parametrize(
-    "reply, verdict",
-    [
-        ("<think>maybe <answer>1</answer></think>\nSo <answer>12 0 5</answer>", (1, "ok")),  # reasoning ignored
-        ("<answer>12 00 5</answer>", (1, "ok")),
-        ("<answer> 12  0\n5 </answer>", (1, "ok")),
-        ("<answer>12 0</answer>", (0, "wrong")),
-        ("<answer>5 0 12</answer>", (0, "wrong")),
-        ("12 0 5", (0, "no_answer")),
-        ("<think>cut off before answering <answer>12 0 5", (0, "no_answer")),
-        ("<answer>12 0 5</answer> or <answer>5 0 12</answer>", (0, "multi_answer")),
-        ("<answer>12, 0, 5</answer>", (0, "bad_format")),
-        ("<answer>-3</answer>", (0, "bad_format")),
-        ("<answer></answer>", (0, "bad_format")),
-    ],
-)
-def test_grade(reply, verdict):
-    assert stackvm.grade(reply, "12 0 5") == verdict
 
 
 def test_recipe_single_turn_args_and_env():
@@ -76,7 +61,9 @@ def test_recipe_single_turn_refuses(taskset, message):
     [
         ({"label": "1"}, "metadata.task"),
         ({"task": "nope", "label": "1"}, "metadata.task"),
-        ({"task": "stackvm"}, "label"),
+        ({"task": "stackvm", "label": "1"}, "metadata.task"),
+        ({"task": f"{__name__}.missing", "label": "1"}, "metadata.task"),
+        ({"task": EXACT}, "label"),
     ],
 )
 def test_check_row_refuses(metadata, message):
@@ -90,7 +77,7 @@ def test_agent_function_grades_one_reply(monkeypatch):
     def handler(request):
         seen["url"] = str(request.url)
         seen["body"] = json.loads(request.content)
-        msg = {"role": "assistant", "content": "<answer>12 0 5</answer>", "reasoning_content": "work"}
+        msg = {"role": "assistant", "content": "12 0 5", "reasoning_content": "work"}
         return httpx.Response(200, json={"choices": [{"message": msg, "finish_reason": "stop"}]})
 
     real = httpx.AsyncClient
@@ -102,7 +89,7 @@ def test_agent_function_grades_one_reply(monkeypatch):
             "http://h:1/sessions/s",
             "run it",
             {"temperature": 1.0, "max_tokens": 64},
-            {"task": "stackvm", "label": "12 0 5"},
+            {"task": EXACT, "label": "12 0 5"},
         )
     )
     assert out == {"reward": 1.0, "grade": "ok", "finish_reason": "stop"}

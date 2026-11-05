@@ -1,23 +1,31 @@
 """Request one session-server completion and grade it with the prompt row's verifier."""
 
+import functools
+import importlib
 import logging
 
 import httpx
 
-from miles_ext.tasks import stackvm
-
 logger = logging.getLogger(__name__)
 
-# metadata.task -> grade(reply, label) -> (reward 0/1, kind)
-VERIFIERS = {stackvm.TASK: stackvm.grade}
 REQUEST_TIMEOUT_S = 3600
+
+
+@functools.cache
+def _verifier(task: str):
+    """metadata.task is the dotted path of the row's grade(reply, label) -> (reward 0/1, kind)."""
+    module, _, name = task.rpartition(".")
+    return getattr(importlib.import_module(module), name)
 
 
 def check_row(row: dict) -> None:
     """A prompt row this agent can grade: a known verifier and a label."""
     metadata = row.get("metadata") or {}
-    if metadata.get("task") not in VERIFIERS:
-        raise ValueError(f"metadata.task must be one of {sorted(VERIFIERS)}, got {metadata.get('task')!r}")
+    task = metadata.get("task")
+    try:
+        _verifier(task)
+    except (AttributeError, ImportError, TypeError, ValueError) as e:
+        raise ValueError(f"metadata.task must be the dotted path of a verifier, got {task!r}: {e}") from e
     if not isinstance(metadata.get("label"), str):
         raise ValueError("metadata.label (the expected answer) is required")
 
@@ -33,5 +41,5 @@ async def run(base_url, prompt, request_kwargs, metadata, **kwargs):
         resp = await client.post(f"{base_url}/v1/chat/completions", json=payload)
         resp.raise_for_status()
     choice = resp.json()["choices"][0]
-    reward, kind = VERIFIERS[metadata["task"]](choice["message"].get("content") or "", metadata["label"])
+    reward, kind = _verifier(metadata["task"])(choice["message"].get("content") or "", metadata["label"])
     return {"reward": float(reward), "grade": kind, "finish_reason": choice.get("finish_reason")}

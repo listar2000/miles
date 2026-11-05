@@ -5,7 +5,7 @@
 # are not expected to move; the smoke checks startup, weight sync, R3 rows and the train/rollout log-prob gap.
 # Needs: CharyZeng/GLM-5.3-Flash-4layer at model.revision on the weights volume, plus the full release's
 # processor_config.json in that snapshot dir (fork/patches/ext-051-glm53-recipe.md, "How it is applied");
-# MILES_DATA = a dir holding prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
+# MILES_DATA = a dir holding prompts/stak32.jsonl (experiments/dsv41_stak_overfit); WANDB_API_KEY in the launcher's .env.
 name: glm53-flash-4layer-smoke
 model:
   preset: glm-5.3-flash-4layer
