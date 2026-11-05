@@ -10,8 +10,7 @@ import torch
 import torch.distributed as dist
 from megatron.core import dist_checkpointing
 from megatron.core.dist_checkpointing import ShardedTensor
-from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
-from megatron.core.dist_checkpointing.strategies.torch import TorchDistSaveShardedStrategy
+from megatron.core.dist_checkpointing.strategies.torch import TorchDistSaveShardedStrategy, get_async_strategy
 
 TENSOR_ELEMS = 128 << 20  # 256 MiB of bf16
 PHASES: dict[str, float] = {}  # seconds spent in Megatron's host preload (the copy of every shard to CPU)
@@ -42,8 +41,8 @@ def _state_dict(gib: int, rank: int, world: int) -> tuple[dict, float]:
     return sd, total
 
 
-def _save(sd: dict, out: str, threads: int, use_async: bool, queue: AsyncCallsQueue | None) -> tuple[float, float]:
-    strategy = TorchDistSaveShardedStrategy("torch_dist", 1)
+def _save(sd: dict, out: str, threads: int, use_async: bool, queue) -> tuple[float, float]:
+    strategy = TorchDistSaveShardedStrategy("torch_dist", 1, cpu_shm_mode=os.environ.get("CKPT_CPU_SHM") == "1")
     strategy.thread_count = threads
     kwargs = {"async_sharded_save": use_async}
     if "async_strategy" in inspect.signature(dist_checkpointing.save).parameters:
@@ -86,12 +85,16 @@ def main() -> None:
     p.add_argument("--verify", action="store_true", help="load the last save back and compare checksums")
     a = p.parse_args()
 
-    _time_preload()
+    if not a.async_save:  # the wrapper cannot be pickled to the persistent worker
+        _time_preload()
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     sd, checksum = _state_dict(a.gib, rank, world)
-    queue = AsyncCallsQueue(persistent=a.persistent_worker) if a.async_save else None
+    queue = None
+    if a.async_save:
+        calls_queue = get_async_strategy(os.environ.get("ASYNC_STRATEGY", "nvrx"))[1]["AsyncCallsQueue"]
+        queue = calls_queue(persistent=a.persistent_worker)
     saves = []
     for r in range(a.repeat):
         out = f"{a.out}/save{r}"

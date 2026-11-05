@@ -46,7 +46,13 @@ CASES = {
     "async-mcore-persistent-64": (VOL, 64, 8, True, 2, True, False, "mcore", True, 25),
     "async-nvrx-temporal": (VOL, 8, 8, True, 2, True, False, "nvrx", False, 5),
     "async-mcore-temporal": (VOL, 8, 8, True, 2, True, False, "mcore", False, 5),
+    # which async path works under fully async RL's allocator (CASE_ENV)
+    "async-mcore-plain": (VOL, 16, 1, True, 2, True, False, "mcore", True, 8),
+    "async-mcore-expandable": (VOL, 16, 1, True, 2, True, False, "mcore", True, 8),
+    "async-nvrx-shm-expandable": (VOL, 16, 1, True, 2, True, False, "nvrx", True, 8),
 }
+EXPANDABLE = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+CASE_ENV = {"async-mcore-expandable": EXPANDABLE, "async-nvrx-shm-expandable": EXPANDABLE | {"CKPT_CPU_SHM": "1"}}
 HOG_GIB = {"sync-t1-78-hog": 1700}  # host RAM held while saving
 HOG = "import sys, time; b = bytearray(int(sys.argv[1]) << 30); b[::4096] = b'x' * len(b[::4096]); print('hog ready', flush=True); time.sleep(86400)"
 COPY_JOBS = 16
@@ -114,7 +120,7 @@ def _run_case(name: str) -> dict:
         + ["--persistent-worker"] * persistent
         + ["--verify"] * verify
     )
-    env = os.environ | ({"ASYNC_STRATEGY": strategy} if strategy else {})
+    env = os.environ | ({"ASYNC_STRATEGY": strategy} if strategy else {}) | CASE_ENV.get(name, {})
     load = subprocess.Popen(["bash", "-c", DISK_LOAD]) if disk_load else None
     hog = None
     if name in HOG_GIB:
