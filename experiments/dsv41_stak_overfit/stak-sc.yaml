@@ -1,0 +1,66 @@
+# STAK overfit, score centering on: the 2026-10-26 recipe (overfit-stak-sc-1026-a1), DeepSeek-V4.1-Flash LoRA r32, thinking off.
+name: dsv41-flash-overfit-stak-sc
+model:
+  preset: deepseek-v4.1-flash
+  revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+cluster:
+  gpu: B300
+  nodes: 2  # 1 trainer + 1 rollout
+  train_gpus: 8
+  cpu: 64
+  memory_gib: 1280
+  timeout_hours: 5
+parallel:
+  tp: 4
+  pp: 1  # adapter sync to separate engines needs PP 1 (hook-011)
+  cp: 2
+  ep: 8
+lora:
+  rank: 32
+  alpha: 32
+rollout:
+  gpus_per_engine: 4
+  precision: fp8_fp4
+  context_length: 32768
+  max_running_requests: 128
+taskset:
+  prompts: prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 20  # both runs were stopped at a money cap after 13-14 steps
+  rollout_batch_size: 32
+  n_samples: 8
+  temperature: 1.0
+  max_response_len: 8192
+  max_seq_len: 16384
+  lr: 1.0e-4
+  eps_clip: 0.2
+  eps_clip_high: 0.28
+  tis_clip: 2.0  # unused with is_correction mis
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+  grpo_std_normalization: false
+  per_token_loss: true
+  loss: score_centering
+  is_correction: mis  # MIS token mask over mis_bounds [0.5, 5.0] (default)
+  top_logprobs: 64  # support mode: array width; must hold top-k 32 plus cutoff ties
+async:
+  max_concurrent_samples: 256
+checkpoint:
+  save_interval: 10
+  keep: 2
+  save_optimizer: true
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-dsv41
+  wandb_entity: mobiuslab
+  tags: ["exp:overfit-stak", "sc:on"]
+extra_args:
+  - --apply-chat-template-kwargs  # thinking off (overrides the preset's thinking/high; last flag wins)
+  - '{"thinking": false}'
+  - --rollout-top-p
+  - "0.95"
+  - --rollout-top-k
+  - "32"
