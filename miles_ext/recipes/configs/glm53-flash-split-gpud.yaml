@@ -3,7 +3,7 @@
 # attention DP4, triton MoE for R3). Each sync is an LZ4-compressed XOR delta through the results volume.
 # Single-turn STAK prompts, two steps, saves off (a weights save is 642 GB, ~17 min).
 # Needs: the trainer-format base at model.revision on the weights volume (RFC 0004); MILES_DATA = a dir holding
-# prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
+# prompts/stak32.jsonl (experiments/dsv41_stak_overfit); WANDB_API_KEY in the launcher's .env.
 name: glm53-flash-split-gpud
 model:
   preset: glm-5.3-flash

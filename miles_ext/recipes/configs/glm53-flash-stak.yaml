@@ -5,7 +5,7 @@
 # host memory, the rest on node-local disk. Single-turn STAK prompts (ext-038) at short context: this checks
 # that the full model fits and trains on one node before long-context agentic runs (which need the long-context indexer).
 # Needs: zai-org/GLM-5.3-Flash at model.revision on the weights volume (prepare_weights); MILES_DATA = a
-# dir holding prompts/stak32.jsonl (miles-ops notes/oodtask); WANDB_API_KEY in the launcher's .env.
+# dir holding prompts/stak32.jsonl (experiments/dsv41_stak_overfit); WANDB_API_KEY in the launcher's .env.
 name: glm53-flash-stak
 model:
   preset: glm-5.3-flash
