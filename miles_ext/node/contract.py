@@ -29,6 +29,8 @@ TRAINER_URL_FILE_ENV = "MILES_TRAINER_URL_FILE"  # or a file holding it, reread 
 POOL_TOKEN_ENV = "MILES_POOL_TOKEN"  # one per run, on both roles
 ROLLOUT_URL_ENV = "MILES_ROLLOUT_PUBLIC_URL"  # the public URL that reaches this rollout node's proxy port
 
+GPU_ENV = "MILES_GPU"  # a node whose GPU is not the recipe's says which, so it keeps its own compiled kernels
+
 # ---- ports a node opens ----
 SESSION_PROXY_PORT = R.PROXY_PORT  # rank 0, in-sandbox harnesses
 REGISTRY_PORT = 30999  # rank 0, split
@@ -44,6 +46,27 @@ def required_secrets(recipe: dict) -> list[str]:
     if recipe["sandbox"]["provider"] == "sail":
         keys.append("SAIL_API_KEY")
     return keys
+
+
+def node_secrets(recipe: dict) -> list[str]:
+    """Everything a node off Modal needs; a Modal sandbox provider also needs a client token there."""
+    keys = required_secrets(recipe)
+    if recipe["sandbox"]["provider"] == "modal" and not R.is_single_turn(recipe):
+        keys += ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]
+    return keys
+
+
+def _inputs(recipe: dict, run_id: str) -> dict:
+    """Where the run reads its inputs. Mount them there, or put prompts and tasks under ``fallback``."""
+    tasks = R.tasks_volume(recipe)
+    return {
+        "model_dir": str(R.model_dir(recipe)),
+        "prompts": str(R.PROMPTS),
+        "tasks": (
+            f"{R.DATASETS}/{tasks[1].lstrip('/')}" if tasks else (str(R.TASKS) if R.reads_task_dirs(recipe) else None)
+        ),
+        "fallback": f"{R.RESULTS}/{run_id}/inputs",
+    }
 
 
 def _role(shape: dict, nodes: int | None) -> dict:
@@ -64,13 +87,16 @@ def manifest(recipe: dict, run_id: str) -> dict:
     shape = R.shape(recipe)
     roles = {"trainer": {**_role(shape, shape["nodes"]), "ports": []}}
     if shape["nodes"] > 1:
-        roles["trainer"].update(placement="one_cluster", interconnect="rdma")
+        # Ray and NCCL pick ports at run time, so a gang's nodes reach each other on any port
+        roles["trainer"].update(placement="one_cluster", interconnect="rdma", open_between_nodes="all ports")
     if R.needs_tunnel(recipe):
         roles["trainer"]["ports"].append(SESSION_PROXY_PORT)
     if R.is_split(recipe):
         roles["trainer"]["ports"].append(REGISTRY_PORT)
         rollout = _role({**shape, **shape["engine"]}, None)
-        rollout["gpu_advice"] = rollout.pop("gpu")  # any GPU that meets gpus_per_engine and precision will do
+        rollout["gpu_advice"] = rollout.pop(
+            "gpu"
+        )  # not binding: gpus_per_engine, precision and memory for the model are
         roles["rollout"] = {
             **rollout,
             "gpus_per_engine": int(recipe["rollout"]["gpus_per_engine"]),
@@ -84,7 +110,8 @@ def manifest(recipe: dict, run_id: str) -> dict:
         "run_id": run_id,
         "roles": roles,
         "mounts": mounts,
-        "secrets": required_secrets(recipe),
+        "inputs": _inputs(recipe, run_id),
+        "secrets": node_secrets(recipe),
     }
 
 
@@ -101,5 +128,5 @@ def missing(recipe: dict, role: str, env) -> list[str]:
         need += [POOL_TOKEN_ENV, ROLLOUT_URL_ENV]
         if not env.get(TRAINER_URL_FILE_ENV):
             need.append(TRAINER_URL_ENV)
-    need += required_secrets(recipe)
+    need += node_secrets(recipe)
     return [name for name in need if not env.get(name)]

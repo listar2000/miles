@@ -222,7 +222,6 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     on rank 0."""
     from miles_ext.node import trainer
     from miles_ext.platform import progress as P
-    from miles_ext.platform.validate import _inputs
 
     opts = opts or {}
     recipe = R.from_dict(recipe)  # defaults for keys a recipe resolved by an older release lacks
@@ -241,9 +240,6 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     )
     if opts.get("segment_seconds"):
         os.environ[C.DEADLINE_ENV] = str(time.time() + float(opts["segment_seconds"]))
-    if INPUTS_ON_VOLUME:
-        node_storage.for_mount(R.RESULTS).refresh()
-        _inputs(run_id, tasks=R.reads_task_dirs(recipe))
     wait_check = None
     if SPLIT:
         progress = P.progress_dict(TARGET)

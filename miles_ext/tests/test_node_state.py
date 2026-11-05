@@ -44,3 +44,11 @@ def test_gang_reads_the_contracts_env(monkeypatch):
     ):
         monkeypatch.setenv(name, value)
     assert Gang.from_env() == Gang(1, 2, "10.0.0.1", "10.0.0.2")
+
+
+def test_a_node_whose_gpu_differs_keeps_its_own_compile_cache(monkeypatch):
+    runtime = pytest.importorskip("miles_ext.node.runtime")
+    monkeypatch.setattr(runtime, "version", lambda name: "1")
+    assert runtime.compile_cache_key("H200") == "h200/sglang-1"
+    monkeypatch.setenv(C.GPU_ENV, "B300")
+    assert runtime.compile_cache_key("H200") == "b300/sglang-1"

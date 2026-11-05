@@ -1,5 +1,6 @@
 """``python -m miles_ext.node <role> ...``: RFC 0005's entry commands.
 
+    spec --recipe <yaml> --run-id I [--num-rollout N]  write the spec for a recipe file to stdout
     trainer|rollout|check|manifest --spec <file>       the spec is {"run_id": ..., "recipe": {...}}
     prepare-weights --hf-repo R --revision C --path P  base weights from the HF Hub
     convert-fsdp --step N --spec <file>                FSDP's save to HF weights
@@ -37,8 +38,15 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m miles_ext.node", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     roles = ap.add_subparsers(dest="role", required=True)
-    for role in ("trainer", "rollout", "check", "manifest"):
+    spec = roles.add_parser("spec")
+    spec.add_argument("--recipe", required=True)
+    spec.add_argument("--run-id", required=True)
+    spec.add_argument("--num-rollout", type=int, default=0)
+    for role in ("trainer", "rollout", "manifest"):
         roles.add_parser(role).add_argument("--spec", required=True)
+    check = roles.add_parser("check")
+    check.add_argument("--spec", required=True)
+    check.add_argument("--no-gpu", action="store_true", help="check on a node with no GPU, with a stub libcuda")
     weights = roles.add_parser("prepare-weights")
     weights.add_argument("--hf-repo", required=True)
     weights.add_argument("--revision", required=True)
@@ -62,7 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     # a worker or a rollout node commits on its way out; rank 0's supervisor installs its own handler
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
 
-    if a.role == "manifest":
+    if a.role == "spec":
+        from miles_ext.recipes import recipe as R
+
+        overrides = {"algorithm": {"num_rollout": a.num_rollout}} if a.num_rollout else None
+        print(json.dumps({"run_id": a.run_id, "recipe": R.load(a.recipe, overrides)}, indent=1))
+    elif a.role == "manifest":
         recipe, run_id = load_spec(a.spec)
         print(json.dumps(C.manifest(recipe, run_id), indent=1))
     elif a.role == "trainer":
@@ -81,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         from miles_ext.platform.validate import run_deep_check
 
         recipe, run_id = load_spec(a.spec)
-        result = run_deep_check(recipe, run_id)
+        result = run_deep_check(recipe, run_id, libcuda_stub=a.no_gpu)
         print(json.dumps(result, indent=1, default=str))
         return 1 if result["errors"] else 0
     elif a.role == "prepare-weights":

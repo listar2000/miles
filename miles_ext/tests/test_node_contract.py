@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from miles_ext.node import __main__ as node_main
 from miles_ext.node import contract
 from miles_ext.recipes import recipe as R
 
@@ -74,6 +75,38 @@ def test_a_node_names_what_its_caller_forgot(tmp_path, monkeypatch):
     assert proc.returncode != 0
     for name in (contract.NODE_RANK_ENV, contract.SESSION_URL_ENV, "WANDB_API_KEY", "SAIL_API_KEY"):
         assert name in proc.stderr
+
+
+def test_the_spec_command_gives_a_spec_the_roles_read(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MILES_DATA", str(tmp_path))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "stak32.jsonl").write_text("")
+    node_main.main(
+        ["spec", "--recipe", str(CONFIGS / "qwen35-9b-split-elastic.yaml"), "--run-id", "r1", "--num-rollout", "2"]
+    )
+    path = tmp_path / "spec.json"
+    path.write_text(capsys.readouterr().out)
+    recipe, run_id = node_main.load_spec(str(path))
+    assert run_id == "r1" and recipe["algorithm"]["num_rollout"] == 2
+
+
+def test_the_manifest_says_where_inputs_go(monkeypatch):
+    inputs = contract.manifest(_recipe("qwen35-9b-split-elastic", monkeypatch), "r1")["inputs"]
+    assert inputs["prompts"] == "/inputs/prompts.jsonl" and inputs["tasks"] is None
+    assert inputs["model_dir"] == "/models/Qwen3.5-9B" and inputs["fallback"] == "/results/r1/inputs"
+    swegym = contract.manifest(_recipe("qwen35-9b-swegym8-sail", monkeypatch), "r1")["inputs"]
+    assert swegym["tasks"] == "/inputs/tasks"
+    volume = contract.manifest(_recipe("dsv41-flash-lora-split", monkeypatch), "r1")["inputs"]
+    assert volume["tasks"] == "/datasets/tb4t-20261016/tasks"
+
+
+def test_a_modal_sandbox_off_modal_needs_a_token(monkeypatch):
+    recipe = _recipe("qwen35-9b-swegym8-sandbox", monkeypatch)
+    assert recipe["sandbox"]["provider"] == "modal"
+    assert "MODAL_TOKEN_ID" in contract.manifest(recipe, "r1")["secrets"]
+    assert "MODAL_TOKEN_ID" not in contract.required_secrets(recipe)
+    single_turn = _recipe("qwen35-9b-split-elastic", monkeypatch)
+    assert "MODAL_TOKEN_ID" not in contract.manifest(single_turn, "r1")["secrets"]
 
 
 def test_a_rollout_node_needs_the_trainer_url_in_either_form(monkeypatch):

@@ -27,6 +27,7 @@ from miles_ext.platform.checkpoints import apply_retention_local, remove_other_n
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, image_commit, image_version
 from miles_ext.platform.layout import iter_dir, read_tracker
 from miles_ext.platform.supervisor import SENTINEL, Supervisor, write_exit_record
+from miles_ext.platform.validate import _inputs
 from miles_ext.recipes import recipe as R
 from miles_ext.sandboxes.cleanup import sandbox_adapter
 
@@ -431,6 +432,7 @@ def run(recipe: dict, run_id: str, *, wait_check: Callable[[], None] | None = No
     resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
     node_storage.for_mount(R.MODELS).refresh()
     node_storage.for_mount(R.RESULTS).refresh()  # see checkpoints committed by an earlier container
+    _inputs(run_id, tasks=R.reads_task_dirs(recipe))
     # a relaunch of a finished run (the caller's timer fired after the final save): every
     # rank returns before Ray starts, so it costs a container start, not a cluster start
     if P.is_complete(backend, read_tracker(run_dir), recipe["algorithm"]["num_rollout"]):

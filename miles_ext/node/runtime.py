@@ -3,6 +3,7 @@
 import os
 from importlib.metadata import version
 
+from miles_ext.node.contract import GPU_ENV
 from miles_ext.platform import compile_cache
 
 # as upstream's launchers do: the image's PYTHONPATH would hide packages like megatron.post_training
@@ -14,4 +15,4 @@ def pythonpath() -> str:
 
 
 def compile_cache_key(gpu: str) -> str:
-    return compile_cache.key(gpu, version("sglang"))
+    return compile_cache.key(os.environ.get(GPU_ENV) or gpu, version("sglang"))
