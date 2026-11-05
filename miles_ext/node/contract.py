@@ -4,6 +4,12 @@ from miles_ext.recipes import recipe as R
 
 STORAGE_ENV = "MILES_STORAGE"  # miles_ext.node.storage
 
+# ---- rollout pool (split) ----
+TRAINER_URL_ENV = "MILES_TRAINER_URL"  # where a rollout node reaches rank 0's registry
+TRAINER_URL_FILE_ENV = "MILES_TRAINER_URL_FILE"  # or a file holding it, reread on each beat (a relaunch moves it)
+POOL_TOKEN_ENV = "MILES_POOL_TOKEN"  # one per run, on both roles
+ROLLOUT_URL_ENV = "MILES_ROLLOUT_PUBLIC_URL"  # the public URL that reaches this rollout node's proxy port
+
 # ---- ports a node opens ----
 SESSION_PROXY_PORT = R.PROXY_PORT  # rank 0, in-sandbox harnesses
 REGISTRY_PORT = 30999  # rank 0, split

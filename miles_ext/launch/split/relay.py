@@ -1,20 +1,15 @@
-"""The split trainer's side: local relays from ``127.0.0.1:<port>`` to the engine tunnel, and its heartbeat."""
+"""The split trainer's relay: local ports to a rollout node's public URL."""
 
 import argparse
 import socket
 import subprocess
 import sys
-import threading
 import time
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
-from miles_ext.launch import split
 from miles_ext.recipes import recipe as R
 
-HEARTBEAT_SECS = 30
-_RELEASED = threading.Event()
-_BEAT_LOCK = threading.Lock()  # a beat never lands after release's "done"
 _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
 
 
@@ -66,31 +61,15 @@ def local_ports(recipe: dict) -> dict[str, list[int] | int]:
     return {"engines": [R.SPLIT_ENGINE_PORT + i for i in range(n)], "agent": R.SPLIT_ENGINE_PORT + n}
 
 
-def wait_ready(run_id: str, progress, *, timeout: float) -> dict:
-    """Block until the run's engine container serves (its published state), or raise if it ended."""
-    key, deadline = split.engine_key(run_id), time.monotonic() + timeout
-    while True:
-        state = progress.get(key) or {}
-        if state.get("phase") == "ready":
-            return state
-        if state.get("phase") == "ended":
-            raise RuntimeError(f"the engine container ended before the trainer connected: {state.get('reason')}")
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"the engine container was not ready within {timeout:.0f}s: {state}")
-        time.sleep(10)
-
-
-def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[subprocess.Popen, dict, str]:
-    """Wait for the run's engine container and start this node's relays.
-
-    Returns the relay process, the engine state and the agent's local URL (MILES_SPLIT_AGENT_URL)."""
-    state = wait_ready(run_id, progress, timeout=timeout)
+def connect(recipe: dict, member: dict) -> tuple[subprocess.Popen, str]:
+    """Start this node's relays to a registered rollout node. Returns the relay process and the agent's local URL
+    (MILES_SPLIT_AGENT_URL)."""
     ports = local_ports(recipe)
-    remote = [*state["engine_ports"], state["agent_port"]]
+    remote = [*member["engine_ports"], member["agent_port"]]
     local = [*ports["engines"], ports["agent"]]
     if len(remote) != len(local):
         raise RuntimeError(
-            f"the engine container serves {len(remote) - 1} engines, the recipe expects "
+            f"the rollout node serves {len(remote) - 1} engines, the recipe expects "
             f"{len(local) - 1}; relaunch both with the same recipe"
         )
     mapping = [f"{a}={b}" for a, b in zip(local, remote, strict=True)]
@@ -100,15 +79,15 @@ def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[sub
             "-m",
             "miles_ext.launch.split.relay",
             "--upstream",
-            f"{state['url']}/{state['token']}",
+            f"{member['url']}/{member['token']}",
             "--map",
             *mapping,
         ]
     )
     for port in local:
         _wait_port(port, proc)
-    print(f"split: engines {state['url']}/<token> relayed at 127.0.0.1:{local}", flush=True)
-    return proc, state, f"http://127.0.0.1:{ports['agent']}"
+    print(f"split: engines {member['url']}/<token> relayed at 127.0.0.1:{local}", flush=True)
+    return proc, f"http://127.0.0.1:{ports['agent']}"
 
 
 def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):
@@ -123,34 +102,12 @@ def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):
             time.sleep(0.5)
 
 
-def start_heartbeat(run_id: str, progress):
-    def beat():
-        while not _RELEASED.is_set():
-            try:
-                with _BEAT_LOCK:
-                    if not _RELEASED.is_set():
-                        progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": False}
-            except Exception as e:  # a missed beat is fine; the engine's idle cap is minutes
-                print(f"split heartbeat: {type(e).__name__}: {e}", flush=True)
-            _RELEASED.wait(HEARTBEAT_SECS)
-
-    progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": False}
-    threading.Thread(target=beat, daemon=True).start()
-
-
-def release(run_id: str, progress):
-    """The run is complete: the engine container exits instead of waiting for another trainer."""
-    with _BEAT_LOCK:
-        _RELEASED.set()
-        progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": True}
-
-
 def main():
     import asyncio
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--upstream", required=True, help="<tunnel url>/<token>")
-    ap.add_argument("--map", nargs="+", required=True, help="<local port>=<engine container port> ...")
+    ap.add_argument("--upstream", required=True, help="<public url>/<token>")
+    ap.add_argument("--map", nargs="+", required=True, help="<local port>=<rollout node port> ...")
     a = ap.parse_args()
     asyncio.run(_serve(a.upstream.rstrip("/"), dict(tuple(int(x) for x in m.split("=")) for m in a.map)))
 

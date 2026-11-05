@@ -30,10 +30,13 @@ engines as their own Modal function and reach them over the network.
 - Split refuses what it cannot sync: merged LoRA, full-parameter training (unless `rollout.weight_sync:
   gpu-delta`, ext-053), PP > 1. More than one trainer node is allowed since ext-059.
 
+Since ext-063 the engines' role is `miles_ext.node.rollout`, which reaches the trainer over HTTP, and
+`modal_app` only supplies its tunnel and the trainer's URL.
+
 ## How it is applied
 `miles_ext/recipes/recipe.py` (key, checks, `shape`, `_split_args`), `miles_ext/launch/modal_app.py`
 (`engine` function, `_ensure_engine`, the relay before `ray start`), `miles_ext/launch/split/`
-(`engine`, `relay`, `agent`, `volume_sync`), recipe `dsv41-flash-lora-split.yaml`. Verify: the split
+(`relay`, `agent`, `volume_sync`), recipe `dsv41-flash-lora-split.yaml`. Verify: the split
 smoke (DeepSeek-V4.1-Flash LoRA, 1 trainer + 1 engine node of 8x B300, 2026-10-25): `[split sync vN]`
 lines at 18.6 s, 7.1 s and 10.2 s for a 199 MB adapter (gate 30 s); a relaunched trainer reused the live
 engines and passed `--check-lora-weight-equal` on both. Teardown: stop the run's apps by exact name and id (the engine

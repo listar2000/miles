@@ -10,16 +10,26 @@ supervisor and the exit record are in the trainer). The test launcher
 Every change here is caller-facing: say so in the release note.
 """
 
-from miles_ext.platform.checkpoints import (apply_retention, delete_checkpoint, finalize_hf, list_checkpoints,
-                                            retention_plan)
-from miles_ext.platform.launch import launch
-from miles_ext.platform.progress import completion, next_rollout_id, observe, renew_lease
-from miles_ext.platform.schema import API_VERSION, RESERVED_FLAGS, schema
-from miles_ext.platform.secrets import create_run_secret, delete_run_secret, required_keys
-from miles_ext.platform.target import Target, run_secret_name
-from miles_ext.platform.teardown import resource_names, teardown
-from miles_ext.platform.validate import instant_errors, validate
-from miles_ext.platform.weights import delete_weights, list_weights, prepare_weights, weights_key
+try:
+    import modal  # noqa: F401
+except ImportError:  # a node in an image with no Modal client: its modules here import, this API does not
+    pass
+else:
+    from miles_ext.platform.checkpoints import (
+        apply_retention,
+        delete_checkpoint,
+        finalize_hf,
+        list_checkpoints,
+        retention_plan,
+    )
+    from miles_ext.platform.launch import launch
+    from miles_ext.platform.progress import completion, next_rollout_id, observe, renew_lease
+    from miles_ext.platform.schema import API_VERSION, RESERVED_FLAGS, schema
+    from miles_ext.platform.secrets import create_run_secret, delete_run_secret, required_keys
+    from miles_ext.platform.target import Target, run_secret_name
+    from miles_ext.platform.teardown import resource_names, teardown
+    from miles_ext.platform.validate import instant_errors, validate
+    from miles_ext.platform.weights import delete_weights, list_weights, prepare_weights, weights_key
 
 __all__ = [
     "API_VERSION", "RESERVED_FLAGS", "Target", "apply_retention", "completion", "create_run_secret",

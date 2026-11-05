@@ -1,20 +1,26 @@
-"""Serve a split run's engines, started with Miles' own launch command, and its sync agent behind one tunnel."""
+"""The rollout role of a split run: engines and a sync agent behind one token, joined to the trainer (ext-063)."""
 
 import json
+import os
 import secrets
 import shlex
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
-
-import modal
+from collections.abc import Callable
+from pathlib import Path
 
 from miles_ext import stack
-from miles_ext.launch import split
+from miles_ext.node import contract as C
+from miles_ext.node import registry, runtime
+from miles_ext.node import storage as node_storage
+from miles_ext.platform import compile_cache
 from miles_ext.recipes import recipe as R
 
+ENGINE_HTTP_PORT = 32000  # engine i serves HTTP on ENGINE_HTTP_PORT + i inside the node
 STARTUP_TIMEOUT_SECS = 3 * 3600  # weights from the volume plus CUDA graphs
 POLL_SECS = 10
 
@@ -48,7 +54,7 @@ def commands(recipe: dict, run_id: str, env: dict) -> dict:
     argv = [R.entrypoint(recipe), *R.miles_args(recipe, run_id, resume=False)]
     proc = subprocess.run(
         [sys.executable, "-c", _COMMANDS],
-        input=json.dumps({"argv": argv, "http_port": split.ENGINE_HTTP_PORT}),
+        input=json.dumps({"argv": argv, "http_port": ENGINE_HTTP_PORT}),
         capture_output=True,
         text=True,
         cwd=str(stack.MILES_SRC),
@@ -105,18 +111,31 @@ def _wait_healthy(ports: list[int], procs: list[subprocess.Popen]):
         time.sleep(POLL_SECS)
 
 
-def serve(recipe: dict, run_id: str, *, progress, env: dict, storage, call_id: str | None) -> dict:
-    """Start the engines, publish the tunnel, serve until the trainer is done or gone. Returns the end state."""
+def trainer_url(env: dict) -> str | None:
+    """The registry's URL from the caller: fixed, or in a file it rewrites when a relaunched trainer moves."""
+    if url := env.get(C.TRAINER_URL_ENV):
+        return url
+    try:
+        return Path(env[C.TRAINER_URL_FILE_ENV]).read_text().strip() or None
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+def serve(recipe: dict, run_id: str, *, env: dict, storage, on_state: Callable[[dict], None] | None = None) -> dict:
+    """Start the engines, join the trainer's registry, serve until the trainer is done or gone. Returns the end state.
+    ``on_state`` lets a caller watch the phases (starting, ready, ended) without reading anything from the node."""
     from miles_ext.launch.split.agent import Agent
 
-    key, idle_secs = split.engine_key(run_id), int(recipe["cluster"]["engine"]["idle_minutes"]) * 60
-    state = {"run_id": run_id, "call_id": call_id, "phase": "starting", "started_at": time.time()}
-    progress[key] = state
+    idle_secs = int(recipe["cluster"]["engine"]["idle_minutes"]) * 60
+    public_url, pool_token = env[C.ROLLOUT_URL_ENV], env[C.POOL_TOKEN_ENV]
+    notify = on_state or (lambda state: None)
+    state = {"run_id": run_id, "phase": "starting", "started_at": time.time()}
+    notify(state)
     spec = commands(recipe, run_id, env)
     engine_env = {**env, **spec["env"]}
-    ports = [split.ENGINE_HTTP_PORT + i for i in range(len(spec["commands"]))]
-    agent_port = split.ENGINE_HTTP_PORT + len(ports)
-    procs = []
+    ports = [ENGINE_HTTP_PORT + i for i in range(len(spec["commands"]))]
+    agent_port = ENGINE_HTTP_PORT + len(ports)
+    procs, agent = [], None
     try:
         for cmd in spec["commands"]:
             print(f"engine: {cmd}", flush=True)
@@ -131,7 +150,7 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, storage, call_id: s
                 "-m",
                 "miles_ext.harbor.session_proxy",
                 "--listen-port",
-                str(split.PROXY_PORT),
+                str(C.ROLLOUT_PROXY_PORT),
                 "--upstream-host",
                 "127.0.0.1",
                 "--ports",
@@ -140,41 +159,69 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, storage, call_id: s
             ]
         )
         procs.append(proxy)
-        with modal.forward(split.PROXY_PORT) as tunnel:
-            state = {
-                **state,
-                "phase": "ready",
-                "ready_at": time.time(),
-                "url": tunnel.url,
-                "token": token,
-                "engine_ports": ports,
-                "agent_port": agent_port,
-            }
-            progress[key] = state
-            print(f"engines ready: {len(ports)} at {tunnel.url}/<token>/<port>, agent port {agent_port}", flush=True)
-            state["phase"], state["reason"] = "ended", _serve_until_released(run_id, progress, procs, idle_secs)
+        member = {
+            "node_id": f"{socket.gethostname()}-{secrets.token_hex(4)}",
+            "url": public_url.rstrip("/"),
+            "token": token,
+            "engine_ports": ports,
+            "agent_port": agent_port,
+        }
+        state = {**state, "phase": "ready", "ready_at": time.time(), "url": member["url"]}
+        notify(state)
+        print(f"engines ready: {len(ports)} at {member['url']}/<token>/<port>, agent port {agent_port}", flush=True)
+        state["phase"], state["reason"] = "ended", _serve_until_released(
+            member, env, agent, procs, pool_token, idle_secs
+        )
     except BaseException as e:
         state = {**state, "phase": "ended", "reason": f"error: {type(e).__name__}: {e}"[:500]}
         raise
     finally:
         state["ended_at"] = time.time()
-        progress[key] = state
+        notify(state)
         for p in procs:
             p.terminate()
-        print(f"engine container: {state.get('reason')}", flush=True)
+        if agent is not None:
+            agent.stop()
+        print(f"rollout node: {state.get('reason')}", flush=True)
     return state
 
 
-def _serve_until_released(run_id: str, progress, procs: list[subprocess.Popen], idle_secs: int) -> str:
+def _serve_until_released(
+    member: dict, env: dict, agent, procs: list[subprocess.Popen], pool_token: str, idle_secs: int
+) -> str:
     """Block while the engines are up and a trainer is (or recently was) there."""
-    since = time.time()
+    seen = time.time()
+    last_url, next_beat = None, 0.0
     while True:
         if dead := [p.args for p in procs if p.poll() is not None]:
             raise RuntimeError(f"an engine or the proxy exited: {dead}")
-        trainer = progress.get(split.trainer_key(run_id)) or {}
-        if trainer.get("done"):
+        if agent.released.is_set():
             return "trainer done"
-        seen = max(since, float(trainer.get("heartbeat_at") or 0))
-        if time.time() - seen > idle_secs:
+        now, url = time.time(), trainer_url(env)
+        if url and (url != last_url or now >= next_beat):
+            next_beat = now + registry.BEAT_SECS
+            try:
+                reply = registry.beat(url, pool_token, member)
+            except registry.UNREACHABLE as e:  # the trainer is gone or not up yet: the idle limit decides
+                print(f"rollout node: beat to {url}: {type(e).__name__}: {e}", flush=True)
+            else:
+                seen, last_url = now, url
+                if reply.get("done"):
+                    return "trainer done"
+        if now - seen > idle_secs:
             return f"no trainer for {idle_secs // 60} min"
         time.sleep(POLL_SECS)
+
+
+def run(recipe: dict, run_id: str, *, on_state: Callable[[dict], None] | None = None) -> dict:
+    """The role: everything a rollout node does from start to end, read from the contract's env."""
+    gpu = recipe["cluster"]["gpu"]
+    node_storage.for_mount(R.MODELS).refresh()
+    cache_key = runtime.compile_cache_key(gpu)
+    compile_cache.restore(cache_key)
+    saver = compile_cache.Saver(cache_key, node_storage.for_mount(compile_cache.MOUNT).commit).start()
+    env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": runtime.pythonpath()}
+    try:
+        return serve(recipe, run_id, env=env, storage=node_storage.for_mount(R.RESULTS), on_state=on_state)
+    finally:
+        saver.stop()

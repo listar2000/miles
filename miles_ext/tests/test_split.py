@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from miles_ext.recipes import recipe as R
 
 CONFIGS = Path(__file__).resolve().parents[1] / "recipes" / "configs"
@@ -61,8 +60,8 @@ def test_one_cluster_has_no_split_args(monkeypatch):
 
 def test_split_engine_lines_tell_engines_apart(monkeypatch, capsys):
     """Both engines log "[... TP0 EP0] Decode batch"; the tag keeps the monitor from collapsing them into one."""
-    from miles_ext.launch.split import engine
     from miles_ext.monitor.metrics import RAY_PREFIX
+    from miles_ext.node import rollout as engine
 
     monkeypatch.setattr(engine.stack, "MILES_SRC", Path("."))
     line = "[2026-10-28 08:49:54 TP0 EP0] Decode batch, #running-req: 13, gen throughput (token/s): 40.59"

@@ -12,18 +12,25 @@ TENSORS = "adapter.safetensors"
 
 
 class Agent:
-    """The engine container's sync endpoint: /connect (the trainer is there) and /push (apply one sync)."""
+    """A rollout node's sync endpoint: /connect (the trainer is there), /push (apply one sync), /reload (see a
+    publication) and /release (the run is complete)."""
 
     def __init__(self, engine_ports: list[int], *, gpus_per_engine: int, storage):
         self.engine_ports, self.gpus_per_engine = engine_ports, gpus_per_engine
         self.storage = storage
         self.lock = asyncio.Lock()
+        self.released = threading.Event()
 
     def start(self, port: int) -> None:
         ready = threading.Event()
-        threading.Thread(target=self._run, args=(port, ready), daemon=True).start()
+        self._thread = threading.Thread(target=self._run, args=(port, ready), daemon=True)
+        self._thread.start()
         if not ready.wait(60):
             raise RuntimeError("split agent did not start")
+
+    def stop(self) -> None:
+        self._loop.call_soon_threadsafe(self._stopped.set)
+        self._thread.join(10)
 
     def _run(self, port: int, ready: threading.Event):
         from aiohttp import web
@@ -63,16 +70,23 @@ class Agent:
                     return web.json_response({"ok": False, "error": f"{type(e).__name__}: {e}"[:2000]})
             return web.json_response({"ok": True, "reload_s": time.monotonic() - t0})
 
+        async def release(request):
+            self.released.set()
+            return web.json_response({"ok": True})
+
         async def main():
             app = web.Application()
             app.router.add_post("/connect", connect)
             app.router.add_post("/push", push)
             app.router.add_post("/reload", reload)
+            app.router.add_post("/release", release)
             runner = web.AppRunner(app, access_log=None)
             await runner.setup()
             await web.TCPSite(runner, "127.0.0.1", port).start()
+            self._loop, self._stopped = asyncio.get_running_loop(), asyncio.Event()
             ready.set()
-            await asyncio.Event().wait()
+            await self._stopped.wait()
+            await runner.cleanup()
 
         asyncio.run(main())
 

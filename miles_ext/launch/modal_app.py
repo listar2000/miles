@@ -47,8 +47,8 @@ import modal
 
 from miles_ext import stack
 from miles_ext.checkpoint import save_policy
-from miles_ext.launch import split
 from miles_ext.node import contract as C
+from miles_ext.node import runtime
 from miles_ext.node import storage as node_storage
 from miles_ext.node.adapters.modal_volume import VOLUMES_ENV
 from miles_ext.obs import sandbox_profile
@@ -85,15 +85,20 @@ else:
 
 HOURS = 3600
 SPLIT = SHAPE.get("placement") == R.SPLIT  # cluster.placement split: the engines run in their own function
-# Upstream's launchers put the Megatron-LM checkout on PYTHONPATH (command_utils'
-# ray backend); its editable install exposes megatron.core but not every package
-# Megatron training imports (megatron.post_training), and the image's
-# PYTHONPATH=/root/miles would otherwise hide it
-MEGATRON_SRC = "/root/Megatron-LM"
+ENGINE_KEY = "split-engine:{run_id}"  # this caller's view of the rollout node, in the run's progress dict
+TRAINER_KEY = "split-trainer:{run_id}"  # the trainer's registry URL, which this caller carries to the rollout node
+TRAINER_URL_FILE = "/tmp/miles-trainer-url"
+TRAINER_URL_POLL_SECS = 5
+ENGINE_WAIT_POLL_SECS = 10
 
 
-def _pythonpath() -> str:
-    return ":".join(p for p in (os.environ.get("PYTHONPATH"), MEGATRON_SRC) if p)
+def _engine_key(run_id: str) -> str:
+    return ENGINE_KEY.format(run_id=run_id)
+
+
+def _trainer_key(run_id: str) -> str:
+    return TRAINER_KEY.format(run_id=run_id)
+
 
 # the target's names; inside a container they come back through the image env (_TARGET_ENV)
 _TARGET_ENV = "MILES_EXT_TARGET"
@@ -318,29 +323,63 @@ if SPLIT:
         # lost gang node does today (the relay keeps the old tunnel)
         single_use_containers=True,
     )
-    def engine(recipe: dict, run_id: str) -> dict:
-        """The rollout engines of a split run (miles_ext.launch.split.engine); outlives a failed trainer."""
-        from miles_ext.launch.split import engine as split_engine
+    def engine(recipe: dict, run_id: str, pool_token: str) -> dict:
+        """A split run's rollout node (miles_ext.node.rollout) on one container; outlives a failed trainer."""
+        from miles_ext.node import rollout
         from miles_ext.platform import progress as P
 
         recipe = R.from_dict(recipe)
         _check_shape(recipe)
-        node_storage.for_mount(R.MODELS).refresh()
-        compile_cache.restore(_compile_cache_key())
-        cache_commit = node_storage.for_mount(compile_cache.MOUNT).commit
-        saver = compile_cache.Saver(_compile_cache_key(), cache_commit).start()
-        env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": _pythonpath()}
-        try:
-            return split_engine.serve(
-                recipe,
-                run_id,
-                progress=P.progress_dict(TARGET),
-                env=env,
-                storage=node_storage.for_mount(R.RESULTS),
-                call_id=modal.current_function_call_id(),
+        progress = P.progress_dict(TARGET)
+        key, call_id = _engine_key(run_id), modal.current_function_call_id()
+        threading.Thread(target=_carry_trainer_url, args=(run_id, progress), daemon=True).start()
+        with modal.forward(C.ROLLOUT_PROXY_PORT) as tunnel:
+            os.environ.update(
+                {
+                    C.TRAINER_URL_FILE_ENV: TRAINER_URL_FILE,
+                    C.POOL_TOKEN_ENV: pool_token,
+                    C.ROLLOUT_URL_ENV: tunnel.url,
+                }
             )
-        finally:
-            saver.stop()
+
+            def publish(state: dict) -> None:
+                progress[key] = {**state, "call_id": call_id, "pool_token": pool_token}
+
+            return rollout.run(recipe, run_id, on_state=publish)
+
+
+def _carry_trainer_url(run_id: str, progress) -> None:
+    """A relaunched trainer has a new tunnel: keep the file the rollout node rereads current."""
+    seen = None
+    while True:
+        try:
+            url = (progress.get(_trainer_key(run_id)) or {}).get("registry_url")
+            if url and url != seen:
+                tmp = f"{TRAINER_URL_FILE}.tmp"
+                with open(tmp, "w") as f:
+                    f.write(url)
+                os.replace(tmp, TRAINER_URL_FILE)
+                seen = url
+        except Exception as e:  # a Dict hiccup: the next poll retries, and the node's idle limit is minutes
+            print(f"split: reading the trainer URL: {type(e).__name__}: {e}", flush=True)
+        time.sleep(TRAINER_URL_POLL_SECS)
+
+
+def _engine_failed(run_id: str, progress) -> None:
+    """Raise if the run's rollout node has ended, which would leave its trainer waiting for a node that never comes."""
+    state = progress.get(_engine_key(run_id)) or {}
+    if state.get("phase") == "ended":
+        raise RuntimeError(f"the rollout node ended before the trainer connected: {state.get('reason')}")
+
+
+def _wait_engine_ready(run_id: str, progress, *, timeout: float) -> None:
+    """Block until the run's rollout node serves (the trainer node is billed from spawn), or raise if it ended."""
+    deadline = time.monotonic() + timeout
+    while (progress.get(_engine_key(run_id)) or {}).get("phase") != "ready":
+        _engine_failed(run_id, progress)
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"the rollout node was not ready within {timeout:.0f}s")
+        time.sleep(ENGINE_WAIT_POLL_SECS)
 
 
 def _ensure_engine(recipe: dict, run_id: str) -> str | None:
@@ -348,20 +387,24 @@ def _ensure_engine(recipe: dict, run_id: str) -> str | None:
     trainer reconnects to it). None for one_cluster."""
     if not SPLIT:
         return None
+    import secrets as secrets_lib
+
     from miles_ext.platform import progress as P
 
     progress = P.progress_dict(TARGET)
-    state = progress.get(split.engine_key(run_id)) or {}
+    state = progress.get(_engine_key(run_id)) or {}
     if state.get("phase") in ("starting", "ready") and P.call_running(state.get("call_id")):
         print(f"split: reusing the engine call {state['call_id']} ({state['phase']})", flush=True)
         return state["call_id"]
-    # a stale "done" from an earlier segment would release the new engine at once
-    progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": False}
-    call_id = engine.spawn(recipe, run_id).object_id
+    pool_token = secrets_lib.token_urlsafe(24)
+    # an earlier segment's URL points at a tunnel that is gone
+    progress[_trainer_key(run_id)] = {}
+    call_id = engine.spawn(recipe, run_id, pool_token).object_id
     # replace an earlier engine's "ended", which would fail the trainer's wait before this one starts
-    progress[split.engine_key(run_id)] = {
+    progress[_engine_key(run_id)] = {
         "run_id": run_id,
         "call_id": call_id,
+        "pool_token": pool_token,
         "phase": "starting",
         "started_at": time.time(),
     }
@@ -421,9 +464,7 @@ def _complete_at_launch(recipe: dict, run_id: str, run_dir, backend: str) -> dic
 
 
 def _compile_cache_key() -> str:
-    from importlib.metadata import version
-
-    return compile_cache.key(SHAPE["gpu"], version("sglang"))
+    return runtime.compile_cache_key(SHAPE["gpu"])
 
 
 def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
@@ -434,7 +475,7 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
         **compile_cache.env(),
         **R.harbor_env(recipe, run_id),
         **R.trainer_env(recipe),
-        "PYTHONPATH": _pythonpath(),
+        "PYTHONPATH": runtime.pythonpath(),
         "MASTER_ADDR": head_ip,
         "MILES_HOST_IP": node_ip,
         "RAY_ADDRESS": f"{head_ip}:6379",
@@ -448,16 +489,24 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
     }
 
 
-def _split_links(recipe: dict, run_id: str, run_dir, env: dict, stack_ctx: contextlib.ExitStack) -> None:
+def _split_links(
+    recipe: dict, run_id: str, run_dir, env: dict, stack_ctx: contextlib.ExitStack, registry_url: str, pool_token: str
+) -> None:
     """Split, on each trainer node before `ray start` (Ray workers inherit env): a rank on any node reaches the
-    engines through its local relay, and a node's writes reach the volume only when that node commits."""
+    rollout node through its local relay, and a node's writes reach the storage only when that node commits."""
     from miles_ext.launch.split import relay, volume_sync
+    from miles_ext.node import registry as node_registry
     from miles_ext.platform import progress as P
 
     stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.RESULTS).commit).set)
-    relay_proc, _, agent_url = relay.connect(
-        recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
+    progress = P.progress_dict(TARGET)
+    members = node_registry.wait_members(
+        registry_url,
+        pool_token,
+        timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS),
+        check=lambda: _engine_failed(run_id, progress),
     )
+    relay_proc, agent_url = relay.connect(recipe, members[0])
     stack_ctx.callback(relay_proc.terminate)
     env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
 
@@ -479,7 +528,8 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
     try:
         if SPLIT:  # first: the head opens its port only after the engines serve, which can take longer than this wait
-            _split_links(recipe, run_id, run_dir, env, stack_ctx)
+            pool_token = P.progress_dict(TARGET)[_engine_key(run_id)]["pool_token"]
+            _split_links(recipe, run_id, run_dir, env, stack_ctx, f"http://{head_ip}:{C.REGISTRY_PORT}", pool_token)
         _wait_for_port(head_ip, 6379, timeout=600)
         subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
         if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
@@ -504,7 +554,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
 
     nodes = SHAPE["nodes"]
     succeeded = False
-    record = supervisor = None
+    record = supervisor = registry = None
     stack_ctx = contextlib.ExitStack()
     storage = node_storage.for_mount(R.RESULTS)
     # kernels compiled and tuned by this segment reach the storage while it runs and at exit
@@ -551,10 +601,15 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             print(f"session tunnel: {tunnel.url}/<token>/<port>/...", flush=True)
 
         if SPLIT:  # before `ray start`: Ray workers inherit the relays' addresses through env
-            from miles_ext.launch.split import relay
+            from miles_ext.node.registry import Registry
 
-            _split_links(recipe, run_id, run_dir, env, stack_ctx)
-            relay.start_heartbeat(run_id, P.progress_dict(TARGET))  # rank 0 alone: it also writes the release
+            progress = P.progress_dict(TARGET)
+            pool_token = progress[_engine_key(run_id)]["pool_token"]
+            registry = Registry(pool_token).start()
+            tunnel = stack_ctx.enter_context(modal.forward(C.REGISTRY_PORT))
+            progress[_trainer_key(run_id)] = {"registry_url": tunnel.url}
+            print(f"split: registry at {tunnel.url}", flush=True)
+            _split_links(recipe, run_id, run_dir, env, stack_ctx, f"http://127.0.0.1:{C.REGISTRY_PORT}", pool_token)
 
         # a segment whose workers died before reading leaves items behind; workers read only after
         # the head's port opens, so clearing here, before the head starts, is safe
@@ -582,8 +637,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
                                "see the exit record and the App logs")
         # a segment that saved and stopped cleanly also counts: workers exit without error
         succeeded = True
-        if SPLIT and record["reason"] == "success":  # the run is complete: the engine container exits
-            relay.release(run_id, P.progress_dict(TARGET))
+        if SPLIT and record["reason"] == "success":  # the run is complete: the rollout node exits
+            registry.release()
         if FINAL_RETENTION and record["reason"] == "success":
             ckpt = recipe["checkpoint"]
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
@@ -647,12 +702,11 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
     register_launch(app.app_id, app.name, recipe, run_id)
     opts = {"segment_seconds": segment_hours * HOURS} if segment_hours else {}
     if engine_call := _ensure_engine(recipe, run_id):
-        from miles_ext.launch.split import relay
         from miles_ext.platform import progress as P
 
         # the trainer node is billed from spawn; start it once the engines serve, not while they load
         print(f"split: engine call {engine_call}; the trainer starts when the engines are ready", flush=True)
-        relay.wait_ready(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
+        _wait_engine_ready(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
         print("split: engines ready; starting the trainer", flush=True)
     call = train.spawn(recipe, run_id, opts)
     print(f"trainer call {call.object_id}", flush=True)
