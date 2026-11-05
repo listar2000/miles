@@ -2,33 +2,18 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import modal
 
-from miles_ext import stack
 from miles_ext.sft import config as sft_config
+from miles_ext.sft import job
 from miles_ext.sft import modal_common as M
 
 app = modal.App("miles-rl-sft-prepare")
 image = M.image()
 weights_volume = M.volume("MILES_WEIGHTS_VOLUME")
 data_volume = M.data_volume()
-TESTS = (
-    "miles_ext/tests/test_sft_record.py",
-    "miles_ext/tests/test_sft_render.py",
-    "miles_ext/tests/test_sft_prepare.py",
-    "miles_ext/tests/test_sft_config.py",
-)
-
-
-def splits(records: Path) -> dict[str, list[str]]:
-    files = sorted(str(p) for p in records.glob("*.jsonl") if not p.name.startswith("_"))
-    return {
-        "train": [f for f in files if not f.endswith(".val.jsonl")],
-        "val": [f for f in files if f.endswith(".val.jsonl")],
-    }
 
 
 @app.function(
@@ -39,37 +24,7 @@ def splits(records: Path) -> dict[str, list[str]]:
     volumes={str(sft_config.WEIGHTS_MOUNT): weights_volume.read_only(), str(sft_config.DATA_MOUNT): data_volume},
 )
 def prepare(config_yaml: str, tests: bool) -> dict[str, str]:
-    path = Path("/tmp/sft-config.yaml")
-    path.write_text(config_yaml)
-    cfg = sft_config.load(path)
-    if tests:
-        subprocess.run(["python", "-m", "pytest", "-q", "-x", *TESTS], cwd=str(stack.MILES_SRC), check=True)
-    manifests = {}
-    for split, inputs in splits(Path(sft_config.DATA_MOUNT / cfg.data.records)).items():
-        if not inputs:  # training validates before its first step, so both splits are required
-            raise ValueError(f"no {split} records (*.jsonl / *.val.jsonl) under {cfg.data.records}")
-        out = Path(cfg.shards) / split
-        argv = [
-            "python",
-            "-m",
-            "miles_ext.sft.prepare",
-            "--output",
-            str(out),
-            "--hf-checkpoint",
-            str(cfg.weights),
-            "--tito-model",
-            cfg.preset.tito_model,
-            "--max-tokens",
-            str(cfg.data.max_tokens),
-        ]
-        for f in inputs:
-            argv += ["--input", f]
-        for proc in cfg.data.postprocess:
-            argv += ["--postprocess", proc]
-        subprocess.run(argv, cwd=str(stack.MILES_SRC), check=True)
-        manifests[split] = (out / "manifest.json").read_text()
-    data_volume.commit()
-    return manifests
+    return job.prepare(config_yaml, tests, data_volume.commit)
 
 
 @app.local_entrypoint()

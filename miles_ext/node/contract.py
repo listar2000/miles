@@ -86,3 +86,20 @@ def manifest(recipe: dict, run_id: str) -> dict:
         "mounts": mounts,
         "secrets": required_secrets(recipe),
     }
+
+
+def missing(recipe: dict, role: str, env) -> list[str]:
+    """Return what this role needs from its caller and did not get."""
+    need = []
+    if role == "trainer":
+        need += [NODE_RANK_ENV, NNODES_ENV, HEAD_ADDR_ENV, NODE_IP_ENV]
+        if R.is_split(recipe):
+            need.append(POOL_TOKEN_ENV)
+        if R.needs_tunnel(recipe) and env.get(NODE_RANK_ENV, "0") == "0":
+            need.append(SESSION_URL_ENV)
+    elif role == "rollout":
+        need += [POOL_TOKEN_ENV, ROLLOUT_URL_ENV]
+        if not env.get(TRAINER_URL_FILE_ENV):
+            need.append(TRAINER_URL_ENV)
+    need += required_secrets(recipe)
+    return [name for name in need if not env.get(name)]

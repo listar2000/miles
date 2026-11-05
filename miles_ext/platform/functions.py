@@ -49,9 +49,6 @@ def convert_fsdp(cmd: list[str]) -> str:
 
 @app.function(image=_fork, cpu=4, memory=8192, timeout=DOWNLOAD_TIMEOUT)
 def download(hf_repo: str, revision: str, path: str) -> dict:
-    from pathlib import Path
+    from miles_ext.platform.weights_job import download as run
 
-    from huggingface_hub import snapshot_download
-
-    snapshot_download(hf_repo, revision=revision, local_dir=path, token=os.environ.get("HF_TOKEN") or None)
-    return {"bytes": sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())}
+    return run(hf_repo, revision, path)

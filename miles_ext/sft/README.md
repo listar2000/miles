@@ -19,6 +19,7 @@ the record format is in its "The record" section and in `record.py`.
 | `config.py` | the SFT run config (YAML): preset, pinned image, records and shards on a volume, schedule; the Miles argv |
 | `train.py` | the driver (`python -m miles_ext.sft.train <Miles args>`): Miles' loop for `--debug-train-only`, plus held-out NLL |
 | `val.py` | `SftTrainRayActor`: validation ids run forward-only and log `val/nll` |
+| `job.py` | what the two jobs do, with no provider in it |
 | `modal_prepare.py`, `modal_train.py` | the config's records to shards on a Modal CPU container, then SFT on one H200:8 node |
 
 ## Training on Modal

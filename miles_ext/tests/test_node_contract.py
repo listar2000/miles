@@ -64,3 +64,25 @@ def test_manifest_covers_every_recipes_shape(name, monkeypatch):
     assert {k: trainer[k] for k in ("gpu", "nodes", "cpu", "memory_gib", "disk_gib")} == {
         k: shape[k] for k in ("gpu", "nodes", "cpu", "memory_gib", "disk_gib")
     }
+
+
+def test_a_node_names_what_its_caller_forgot(tmp_path, monkeypatch):
+    spec = _spec(tmp_path, _recipe("qwen35-9b-swegym8-sail", monkeypatch))
+    code = NO_MODAL + f"from miles_ext.node.__main__ import main; sys.exit(main(['trainer', '--spec', {str(spec)!r}]))"
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": ":".join(sys.path)}
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert proc.returncode != 0
+    for name in (contract.NODE_RANK_ENV, contract.SESSION_URL_ENV, "WANDB_API_KEY", "SAIL_API_KEY"):
+        assert name in proc.stderr
+
+
+def test_a_rollout_node_needs_the_trainer_url_in_either_form(monkeypatch):
+    recipe = _recipe("dsv41-flash-lora-split", monkeypatch)
+    env = {
+        contract.POOL_TOKEN_ENV: "p",
+        contract.ROLLOUT_URL_ENV: "http://x",
+        "WANDB_API_KEY": "k",
+        "SAIL_API_KEY": "s",
+    }
+    assert contract.missing(recipe, "rollout", env) == [contract.TRAINER_URL_ENV]
+    assert contract.missing(recipe, "rollout", {**env, contract.TRAINER_URL_FILE_ENV: "/tmp/u"}) == []
