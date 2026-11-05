@@ -1,4 +1,4 @@
-# GLM-5.3-Flash LoRA (rank 32) with the DFlash2 draft, MIS and top-p replay on one B300:8: the trainer on 4 GPUs
+# GLM-5.3-Flash LoRA (rank 32) with the DFlash2 draft, score centering, MIS and top-p replay on one B300:8: the trainer on 4 GPUs
 # (TP4 EP4), one TP4 engine on the other 4, 5 rollouts on the single-turn STAK prompts at a low reasoning effort.
 # Needs: zai-org/GLM-5.3-Flash at model.revision and the preset's draft on the weights volume (prepare_weights);
 # MILES_DATA = experiments/dsv41_stak_overfit; WANDB_API_KEY in the launcher's .env.
@@ -44,6 +44,7 @@ algorithm:
   max_weight_staleness: 0  # every trained sample comes from the served adapter version
   sglang_mem_fraction: 0.75
   routing_replay: true
+  loss: score_centering
   is_correction: mis
 async:
   max_concurrent_samples: 64
