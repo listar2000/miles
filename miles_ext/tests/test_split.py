@@ -34,13 +34,22 @@ def test_split_argv_and_shape(monkeypatch):
     "overrides,message",
     [
         ({"lora": {"rank": 0}}, "supports LoRA, or full-parameter"),
-        ({"cluster": {"nodes": 2}}, "one trainer node"),
-        ({"cluster": {"train_gpus": 4}}, "whole node"),
+        ({"cluster": {"train_gpus": 4}}, "whole nodes, cluster.train_gpus 8"),
+        ({"cluster": {"nodes": 2}}, "whole nodes, cluster.train_gpus 16"),
     ],
 )
 def test_split_refuses_what_it_cannot_sync(monkeypatch, overrides, message):
     with pytest.raises(ValueError, match=message):
         _split(monkeypatch, **overrides)
+
+
+def test_split_trainer_spans_its_nodes_and_the_engines_stay_one_container(monkeypatch):
+    recipe = _split(monkeypatch, cluster={"nodes": 2, "train_gpus": 16})
+    argv = R.miles_args(recipe, "run1", resume=False)
+    assert argv[argv.index("--actor-num-nodes") + 1] == "2"
+    assert argv[argv.index("--actor-num-gpus-per-node") + 1] == "8"
+    assert argv[argv.index("--rollout-num-gpus") + 1] == "8"
+    assert R.shape(recipe)["nodes"] == 2
 
 
 def test_one_cluster_has_no_split_args(monkeypatch):

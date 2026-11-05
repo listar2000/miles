@@ -50,7 +50,7 @@ from miles_ext.checkpoint import save_policy
 from miles_ext.launch import split
 from miles_ext.obs import sandbox_profile
 from miles_ext.platform import compile_cache
-from miles_ext.platform.checkpoints import apply_retention_local
+from miles_ext.platform.checkpoints import apply_retention_local, remove_other_node_shards
 from miles_ext.platform.images import IMAGE_ENV, TRAINER_ENV, fork_image, image_commit, image_version
 from miles_ext.platform.target import compile_cache_volume_name, completion_queue_name
 from miles_ext.platform.layout import iter_dir, read_tracker
@@ -374,6 +374,7 @@ def _retention_while_training(recipe: dict, run_dir, every: float = 60.0) -> thr
                 )
                 if dropped:
                     results_volume.commit()
+                    remove_other_node_shards(results_volume, R.RESULTS, dropped, SHAPE["nodes"])
                     print(f"retention (tracker {step}): removed {[d['step'] for d in dropped]}", flush=True)
             except Exception as e:  # retention never stops training
                 print(f"retention (tracker {step}) failed: {type(e).__name__}: {e}", flush=True)
@@ -433,6 +434,20 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
     }
 
 
+def _split_links(recipe: dict, run_id: str, run_dir, env: dict, stack_ctx: contextlib.ExitStack) -> None:
+    """Split, on each trainer node before `ray start` (Ray workers inherit env): a rank on any node reaches the
+    engines through its local relay, and a node's writes reach the volume only when that node commits."""
+    from miles_ext.launch.split import relay, volume_sync
+    from miles_ext.platform import progress as P
+
+    stack_ctx.callback(volume_sync.commit_watcher(results_volume.commit).set)
+    relay_proc, _, agent_url = relay.connect(
+        recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
+    )
+    stack_ctx.callback(relay_proc.terminate)
+    env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
+
+
 def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: dict, start: list[str]) -> None:
     """A worker node: join rank 0's Ray cluster and wait for its result. This node's checkpoint
     shards (Megatron) reach the volume only when it commits: on rank 0's request before it
@@ -441,16 +456,20 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
     from miles_ext.platform import shards
 
     stop = threading.Event()
+    stack_ctx = contextlib.ExitStack()
     saver = compile_cache.Saver(_compile_cache_key(), cache_volume.commit, node=rank).start()
     threading.Thread(target=shards.worker_commits, daemon=True, args=(
         run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
     try:
+        if SPLIT:  # first: the head opens its port only after the engines serve, which can take longer than this wait
+            _split_links(recipe, run_id, run_dir, env, stack_ctx)
         _wait_for_port(head_ip, 6379, timeout=600)
         subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
         if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
             raise RuntimeError("Miles training failed on the head node; see the App logs")
     finally:
+        stack_ctx.close()
         stop.set()
         results_volume.commit()
         saver.stop()
@@ -514,14 +533,10 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             print(f"session tunnel: {tunnel.url}/<token>/<port>/...", flush=True)
 
         if SPLIT:  # before `ray start`: Ray workers inherit the relays' addresses through env
-            from miles_ext.launch.split import relay, volume_sync
+            from miles_ext.launch.split import relay
 
-            stack_ctx.callback(volume_sync.commit_watcher(results_volume.commit).set)
-            relay_proc, _, agent_url = relay.connect(
-                recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
-            )
-            stack_ctx.callback(relay_proc.terminate)
-            env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
+            _split_links(recipe, run_id, run_dir, env, stack_ctx)
+            relay.start_heartbeat(run_id, P.progress_dict(TARGET))  # rank 0 alone: it also writes the release
 
         # a segment whose workers died before reading leaves items behind; workers read only after
         # the head's port opens, so clearing here, before the head starts, is safe
@@ -556,6 +571,8 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
             dropped = apply_retention_local(run_dir, keep=ckpt["keep"], keep_final_full=ckpt["keep_final_full"],
                                             keep_every=ckpt["keep_every"],
                                             final=True)
+            results_volume.commit()
+            remove_other_node_shards(results_volume, R.RESULTS, dropped, SHAPE["nodes"])
             removed = [f"{d['kind']}:{d['step']}" for d in dropped]
             print(f"retention (final, keep_final_full={ckpt['keep_final_full']}): removed {removed}", flush=True)
         return record

@@ -1,9 +1,12 @@
 """ext-053: full-parameter split placement with GPU-delta weight sync (rollout.weight_sync gpu-delta)."""
 
+import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import torch
 import yaml
 
 from miles_ext.launch.split import volume_sync
@@ -85,13 +88,19 @@ def test_gpu_delta_needs_a_mapped_preset():
         R.validate(_full_param(), local_inputs=False)
 
 
-def test_post_write_hook_commits_then_reloads_on_rank_0(monkeypatch):
+@pytest.mark.parametrize("rank,reloads", [(0, True), (1, False)], ids=["rank-0", "other-rank"])
+def test_post_write_hook_commits_on_every_rank_and_reloads_after_all_of_them(monkeypatch, rank, reloads):
     calls = []
+    version_dir = "/results/run1/gpu_delta/stream/weight_v000002"
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+    monkeypatch.setitem(
+        sys.modules,
+        "miles.backends.training_utils.weight_update.protocols.gpu_delta.protocol",
+        SimpleNamespace(_collective_check=lambda error, phase: calls.append(("check", error))),
+    )
     monkeypatch.setenv(volume_sync.AGENT_ENV, "http://127.0.0.1:9")
     monkeypatch.setattr(volume_sync, "request_commit", lambda name: calls.append(("commit", name)))
     monkeypatch.setattr(volume_sync, "_call", lambda url, body, timeout: calls.append(("reload", url, body)) or {})
-    volume_sync.gpu_delta_post_write(None, "/results/run1/gpu_delta/stream/weight_v000002", [])
-    assert calls == [
-        ("commit", "weight_v000002"),
-        ("reload", "http://127.0.0.1:9/reload", {"dir": "/results/run1/gpu_delta/stream/weight_v000002"}),
-    ]
+    volume_sync.gpu_delta_post_write(None, version_dir, [])
+    assert calls[:2] == [("commit", f"weight_v000002.r{rank}"), ("check", None)]
+    assert calls[2:] == ([("reload", "http://127.0.0.1:9/reload", {"dir": version_dir})] if reloads else [])

@@ -192,6 +192,23 @@ def apply_retention_local(run_dir, *, keep: int, keep_final_full: bool, final: b
     return plan
 
 
+def remove_other_node_shards(volume, results_root, dropped: list[dict], nodes: int) -> None:
+    """Rank 0's retention deletes only its view of the volume; drop the other nodes' shards of ``dropped`` saves
+    from the volume too. Call after rank 0 committed its deletion. A failure never stops training."""
+    from pathlib import Path
+
+    if nodes == 1:
+        return
+    for save in dropped:
+        path = str(Path(save["path"]).relative_to(results_root))
+        try:
+            volume.remove_file(path, recursive=True)
+        except modal.exception.NotFoundError:
+            pass
+        except Exception as e:
+            print(f"retention: removing {path}: {type(e).__name__}: {e}", flush=True)
+
+
 def hf_export_template(run_id: str) -> str:
     """Miles' ``--save-hf`` (Megatron): one HF export per save, formatted with ``rollout_id``."""
     checkpoint_path(run_id, 0, "hf")

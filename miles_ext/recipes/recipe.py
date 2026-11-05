@@ -538,7 +538,7 @@ def gpu_delta(recipe: dict) -> bool:
 
 
 def _validate_split(recipe: dict) -> None:
-    """Reject split recipes the volume sync or the one-node trainer cannot run."""
+    """Reject split recipes the volume sync or the whole-node trainer cannot run."""
     cluster, lora = recipe["cluster"], recipe["lora"]
     if recipe["algorithm"]["mode"] != "fully_async":
         raise ValueError("cluster.placement split needs algorithm.mode fully_async")
@@ -556,12 +556,8 @@ def _validate_split(recipe: dict) -> None:
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
-    if int(cluster["nodes"]) != 1:
-        raise ValueError("cluster.placement split runs one trainer node (cluster.nodes 1)")
-    if int(cluster["train_gpus"]) != GPUS_PER_NODE:
-        raise ValueError(
-            f"cluster.placement split: the trainer uses its whole node, cluster.train_gpus {GPUS_PER_NODE}"
-        )
+    if int(cluster["train_gpus"]) != (whole_nodes := int(cluster["nodes"]) * GPUS_PER_NODE):
+        raise ValueError(f"cluster.placement split: the trainer uses whole nodes, cluster.train_gpus {whole_nodes}")
 
 
 def rollout_gpus(recipe: dict) -> int:
@@ -1140,7 +1136,8 @@ def optimizer_host_gib(recipe: dict) -> int:
         return 0
     free = int(recipe["cluster"]["memory_gib"]) - TRAINER_HOST_RESERVE_GIB
     if gpu_delta(recipe):
-        free -= GPU_DELTA_HOST_COPIES * PRESETS[recipe["model"]["preset"]].served_gib
+        # each rank pins only the tensors it owns, and PP 1 spreads the owners evenly over the trainer's nodes
+        free -= GPU_DELTA_HOST_COPIES * PRESETS[recipe["model"]["preset"]].served_gib / trainer_layout(recipe)[0]
     return max(0, int(free // min(trainer_gpus(recipe), GPUS_PER_NODE)))  # the fullest trainer node
 
 

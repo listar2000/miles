@@ -100,13 +100,22 @@ class VolumeAdapterSync(_protocol_base()):
 
 
 def gpu_delta_post_write(args, version_dir: str, rollout_engines) -> None:
-    """Commit and reload the publication on rank 0; Miles synchronizes ranks after this hook (ext-053)."""
+    """Every node commits its ranks' shards, then rank 0 has the engines reload (ext-053, ext-059).
+
+    Miles synchronizes ranks after this hook; the check here keeps a reload from running before a node's commit."""
     import torch.distributed as dist
 
-    if dist.is_initialized() and dist.get_rank() != 0:
-        return
+    from miles.backends.training_utils.weight_update.protocols.gpu_delta.protocol import _collective_check
+
+    rank, error = dist.get_rank(), None
     t0 = time.monotonic()
-    request_commit(Path(version_dir).name)
+    try:
+        request_commit(f"{Path(version_dir).name}.r{rank}")
+    except Exception as e:
+        error = e
+    _collective_check(error, "results volume commit")
+    if rank != 0:
+        return
     t1 = time.monotonic()
     _call(f"{os.environ[AGENT_ENV]}/reload", {"dir": str(version_dir)}, timeout=PUSH_TIMEOUT_SECS)
     print(
@@ -151,18 +160,21 @@ def request_commit(name: str, timeout: float = COMMIT_TIMEOUT_SECS) -> None:
 
 
 def commit_watcher(commit) -> threading.Event:
-    """Commit the results volume for each sync request (run in the trainer's function process); returns its stop event."""
+    """Commit the results volume for sync requests (run in each trainer node's function process): one commit
+    answers every request made before it, as a node's ranks all ask at once. Returns its stop event."""
     stop = threading.Event()
     COMMIT_DIR.mkdir(parents=True, exist_ok=True)
 
     def loop():
         while not stop.is_set():
-            for req in sorted(COMMIT_DIR.glob("*.req")):
-                err = ""
+            reqs = sorted(COMMIT_DIR.glob("*.req"))
+            err = ""
+            if reqs:
                 try:
                     commit()
                 except Exception as e:
                     err = f"{type(e).__name__}: {e}"
+            for req in reqs:
                 req.unlink(missing_ok=True)
                 tmp = req.with_suffix(".done.tmp")
                 tmp.write_text(err)

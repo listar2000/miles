@@ -81,7 +81,7 @@ def wait_ready(run_id: str, progress, *, timeout: float) -> dict:
 
 
 def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[subprocess.Popen, dict, str]:
-    """Wait for the run's engine container, start the relays, start the heartbeat.
+    """Wait for the run's engine container and start this node's relays.
 
     Returns the relay process, the engine state and the agent's local URL (MILES_SPLIT_AGENT_URL)."""
     state = wait_ready(run_id, progress, timeout=timeout)
@@ -107,7 +107,6 @@ def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[sub
     )
     for port in local:
         _wait_port(port, proc)
-    start_heartbeat(run_id, progress)
     print(f"split: engines {state['url']}/<token> relayed at 127.0.0.1:{local}", flush=True)
     return proc, state, f"http://127.0.0.1:{ports['agent']}"
 

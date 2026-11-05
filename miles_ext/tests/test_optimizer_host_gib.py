@@ -27,6 +27,15 @@ def test_gpu_delta_also_leaves_its_model_copies():
     assert split == (2304 - R.TRAINER_HOST_RESERVE_GIB - copies) // 8 < together
 
 
+def test_gpu_delta_copies_spread_over_the_trainer_nodes():
+    recipe = _recipe(
+        cluster={"placement": "split", "nodes": 2, "train_gpus": 16, "memory_gib": 2560},
+        rollout={"weight_sync": "gpu-delta"},
+    )
+    copies = R.GPU_DELTA_HOST_COPIES * R.PRESETS["glm-5.3-flash"].served_gib
+    assert R.optimizer_host_gib(recipe) == (2560 - R.TRAINER_HOST_RESERVE_GIB - copies / 2) // 8
+
+
 def test_a_partly_filled_trainer_node_is_sized_by_the_fullest_node():
     """12 trainer GPUs sit 8 + 4 on two nodes: each GPU gets the share of a full node."""
     full = R.optimizer_host_gib(_recipe())
