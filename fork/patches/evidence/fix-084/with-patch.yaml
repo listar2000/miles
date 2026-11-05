@@ -1,0 +1,61 @@
+# One-off proof of GLM-5.3-Flash native LoRA on our stack, not a repo recipe: lr 2e-3 is for the served-adapter
+# check, not for learning. Upstream scripts/run_glm5_3_flash_lora.py settings on one B300:8, split 4 + 4.
+name: glm53-lora-proof
+model:
+  preset: glm-5.3-flash
+  revision: 46a050bec13002ad29ee795c16e61cf4fa3c4a9c
+cluster:
+  gpu: B300
+  nodes: 1
+  train_gpus: 4
+  cpu: 64
+  memory_gib: 1280
+  timeout_hours: 1.0
+parallel:
+  tp: 4
+  pp: 1
+  cp: 1
+  ep: 4
+lora:
+  rank: 16
+  alpha: 32
+  target_modules: attn,mlp
+rollout:
+  gpus_per_engine: 4
+  context_length: 32768
+  max_running_requests: 64
+  speculative: false
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 5
+  rollout_batch_size: 4
+  n_samples: 8
+  temperature: 0.8
+  max_response_len: 4096
+  max_seq_len: 8192
+  max_tokens_per_gpu: 8192
+  lr: 2.0e-3
+  max_weight_staleness: 2
+  sglang_mem_fraction: 0.75
+  routing_replay: true
+async:
+  max_concurrent_samples: 64
+checkpoint:
+  save_interval: 5
+  keep: 1
+  save_optimizer: true
+  save_rollout_data: true
+tracking:
+  wandb_project: miles-glm53
+  wandb_entity: mobiuslab
+  tags: ["exp:glm53-lora-proof"]
+extra_args:
+  - --exclude-modules
+  - "*.mlp.experts.*,*.self_attn.kv_b_proj"
+  - --check-lora-weight-equal
+  - --no-gradient-accumulation-fusion
+  - --apply-chat-template-kwargs
+  - '{"reasoning_effort": "low"}'

@@ -20,7 +20,7 @@ test is left out, since `apply.py` patches the image's source only.
 ## How it is applied
 `fork/deps/sglang/fix-084-kda-flashinfer-grouped-contract.patch`, applied by `fork/deps/sglang/apply.py` to SGLang
 `3a938213c1`: `layers/attention/linear/kda_backend.py` and `kernels/kda_flashinfer_prefill.py`, marked `[fork fix-084]`.
-Verify: a GLM-5.3-Flash run with the radix cache on and n_samples > 1 passes its second rollout.
+Evidence: [evidence/fix-084](evidence/fix-084/README.md). Verify: a GLM-5.3-Flash run with the radix cache on and n_samples > 1 passes its second rollout.
 
 ## Remove when
 SGLANG_COMMIT includes sgl-project/sglang#45018; upstream status: merged on main `aaa9388c91`, not in our pin.
