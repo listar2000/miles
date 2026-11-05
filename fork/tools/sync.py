@@ -42,6 +42,13 @@ REVIEW_PATHS = [
     "miles/rollout/data_source.py",  # agent_function.prepare reads dataset.samples
     "miles/rollout/generate_hub/agentic_tool_call.py",  # --custom-generate-function-path we use
     "miles/rollout/filter_hub/dynamic_sampling_filters.py",
+    "miles/ray/rollout/external_engine_provider.py",  # what node/pool_provider's cells mirror
+    "miles/ray/rollout/inference_controller.py",  # reconciles the cells; start_update_weights' snapshot
+    "miles/ray/specs/inference.py",  # compute_engine_provider, the engine env node/rollout starts them with
+    "miles/backends/sglang_utils/sglang_engine.py",  # compute_engine_launch_cmd in node/rollout
+    "miles/backends/training_utils/weight_update/",  # hook-013's protocol and reconnect_if_needed, for split's sync
+    "miles/utils/workers/polling_reconcile_loop.py",  # node/pool_provider
+    "miles/utils/workers/worker_provider/base.py",  # node/pool_provider
     "miles/utils/arguments.py",  # every flag recipe.py emits
     "miles/utils/chat_template_utils/tito_tokenizer.py",  # parsers in presets.py
     "miles/utils/tracking_utils/wandb_utils.py",  # gpu_telemetry mirrors init_wandb_secondary, imports its helpers

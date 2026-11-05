@@ -165,6 +165,7 @@ def serve(recipe: dict, run_id: str, *, env: dict, storage, on_state: Callable[[
             "token": token,
             "engine_ports": ports,
             "agent_port": agent_port,
+            "gpus_per_engine": spec["gpus_per_engine"],
         }
         state = {**state, "phase": "ready", "ready_at": time.time(), "url": member["url"]}
         notify(state)
@@ -186,6 +187,25 @@ def serve(recipe: dict, run_id: str, *, env: dict, storage, on_state: Callable[[
     return state
 
 
+def _load(ports: list[int]) -> list[dict]:
+    """Each engine's running and waiting requests, as SGLang reports them, for a caller's scaling decision."""
+    out = []
+    for port in ports:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/server_info", timeout=5) as r:
+                states = json.loads(r.read()).get("internal_states") or [{}]
+            out.append(
+                {
+                    "port": port,
+                    "running": states[0].get("num_running_reqs"),
+                    "waiting": states[0].get("num_waiting_reqs"),
+                }
+            )
+        except (OSError, ValueError):
+            out.append({"port": port, "running": None, "waiting": None})
+    return out
+
+
 def _serve_until_released(
     member: dict, env: dict, agent, procs: list[subprocess.Popen], pool_token: str, idle_secs: int
 ) -> str:
@@ -201,13 +221,15 @@ def _serve_until_released(
         if url and (url != last_url or now >= next_beat):
             next_beat = now + registry.BEAT_SECS
             try:
-                reply = registry.beat(url, pool_token, member)
+                reply = registry.beat(url, pool_token, {**member, "load": _load(member["engine_ports"])})
             except registry.UNREACHABLE as e:  # the trainer is gone or not up yet: the idle limit decides
                 print(f"rollout node: beat to {url}: {type(e).__name__}: {e}", flush=True)
             else:
                 seen, last_url = now, url
                 if reply.get("done"):
                     return "trainer done"
+                if reply.get("evicted"):
+                    return "evicted by the trainer"
         if now - seen > idle_secs:
             return f"no trainer for {idle_secs // 60} min"
         time.sleep(POLL_SECS)

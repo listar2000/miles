@@ -98,7 +98,7 @@ def test_post_write_hook_commits_on_every_rank_and_reloads_after_all_of_them(mon
         "miles.backends.training_utils.weight_update.protocols.gpu_delta.protocol",
         SimpleNamespace(_collective_check=lambda error, phase: calls.append(("check", error))),
     )
-    monkeypatch.setenv(volume_sync.AGENT_ENV, "http://127.0.0.1:9")
+    monkeypatch.setattr(volume_sync, "_serving_nodes", lambda engines: [{"node_id": "a", "agent_slot": 9}])
     monkeypatch.setattr(volume_sync, "request_commit", lambda name: calls.append(("commit", name)))
     monkeypatch.setattr(volume_sync, "_call", lambda url, body, timeout: calls.append(("reload", url, body)) or {})
     volume_sync.gpu_delta_post_write(None, version_dir, [])

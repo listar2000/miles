@@ -278,8 +278,9 @@ if SPLIT:
         # lost gang node does today (the relay keeps the old tunnel)
         single_use_containers=True,
     )
-    def engine(recipe: dict, run_id: str, pool_token: str) -> dict:
-        """A split run's rollout node (miles_ext.node.rollout) on one container; outlives a failed trainer."""
+    def engine(recipe: dict, run_id: str, pool_token: str, primary: bool = True) -> dict:
+        """A split run's rollout node (miles_ext.node.rollout) on one container; outlives a failed trainer. Only the
+        primary reports its phases, which is what this launcher's relaunch logic follows."""
         from miles_ext.node import rollout
         from miles_ext.platform import progress as P
 
@@ -300,7 +301,7 @@ if SPLIT:
             def publish(state: dict) -> None:
                 progress[key] = {**state, "call_id": call_id, "pool_token": pool_token}
 
-            return rollout.run(recipe, run_id, on_state=publish)
+            return rollout.run(recipe, run_id, on_state=publish if primary else None)
 
 
 def _carry_trainer_url(run_id: str, progress) -> None:
@@ -387,11 +388,26 @@ def spawn_detached():
 
 
 @app.local_entrypoint()
-def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_samples: int = 0,
-         save_interval: int = 0, check_only: bool = False, segment_hours: float = 0):
+def main(
+    run_id: str = "",
+    num_rollout: int = 0,
+    rollout_batch_size: int = 0,
+    n_samples: int = 0,
+    save_interval: int = 0,
+    check_only: bool = False,
+    segment_hours: float = 0,
+    add_rollout_node: bool = False,
+):
     recipe = R.load(os.environ.get("MILES_RECIPE") or DEFAULT_RECIPE,
                     _overrides(num_rollout, rollout_batch_size, n_samples, save_interval))
     run_id = run_id or f"{recipe['name']}-{time.strftime('%Y%m%d-%H%M%S')}"
+    if add_rollout_node:  # an elastic run: one more node, as a scaling launcher would start
+        from miles_ext.platform import progress as P
+
+        pool_token = P.progress_dict(TARGET)[_engine_key(run_id)]["pool_token"]
+        call = engine.spawn(recipe, run_id, pool_token, False)
+        print(f"rollout node call {call.object_id}", flush=True)
+        return call.get()
     algo = recipe["algorithm"]
     print(f"run_id={run_id} image={'built from ' + FROM_COMMIT[:10] if FROM_COMMIT else IMAGE or stack.FORK_IMAGE} recipe={recipe['name']} harness={recipe['taskset']['harness']} "
           f"num_rollout={algo['num_rollout']} batch={algo['rollout_batch_size']}x{algo['n_samples']} "

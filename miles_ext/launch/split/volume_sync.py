@@ -5,12 +5,15 @@ import os
 import shutil
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from miles_ext.launch.split.agent import MANIFEST, PUSH_TIMEOUT_SECS, TENSORS
+from miles_ext.node import contract as C
+from miles_ext.node import registry as node_registry
 
-AGENT_ENV = "MILES_SPLIT_AGENT_URL"  # the trainer's local relay to the agent
+REGISTRY_ENV = "MILES_SPLIT_REGISTRY_URL"  # rank 0's registry, as this trainer node reaches it
 RUN_DIR_ENV = "MILES_SPLIT_RUN_DIR"  # /results/<run_id> on the trainer
 COMMIT_DIR = Path("/tmp/miles-split-commit")  # sender -> function process: "commit this sync"
 COMMIT_TIMEOUT_SECS = 300
@@ -18,6 +21,42 @@ KEEP_SYNCS = 2  # sync dirs kept on the volume (the newest; an engine may still 
 
 
 # ---- trainer side ---------------------------------------------------------------------------------
+
+
+def _engine_slot(engine) -> int:
+    return urllib.parse.urlsplit(engine.server_url).port
+
+
+def _serving_nodes(engines) -> list[dict]:
+    """The registered nodes behind this engine set: Miles' snapshot of the cells decides who gets a sync, so a node
+    that joined since then waits for the reconnect that registers its adapters."""
+    slots = {_engine_slot(e) for e in engines}
+    members = node_registry.members(os.environ[REGISTRY_ENV], os.environ[C.POOL_TOKEN_ENV])
+    return [m for m in members if slots & set(m["slots"])]
+
+
+def _on_every_node(path: str, body: dict, nodes: list[dict], timeout: float) -> list[dict]:
+    """Call node agents concurrently; evict failures to exclude stale weights and raise if none succeeds."""
+    results: dict[str, dict] = {}
+    errors: dict[str, Exception] = {}
+
+    def one(node: dict) -> None:
+        try:
+            results[node["node_id"]] = _call(f"http://127.0.0.1:{node['agent_slot']}{path}", body, timeout)
+        except Exception as e:
+            errors[node["node_id"]] = e
+
+    threads = [threading.Thread(target=one, args=(n,)) for n in nodes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for node_id, e in errors.items():
+        print(f"[split] {path} on {node_id} failed: {type(e).__name__}: {e}", flush=True)
+        node_registry.evict(os.environ[REGISTRY_ENV], os.environ[C.POOL_TOKEN_ENV], node_id, f"{path}: {e}"[:500])
+    if not results:
+        raise RuntimeError(f"split {path}: no rollout node took it: {errors}")
+    return list(results.values())
 
 
 def _protocol_base():
@@ -32,7 +71,6 @@ class VolumeAdapterSync(_protocol_base()):
     def __init__(self, args) -> None:
         super().__init__(args)
         self.group_name = "miles-split-volume"
-        self._agent = os.environ[AGENT_ENV]
         self._run_dir = Path(os.environ[RUN_DIR_ENV])
         self._buckets: list[list] = []
         self._version: int | None = None
@@ -61,7 +99,13 @@ class VolumeAdapterSync(_protocol_base()):
         replica_rank, _ = get_data_replica_rank_and_size(parallel_state, placement)
         self.is_sender = replica_rank == 0
         if self.is_sender:
-            _call(f"{self._agent}/connect", {"engines": len(rollout_engines)}, timeout=60)
+            self._nodes = _serving_nodes(rollout_engines)
+            for node in self._nodes:
+                _call(
+                    f"http://127.0.0.1:{node['agent_slot']}/connect",
+                    {"engines": len(node["engine_ports"])},
+                    timeout=60,
+                )
 
     def begin_sync(self, weight_version, iter_buckets) -> bool:
         self._version, self._buckets = int(weight_version), []
@@ -79,7 +123,7 @@ class VolumeAdapterSync(_protocol_base()):
         t1 = time.monotonic()
         request_commit(sync_dir.name)
         t2 = time.monotonic()
-        _call(f"{self._agent}/push", {"dir": str(sync_dir), "selector": self._selector}, timeout=PUSH_TIMEOUT_SECS)
+        _on_every_node("/push", {"dir": str(sync_dir), "selector": self._selector}, self._nodes, PUSH_TIMEOUT_SECS)
         t3 = time.monotonic()
         self._buckets = []
         prune(self._run_dir / "adapters", keep=KEEP_SYNCS)
@@ -117,7 +161,7 @@ def gpu_delta_post_write(args, version_dir: str, rollout_engines) -> None:
     if rank != 0:
         return
     t1 = time.monotonic()
-    _call(f"{os.environ[AGENT_ENV]}/reload", {"dir": str(version_dir)}, timeout=PUSH_TIMEOUT_SECS)
+    _on_every_node("/reload", {"dir": str(version_dir)}, _serving_nodes(rollout_engines), PUSH_TIMEOUT_SECS)
     print(
         f"[split gpu-delta {Path(version_dir).name}] commit {t1 - t0:.1f}s reload {time.monotonic() - t1:.1f}s",
         flush=True,

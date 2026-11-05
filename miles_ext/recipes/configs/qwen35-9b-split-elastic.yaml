@@ -1,0 +1,40 @@
+# The cheapest elastic split recipe (ext-066): Qwen3.5-9B LoRA, a whole H200:8 trainer node, rollout nodes joining and
+# leaving through the registry, single-turn STAK prompts (experiments/dsv41_stak_overfit/prompts/stak32.jsonl).
+name: qwen35-9b-split-elastic
+model:
+  preset: qwen3.5-9b
+  backend: megatron
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 8
+  timeout_hours: 2
+  disk_gib: 1024
+  placement: split
+  engine:
+    elastic: true
+    idle_minutes: 10
+    timeout_hours: 2
+parallel:
+  tp: 2
+lora:
+  rank: 8
+  alpha: 8
+taskset:
+  prompts: $MILES_DATA/prompts/stak32.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 8
+  rollout_batch_size: 8
+  n_samples: 4
+  max_response_len: 1024
+  max_seq_len: 4096
+  lr: 1.0e-4
+checkpoint:
+  save_interval: 4
+  keep: 1
+  save_optimizer: true
+tracking:
+  wandb_project: miles-fork-validation
+  wandb_entity: mobiuslab

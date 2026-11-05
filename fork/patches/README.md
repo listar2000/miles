@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-066 | Ext | Elastic rollout pool: `cluster.engine.elastic`, rollout nodes joining and leaving through upstream's `--custom-inference-engine-provider-path`, a failed node evicted, load in run state | active | [ext-066-elastic-pool.md](ext-066-elastic-pool.md) |
 | ext-065 | Ext | Every role and job as a node command: `trainer`, `rollout`, `check`, `prepare-weights`, `convert-fsdp`, `sft-prepare`, `sft-train` | active | [ext-065-node-commands.md](ext-065-node-commands.md) |
 | ext-064 | Ext | The trainer role with no Modal: `miles_ext.node.trainer`, gang from env, worker release and shard commits over rank 0's gang server, run state behind `MILES_STATE` | active | [ext-064-node-trainer.md](ext-064-node-trainer.md) |
 | ext-063 | Ext | Split's rollout role with no Modal: `miles_ext.node.rollout` registers with rank 0's registry over HTTP and beats, instead of reading the progress Dict | active | [ext-063-node-rollout.md](ext-063-node-rollout.md) |

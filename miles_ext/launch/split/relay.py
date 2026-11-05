@@ -1,6 +1,7 @@
-"""The split trainer's relay: local ports to a rollout node's public URL."""
+"""The split trainer's relay: local ports to the rollout nodes' public URLs, following the registry."""
 
 import argparse
+import os
 import socket
 import subprocess
 import sys
@@ -8,8 +9,11 @@ import time
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
+from miles_ext.node import contract as C
+from miles_ext.node import registry as node_registry
 from miles_ext.recipes import recipe as R
 
+POLL_SECS = 3
 _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
 
 
@@ -43,51 +47,54 @@ def make_app(upstream: str, remote_port: int) -> web.Application:
     return app
 
 
-async def _serve(upstream: str, mapping: dict[int, int]):
+def desired(members: list[dict]) -> dict[int, tuple[str, int]]:
+    """Each slot and where it leads: ``{slot: (<public url>/<token>, <port on the node>)}``."""
+    out = {}
+    for m in members:
+        upstream = f"{m['url']}/{m['token']}"
+        out.update({slot: (upstream, port) for slot, port in zip(m["slots"], m["engine_ports"], strict=True)})
+        out[m["agent_slot"]] = (upstream, m["agent_port"])
+    return out
+
+
+async def _follow(registry_url: str, pool_token: str, poll: float = POLL_SECS):
     import asyncio
 
-    runners = []
-    for local, remote in mapping.items():
-        runner = web.AppRunner(make_app(upstream, remote), access_log=None)
-        await runner.setup()
-        await web.TCPSite(runner, "127.0.0.1", local).start()
-        runners.append(runner)
-    await asyncio.Event().wait()
+    open_slots: dict[int, web.AppRunner] = {}
+    while True:
+        try:
+            members = await asyncio.to_thread(node_registry.members, registry_url, pool_token)
+        except node_registry.UNREACHABLE as e:  # rank 0 is restarting or busy: keep what is open
+            print(f"split relay: reading the registry: {type(e).__name__}: {e}", flush=True)
+        else:
+            want = desired(members)
+            for slot in set(open_slots) - set(want):
+                await open_slots.pop(slot).cleanup()
+            for slot in set(want) - set(open_slots):
+                runner = web.AppRunner(make_app(*want[slot]), access_log=None)
+                await runner.setup()
+                await web.TCPSite(runner, "127.0.0.1", slot).start()
+                open_slots[slot] = runner
+        await asyncio.sleep(poll)
 
 
-def local_ports(recipe: dict) -> dict[str, list[int] | int]:
-    """The trainer's local ports: one per engine (the argv's external addresses), then the agent."""
-    n = R.num_engines(recipe)
-    return {"engines": [R.SPLIT_ENGINE_PORT + i for i in range(n)], "agent": R.SPLIT_ENGINE_PORT + n}
-
-
-def connect(recipe: dict, member: dict) -> tuple[subprocess.Popen, str]:
-    """Start this node's relays to a registered rollout node. Returns the relay process and the agent's local URL
-    (MILES_SPLIT_AGENT_URL)."""
-    ports = local_ports(recipe)
-    remote = [*member["engine_ports"], member["agent_port"]]
-    local = [*ports["engines"], ports["agent"]]
-    if len(remote) != len(local):
-        raise RuntimeError(
-            f"the rollout node serves {len(remote) - 1} engines, the recipe expects "
-            f"{len(local) - 1}; relaunch both with the same recipe"
-        )
-    mapping = [f"{a}={b}" for a, b in zip(local, remote, strict=True)]
+def connect(recipe: dict, registry_url: str, pool_token: str, members: list[dict]) -> subprocess.Popen:
+    """Start this node's relay, once the first joined nodes' slots are open. Returns the process."""
+    if not R.is_elastic(recipe):
+        for m in members:
+            if len(m["engine_ports"]) != R.num_engines(recipe):
+                raise RuntimeError(
+                    f"the rollout node serves {len(m['engine_ports'])} engines, the recipe expects "
+                    f"{R.num_engines(recipe)}; relaunch both with the same recipe"
+                )
     proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "miles_ext.launch.split.relay",
-            "--upstream",
-            f"{member['url']}/{member['token']}",
-            "--map",
-            *mapping,
-        ]
+        [sys.executable, "-m", "miles_ext.launch.split.relay", "--registry", registry_url],
+        env={**os.environ, C.POOL_TOKEN_ENV: pool_token},
     )
-    for port in local:
-        _wait_port(port, proc)
-    print(f"split: engines {member['url']}/<token> relayed at 127.0.0.1:{local}", flush=True)
-    return proc, f"http://127.0.0.1:{ports['agent']}"
+    for slot in desired(members):
+        _wait_port(slot, proc)
+    print(f"split: rollout nodes relayed at 127.0.0.1:{sorted(desired(members))}", flush=True)
+    return proc
 
 
 def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):
@@ -106,10 +113,9 @@ def main():
     import asyncio
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--upstream", required=True, help="<public url>/<token>")
-    ap.add_argument("--map", nargs="+", required=True, help="<local port>=<rollout node port> ...")
+    ap.add_argument("--registry", required=True, help="rank 0's registry, as this node reaches it")
     a = ap.parse_args()
-    asyncio.run(_serve(a.upstream.rstrip("/"), dict(tuple(int(x) for x in m.split("=")) for m in a.map)))
+    asyncio.run(_follow(a.registry, os.environ[C.POOL_TOKEN_ENV]))
 
 
 if __name__ == "__main__":

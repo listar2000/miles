@@ -113,7 +113,14 @@ DEFAULTS: dict[str, Any] = {
         "timeout_hours": 6,
         "disk_gib": None,
         "placement": "one_cluster",
-        "engine": {"cpu": None, "memory_gib": None, "disk_gib": None, "timeout_hours": None, "idle_minutes": 30},
+        "engine": {
+            "cpu": None,
+            "memory_gib": None,
+            "disk_gib": None,
+            "timeout_hours": None,
+            "idle_minutes": 30,
+            "elastic": False,  # ext-066: rollout nodes may join and leave while the trainer runs
+        },
     },
     # tasks_volume "<volume>:/<path>": the task dirs on a Modal volume, instead of tasks_dir
     "taskset": {"tasks_dir": None, "tasks_volume": None, "prompts": None, "harness": HARNESS_SANDBOX},
@@ -277,6 +284,7 @@ PLACEMENTS = (ONE_CLUSTER, SPLIT)
 # split: the trainer reaches engine i at 127.0.0.1:SPLIT_ENGINE_PORT + i (a relay to the engine container)
 SPLIT_ENGINE_PORT = 31000
 SPLIT_SYNC_PROTOCOL = "miles_ext.launch.split.volume_sync.VolumeAdapterSync"  # ext-037, through hook-013
+SPLIT_ENGINE_PROVIDER = "miles_ext.node.pool_provider.registry_engine_provider"  # ext-066, upstream's hook
 # ext-053: GPU-delta through the results volume; models whose SGLang receiver mapping exists (hook-018)
 GPU_DELTA_POST_WRITE = "miles_ext.launch.split.volume_sync.gpu_delta_post_write"
 GPU_DELTA_PRESETS = ("glm-5.3-flash", "glm-5.3-flash-4layer")
@@ -320,6 +328,7 @@ FIELD_RULES: dict[str, dict] = {
     "cluster.engine.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},
     "cluster.engine.timeout_hours": {"type": "number", "nullable": True, "min": 0.1, "max": 24},
     "cluster.engine.idle_minutes": {"type": "int", "min": 1, "max": 1440},
+    "cluster.engine.elastic": {"type": "bool"},
     "model.preset": {"type": "str", "enum": tuple(sorted(PRESETS))},
     "model.backend": {"type": "str", "nullable": True, "enum": BACKENDS},
     "model.revision": {"type": "str", "nullable": True},
@@ -533,6 +542,10 @@ def is_split(recipe: dict) -> bool:
     return recipe["cluster"]["placement"] == SPLIT
 
 
+def is_elastic(recipe: dict) -> bool:
+    return is_split(recipe) and bool(recipe["cluster"]["engine"]["elastic"])
+
+
 def gpu_delta(recipe: dict) -> bool:
     return recipe["rollout"]["weight_sync"] == "gpu-delta"
 
@@ -558,6 +571,8 @@ def _validate_split(recipe: dict) -> None:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
     if int(cluster["train_gpus"]) != (whole_nodes := int(cluster["nodes"]) * GPUS_PER_NODE):
         raise ValueError(f"cluster.placement split: the trainer uses whole nodes, cluster.train_gpus {whole_nodes}")
+    if is_elastic(recipe) and gpu_delta(recipe):
+        raise ValueError("cluster.engine.elastic needs LoRA: a late node has no base for GPU deltas yet")
 
 
 def rollout_gpus(recipe: dict) -> int:
@@ -1038,6 +1053,9 @@ def _split_args(recipe: dict, run_id: str) -> str:
     """Return the split argv: the engines' local relay addresses and the volume sync protocol."""
     if not is_split(recipe):
         return ""
+    if is_elastic(recipe):
+        return f"""--custom-inference-engine-provider-path {SPLIT_ENGINE_PROVIDER}
+        --custom-weight-transfer-protocol-path {SPLIT_SYNC_PROTOCOL}"""
     addrs = " ".join(f"127.0.0.1:{SPLIT_ENGINE_PORT + i}" for i in range(num_engines(recipe)))
     if gpu_delta(recipe):
         # the receiver binds whole tensors per rank: attention TP 1 (data-parallel attention), port-001

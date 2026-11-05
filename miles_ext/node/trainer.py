@@ -198,10 +198,19 @@ def _split_links(
 
     stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.RESULTS).commit).set)
     timeout = int(R.shape(recipe)["engine"]["timeout_hours"] * 3600)
-    members = node_registry.wait_members(registry_url, os.environ[C.POOL_TOKEN_ENV], timeout=timeout, check=wait_check)
-    relay_proc, agent_url = relay.connect(recipe, members[0])
-    stack_ctx.callback(relay_proc.terminate)
-    env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
+    pool_token = os.environ[C.POOL_TOKEN_ENV]
+    members = node_registry.wait_members(registry_url, pool_token, timeout=timeout, check=wait_check)
+    stack_ctx.callback(relay.connect(recipe, registry_url, pool_token, members).terminate)
+    env[volume_sync.REGISTRY_ENV], env[volume_sync.RUN_DIR_ENV] = registry_url, str(run_dir)
+
+
+def _publish_pool_status(registry, state, key: str, stop: threading.Event, every: float = 30.0) -> None:
+    """The rollout pool's size and load where a caller reads run state; it decides whether to add or drop nodes."""
+    while not stop.wait(every):
+        try:
+            state[key] = registry.status()
+        except Exception as e:
+            print(f"pool status: {type(e).__name__}: {e}", flush=True)
 
 
 def _worker(
@@ -346,6 +355,13 @@ def _head(
             from miles_ext.node.registry import Registry
 
             registry = Registry(os.environ[C.POOL_TOKEN_ENV]).start()
+            status_stop = threading.Event()
+            stack_ctx.callback(status_stop.set)
+            threading.Thread(
+                target=_publish_pool_status,
+                daemon=True,
+                args=(registry, node_state.for_run(run_id), P.keys(run_id)["pool"], status_stop),
+            ).start()
             _split_links(recipe, run_dir, env, stack_ctx, f"http://127.0.0.1:{C.REGISTRY_PORT}", wait_check)
 
         if final_retention:  # ext-056: prune old saves while training, so a long run does not fill the storage

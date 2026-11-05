@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable
 
 from miles_ext.node.contract import REGISTRY_PORT
+from miles_ext.recipes.recipe import SPLIT_ENGINE_PORT
 
 BEAT_SECS = 15
 MEMBER_TTL_SECS = 4 * BEAT_SECS
@@ -25,14 +26,45 @@ class Registry:
         self.pool_token = pool_token
         self.done = False
         self._members: dict[str, dict] = {}
+        self._evicted: set[str] = set()
+        self._next_slot = SPLIT_ENGINE_PORT
         self._lock = threading.Lock()
 
     def beat(self, member: dict) -> dict:
         with self._lock:
-            if member["node_id"] not in self._members:
-                print(f"registry: {member['node_id']} joined at {member['url']}", flush=True)
-            self._members[member["node_id"]] = {**member, "seen_at": time.time()}
-            return {"done": self.done}
+            node_id = member["node_id"]
+            if node_id in self._evicted:
+                return {"done": self.done, "evicted": True}
+            known = self._members.get(node_id)
+            if known is None:
+                n = len(member["engine_ports"])
+                slots = list(range(self._next_slot, self._next_slot + n))
+                known = {"slots": slots, "agent_slot": self._next_slot + n}
+                self._next_slot += n + 1
+                print(f"registry: {node_id} joined at {member['url']}, slots {slots}", flush=True)
+            self._members[node_id] = {
+                **member,
+                "slots": known["slots"],
+                "agent_slot": known["agent_slot"],
+                "seen_at": time.time(),
+            }
+            return {"done": self.done, "evicted": False}
+
+    def evict(self, node_id: str, why: str) -> None:
+        """Out for good: a node that missed a sync serves stale weights, so it must not come back. It exits on its next
+        beat, and a caller who wants the capacity back starts another."""
+        with self._lock:
+            self._evicted.add(node_id)
+            self._members.pop(node_id, None)
+        print(f"registry: evicted {node_id}: {why}", flush=True)
+
+    def status(self) -> dict:
+        """For a caller deciding whether to add or drop nodes: who is here and how loaded each engine is."""
+        return {
+            "at": time.time(),
+            "done": self.done,
+            "nodes": [{k: m.get(k) for k in ("node_id", "url", "seen_at", "load")} for m in self.members()],
+        }
 
     def members(self) -> list[dict]:
         cutoff = time.time() - MEMBER_TTL_SECS
@@ -66,9 +98,15 @@ class Registry:
         async def members(request):
             return web.json_response({"members": self.members()})
 
+        async def evict(request):
+            body = await request.json()
+            self.evict(body["node_id"], body.get("why", ""))
+            return web.json_response({})
+
         app = web.Application(middlewares=[auth])
         app.router.add_post("/beat", beat)
         app.router.add_get("/members", members)
+        app.router.add_post("/evict", evict)
         return app
 
     def start(self, port: int = REGISTRY_PORT) -> "Registry":
@@ -108,19 +146,27 @@ def beat(registry_url: str, pool_token: str, member: dict, timeout: float = 30) 
     return _post(f"{registry_url.rstrip('/')}/beat", member, pool_token, timeout)
 
 
+def members(registry_url: str, pool_token: str, timeout: float = 30) -> list[dict]:
+    req = urllib.request.Request(
+        f"{registry_url.rstrip('/')}/members", headers={"Authorization": f"Bearer {pool_token}"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read())["members"]
+
+
+def evict(registry_url: str, pool_token: str, node_id: str, why: str) -> None:
+    _post(f"{registry_url.rstrip('/')}/evict", {"node_id": node_id, "why": why}, pool_token, 30)
+
+
 def wait_members(
     registry_url: str, pool_token: str, *, timeout: float, check: Callable[[], None] | None = None
 ) -> list[dict]:
     """Block until a rollout node has joined. ``check`` may raise to give up early (the caller saw the node die)."""
     deadline = time.monotonic() + timeout
-    req = urllib.request.Request(
-        f"{registry_url.rstrip('/')}/members", headers={"Authorization": f"Bearer {pool_token}"}
-    )
     while True:
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if members := json.loads(resp.read())["members"]:
-                    return members
+            if found := members(registry_url, pool_token):
+                return found
         except UNREACHABLE:  # rank 0's registry is not up yet
             pass
         if check:

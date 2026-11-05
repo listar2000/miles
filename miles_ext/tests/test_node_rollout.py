@@ -123,8 +123,10 @@ def _stop_registries():
 
 def _registry() -> tuple[Reg.Registry, str]:
     port = _free_port()
-    _registries.append(Reg.Registry("pool").start(port))
-    return _registries[-1], f"http://127.0.0.1:{port}"
+    registry = Reg.Registry("pool")
+    registry._next_slot = _free_port(span=3)  # the relay opens these
+    _registries.append(registry.start(port))
+    return registry, f"http://127.0.0.1:{port}"
 
 
 def _join(thread: threading.Thread, timeout: float = 30) -> None:
@@ -142,14 +144,14 @@ def test_a_node_joins_serves_through_a_relay_and_leaves_on_release(node, monkeyp
     assert states[-1]["phase"] == "ready"
     assert member["url"] == f"http://127.0.0.1:{C.ROLLOUT_PROXY_PORT}" and len(member["engine_ports"]) == 2
 
-    local = _free_port(span=3)  # the relay's two engines and agent
-    monkeypatch.setattr(relay.R, "num_engines", lambda recipe: 2)
-    monkeypatch.setattr(relay.R, "SPLIT_ENGINE_PORT", local)
-    proc, agent_url = relay.connect({}, member)
+    monkeypatch.setattr(relay.R, "is_elastic", lambda recipe: True)
+    proc = relay.connect({}, url, "pool", [member])
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{local + 1}/generate", timeout=10) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{member['slots'][1]}/generate", timeout=10) as r:
             assert r.read().decode() == f"{member['engine_ports'][1]}/generate"
-        req = urllib.request.Request(f"{agent_url}/connect", data=json.dumps({"engines": 2}).encode())
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{member['agent_slot']}/connect", data=json.dumps({"engines": 2}).encode()
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             assert json.loads(r.read())["ok"] is True
     finally:
@@ -214,7 +216,7 @@ def test_the_registry_answers_only_the_pool_token():
 
 def test_members_drop_out_when_they_stop_beating(monkeypatch):
     registry = Reg.Registry("pool")
-    registry.beat({"node_id": "a", "url": "http://a"})
+    registry.beat({"node_id": "a", "url": "http://a", "engine_ports": [1]})
     assert [m["node_id"] for m in registry.members()] == ["a"]
     monkeypatch.setattr(Reg, "MEMBER_TTL_SECS", 0)
     time.sleep(0.01)
@@ -226,3 +228,40 @@ def test_the_rollout_role_imports_without_modal():
 
     code = "import sys; sys.modules['modal'] = None\nimport miles_ext.node.rollout, miles_ext.node.registry"
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_slots_name_one_engine_for_good_and_an_evicted_node_stays_out():
+    registry = Reg.Registry("pool")
+    a = {"node_id": "a", "url": "http://a", "engine_ports": [1, 2]}
+    b = {"node_id": "b", "url": "http://b", "engine_ports": [1, 2]}
+    registry.beat(a)
+    registry.beat(b)
+    first, second = registry.members()
+    assert first["slots"] == [Reg.SPLIT_ENGINE_PORT, Reg.SPLIT_ENGINE_PORT + 1]
+    assert first["agent_slot"] == Reg.SPLIT_ENGINE_PORT + 2
+    assert second["slots"] == [Reg.SPLIT_ENGINE_PORT + 3, Reg.SPLIT_ENGINE_PORT + 4]
+
+    registry.beat(a)
+    assert registry.members()[0]["slots"] == first["slots"]  # a beat keeps them
+
+    registry.evict("a", "missed a sync")
+    assert registry.beat(a) == {"done": False, "evicted": True}
+    assert [m["node_id"] for m in registry.members()] == ["b"]
+
+
+def test_an_evicted_node_exits_on_its_next_beat(node):
+    start, url_file, _, result = node
+    registry, url = _registry()
+    url_file.write_text(url)
+    thread = start()
+    (member,) = Reg.wait_members(url, "pool", timeout=30)
+    registry.evict(member["node_id"], "test")
+    _join(thread)
+    assert result["state"]["reason"] == "evicted by the trainer"
+
+
+def test_the_relay_follows_the_registry(monkeypatch):
+    monkeypatch.setattr(relay, "POLL_SECS", 0.05)
+    assert relay.desired(
+        [{"url": "http://a", "token": "t", "slots": [5, 6], "engine_ports": [1, 2], "agent_slot": 7, "agent_port": 3}]
+    ) == {5: ("http://a/t", 1), 6: ("http://a/t", 2), 7: ("http://a/t", 3)}

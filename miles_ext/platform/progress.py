@@ -7,9 +7,10 @@ Two places hold it, so a reader never depends on the trainer being alive:
   id, then rank 0's heartbeat replaces it every ``HEARTBEAT_SECS``),
   ``active:<run_id>`` (the live segment's call id: at most one segment per run),
   ``lease:<run_id>`` (written by the caller, see ``renew_lease``) and
-  ``exit:<run_id>`` (the exit record); teardown deletes all of them, and
-  ``commit:<run_id>``, which only runs before ext-064 wrote here (it now names the
-  commit request in rank 0's gang server, see ``shards``);
+  ``exit:<run_id>`` (the exit record) and ``pool:<run_id>`` (a split run's rollout nodes
+  and their load); teardown deletes all of them, and ``commit:<run_id>``, which only runs
+  before ext-064 wrote here (it now names the commit request in rank 0's gang server,
+  see ``shards``);
 - the results volume: ``<run_id>/exit.json`` (the newest exit record) and
   ``<run_id>/exits.jsonl`` (one line per segment), next to the checkpoints.
 
@@ -71,7 +72,7 @@ def keys(run_id: str) -> dict:
     if not re.fullmatch(R.RUN_ID_RE, run_id or ""):
         raise ValueError(f"run id {run_id!r}")
     return {"run": f"run:{run_id}", "active": f"active:{run_id}", "lease": f"lease:{run_id}",
-            "exit": f"exit:{run_id}", "commit": f"commit:{run_id}"}
+            "exit": f"exit:{run_id}", "commit": f"commit:{run_id}", "pool": f"pool:{run_id}"}
 
 
 def progress_dict(target: Target, create: bool = True) -> modal.Dict:
