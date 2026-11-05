@@ -195,7 +195,7 @@ ANSWER = re.compile(r"<answer>(.*?)</answer>", re.S)
 
 
 def grade(response, label):
-    """(reward, kind): kind is ok, wrong, no_answer, multi_answer or bad_format. Only text after the reasoning counts."""
+    """(reward, kind): kind is ok, wrong, no_answer, multi_answer or bad_format. Reasoning text does not count."""
     text = response.split("</think>")[-1]
     found = ANSWER.findall(text)
     if not found:
