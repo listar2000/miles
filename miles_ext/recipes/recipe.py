@@ -584,13 +584,19 @@ def rollout_precision(recipe: dict) -> str:
 def _validate_sampling(recipe: dict) -> None:
     """Combinations SGLang or Miles would only refuse after the engines start."""
     algo, spec = recipe["algorithm"], speculative_algorithm(recipe)
-    flags = set(recipe["extra_args"])
-    if algo["top_p"] is not None and algo["top_k"] is None:
+
+    def in_extra_args(flag: str) -> bool:
+        return any(arg == flag or arg.startswith(f"{flag}=") for arg in recipe["extra_args"])
+
+    top_p = algo["top_p"] is not None or in_extra_args("--rollout-top-p")
+    top_k = algo["top_k"] is not None or in_extra_args("--rollout-top-k")
+    if top_p and not top_k:
         raise ValueError("algorithm.top_p needs algorithm.top_k: top-p alone does not bound the returned support")
-    bounded = algo["top_p"] is not None or algo["top_k"] is not None or flags & {"--rollout-top-p", "--rollout-top-k"}
-    if bounded and spec and spec not in EXACT_SAMPLING_DRAFTS:
-        raise ValueError(f"top-p or top-k replay needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec}: "
-                         "SGLang refuses return_sampling_mask with it; set rollout.speculative false")
+    if (top_p or top_k) and spec and spec not in EXACT_SAMPLING_DRAFTS:
+        raise ValueError(
+            f"top-p or top-k replay needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec}: "
+            "SGLang refuses return_sampling_mask with it; set rollout.speculative false"
+        )
     if algo["loss"] == "score_centering" and spec and spec != "DSPARK":
         raise ValueError(f"score_centering accepts DSpark only, not {spec} (fix-058); set rollout.speculative false")
 

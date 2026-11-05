@@ -71,11 +71,20 @@ def test_dflash2_serves_its_own_checkpoint_with_top_p_replay(monkeypatch):
         (BOUNDED, "exact-sampling draft"),
         ({"algorithm": {"top_k": 32}}, "exact-sampling draft"),
         ({"extra_args": ["--rollout-top-p", "0.95", "--rollout-top-k", "32"]}, "exact-sampling draft"),
+        ({"extra_args": ["--rollout-top-p=0.95", "--rollout-top-k=32"]}, "exact-sampling draft"),
         ({"algorithm": {"loss": "score_centering"}}, "DSpark only"),
         ({**DFLASH2, "algorithm": {"loss": "score_centering"}}, "DSpark only"),
         ({**DFLASH2, "algorithm": {"top_p": 0.95}}, "needs algorithm.top_k"),
     ],
-    ids=["eagle-top-p", "eagle-top-k", "eagle-extra-args", "eagle-score-centering", "dflash2-score-centering", "no-top-k"],
+    ids=[
+        "eagle-top-p",
+        "eagle-top-k",
+        "eagle-extra-args",
+        "eagle-extra-args-equals",
+        "eagle-score-centering",
+        "dflash2-score-centering",
+        "no-top-k",
+    ],
 )
 def test_refused_sampling_combinations_fail_at_load(monkeypatch, overrides, message):
     with pytest.raises(ValueError, match=message):
@@ -83,6 +92,8 @@ def test_refused_sampling_combinations_fail_at_load(monkeypatch, overrides, mess
 
 
 def test_plain_decode_allows_every_sampling_option(monkeypatch):
-    argv = _argv(monkeypatch, rollout={"speculative": False}, algorithm={"top_p": 0.95, "top_k": 32, "loss": "score_centering"})
+    argv = _argv(
+        monkeypatch, rollout={"speculative": False}, algorithm={"top_p": 0.95, "top_k": 32, "loss": "score_centering"}
+    )
     assert "--sglang-speculative-algorithm" not in argv
     assert argv[argv.index("--loss-type") + 1] == "score_centering"
