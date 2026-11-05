@@ -63,6 +63,7 @@ def test_recipe_single_turn_refuses(taskset, message):
         ({"task": "nope", "label": "1"}, "metadata.task"),
         ({"task": "stackvm", "label": "1"}, "metadata.task"),
         ({"task": f"{__name__}.missing", "label": "1"}, "metadata.task"),
+        ({"task": f"{__name__}.EXACT", "label": "1"}, "metadata.task"),
         ({"task": EXACT}, "label"),
     ],
 )

@@ -15,7 +15,10 @@ REQUEST_TIMEOUT_S = 3600
 def _verifier(task: str):
     """metadata.task is the dotted path of the row's grade(reply, label) -> (reward 0/1, kind)."""
     module, _, name = task.rpartition(".")
-    return getattr(importlib.import_module(module), name)
+    verifier = getattr(importlib.import_module(module), name)
+    if not callable(verifier):
+        raise TypeError(f"{task} is not callable")
+    return verifier
 
 
 def check_row(row: dict) -> None:
