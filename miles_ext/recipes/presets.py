@@ -41,6 +41,8 @@ class Preset:
     speculative_algorithm: str | None = None
     # further SGLang speculative flags, emitted only with the draft
     speculative_args: str = ""
+    # (hf_repo, revision) of a draft kept in its own checkpoint on the weights volume; None: the served checkpoint's
+    speculative_draft: tuple[str, str] | None = None
     # env for every process (engines and trainer), on top of the precision's
     env: dict = field(default_factory=dict)
     # env added only when weight syncs replace the engines' base weights (full-parameter runs); a LoRA run
@@ -57,6 +59,8 @@ class Preset:
     attention_backend: str | None = "flash"  # --attention-backend; None: the model's spec decides
     # --custom-lora-spec-path for LoRA on a model Miles' native LoRA does not ship
     lora_spec_path: str | None = None
+    # --exclude-modules: projections native LoRA cannot adapt, which its target selection would otherwise reject
+    lora_exclude_modules: str | None = None
     # GiB of the served checkpoint; GPU-delta sync keeps copies of it in trainer host memory
     served_gib: float | None = None
 
@@ -202,8 +206,17 @@ PRESETS: dict[str, Preset] = {
         """,
         packed_batches=False,
         attention_backend=None,
+        lora_exclude_modules="*.mlp.experts.*,*.self_attn.kv_b_proj",
     ),
 }
+
+# GLM-5.3-Flash with the DFlash2 draft in place of the release's NextN layer: its exact sampling allows top-p replay.
+PRESETS["glm-5.3-flash-dflash2"] = replace(
+    PRESETS["glm-5.3-flash"],
+    speculative_algorithm="DFLASH",
+    speculative_args="--sglang-speculative-draft-attention-backend fa4",
+    speculative_draft=("incoai/GLM-5.3-Flash-DFlash2", "bf582e4eacc1810f76656d1811693ff6c6737d2a"),
+)
 
 # Upstream's 4-layer slice of GLM-5.3-Flash (BF16, layers KDA/DSA/KDA/DSA, first layer dense): smoke tests only.
 PRESETS["glm-5.3-flash-4layer"] = replace(
