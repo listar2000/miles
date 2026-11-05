@@ -12,9 +12,9 @@ GLM-5.3-Flash exists, `incoai/GLM-5.3-Flash-DFlash2`, and SGLang's GLM cookbook 
 - Recipe keys `algorithm.top_p` and `algorithm.top_k`. They replace `--rollout-top-p` in `extra_args`, which still works.
 - `lora_exclude_modules` is a preset field, not a recipe key: no run wants a different value, and native LoRA rejects a
   selection that keeps routed experts or `kv_b_proj`.
-- Recipes refuse at load: top-p or top-k with a draft outside the DFlash family, score centering with anything but
-  DSpark, and top-p without top-k. Otherwise these fail after the engines start.
-- Score centering with DFLASH stays refused here. Allowing it is a Miles fix that needs its own sampling check.
+- Recipes refuse at load: top-p or top-k with a draft outside the DFlash family, score centering with a draft outside
+  the DFlash family, and top-p without top-k. Otherwise these fail after the engines start.
+- Score centering with DFLASH comes from fix-085, with its own sampling check.
 - Rejected: `rollout.speculative` naming a draft. Each preset has one draft today, and the flags differ by draft anyway.
 
 License: the draft is CC BY-NC-ND 4.0, for research and evaluation, with commercial use by arrangement with inco.ai.
