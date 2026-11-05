@@ -13,7 +13,8 @@ session server, so any of our GLM recipes can hit it. n_samples of one prompt ma
 
 ## Decision
 Copy #45018's two source changes: flatten `dt_bias`, and route batches with `num_tokens <= num_seqs` to Triton. Its unit
-test is left out, since `apply.py` patches the image's source only.
+test stays upstream, since `apply.py` patches the image's source only; it passes with this patch and fails without
+(evidence page).
 - Rejected: `--sglang-linear-attn-prefill-backend triton` in the preset, which slows every prefill.
 - Rejected: `--sglang-disable-radix-cache`, which the session server needs off (ext-051).
 

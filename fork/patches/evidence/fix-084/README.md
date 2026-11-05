@@ -37,3 +37,14 @@ rollout 0: rollout 1: rollout 2: rollout 3: rollout 4:
 ✓ App completed. View run at 
 rollout 0: rollout 1: rollout 2: rollout 3: rollout 4: 
 ```
+
+## sgl-project/sglang#45018's unit test
+
+`test_kda_flashinfer_prefill.py` from #45018, minus its CI registration line, on Modal CPU in the image built from
+`d8030f5b5c`, with `LD_PRELOAD` on the CUDA toolkit's libcuda (`pytest --noconftest`). "Without" reverses this patch
+with `git apply -R` in the same container.
+
+| SGLang | Result |
+| --- | --- |
+| With the patch | 3 passed in 61.89 s |
+| Without the patch | 2 failed, 1 passed in 30.27 s: `test_dt_bias_is_passed_flat_with_unit_stride`, `test_one_token_per_sequence_batch_goes_to_triton` |
