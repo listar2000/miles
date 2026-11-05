@@ -22,7 +22,8 @@ logits. In SGLang `sglang-miles` `3a938213c1` (v0.1.3's pin):
   FP32 LM head applies.
 - Top-p sampling masks under DSpark come from SGLang #34201, in the pin.
 
-Other modes (EAGLE trees, NGRAM, DFLASH) stay refused until checked the same way.
+Other modes (EAGLE trees, NGRAM, DFLASH) stay refused until checked the same way. DFlash2 since has been:
+[fix-085](fix-085-score-centering-dflash.md).
 `SGLANG_SIMULATE_ACC_LEN > 0` is refused with DSpark: it forces acceptance, which
 is not exact sampling.
 

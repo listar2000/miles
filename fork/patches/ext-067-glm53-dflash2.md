@@ -12,17 +12,18 @@ GLM-5.3-Flash exists, `incoai/GLM-5.3-Flash-DFlash2`, and SGLang's GLM cookbook 
 - Recipe keys `algorithm.top_p` and `algorithm.top_k`. They replace `--rollout-top-p` in `extra_args`, which still works.
 - `lora_exclude_modules` is a preset field, not a recipe key: no run wants a different value, and native LoRA rejects a
   selection that keeps routed experts or `kv_b_proj`.
-- Recipes refuse at load: top-p or top-k with a draft outside the DFlash family, score centering with anything but
-  DSpark, and top-p without top-k. Otherwise these fail after the engines start.
-- Score centering with DFLASH stays refused here. Allowing it is a Miles fix that needs its own sampling check.
+- Recipes refuse at load: top-p or top-k with a draft outside the DFlash family, score centering with a draft outside
+  the DFlash family, and top-p without top-k. Otherwise these fail after the engines start.
+- Score centering with DFLASH comes from fix-085, with its own sampling check.
 - Rejected: `rollout.speculative` naming a draft. Each preset has one draft today, and the flags differ by draft anyway.
 
 License: the draft is CC BY-NC-ND 4.0, for research and evaluation, with commercial use by arrangement with inco.ai.
 
 ## How it is applied
-`miles_ext/recipes/presets.py` and `miles_ext/recipes/recipe.py`. Weights: `prepare_weights("incoai/GLM-5.3-Flash-DFlash2",
+`miles_ext/recipes/presets.py`, `miles_ext/recipes/recipe.py`, `miles_ext/recipes/configs/glm53-flash-lora-dflash2.yaml`
+and its golden argv. Weights: `prepare_weights("incoai/GLM-5.3-Flash-DFlash2",
 "bf582e4eacc1810f76656d1811693ff6c6737d2a", ...)`. Verify: `python -m pytest miles_ext/tests/test_glm53_draft.py
-miles_ext/tests/test_placement_golden.py`. On an upstream sync, diff the flags against SGLang's
+miles_ext/tests/test_placement_golden.py`, then the recipe's run. On an upstream sync, diff the flags against SGLang's
 GLM cookbook.
 
 ## Remove when
