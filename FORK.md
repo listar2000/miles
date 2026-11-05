@@ -19,6 +19,7 @@ algorithms, harnesses, rewards or data:
 | [extending.md](fork/guide/extending.md) | where new algorithm, harness, reward and data code goes |
 | [running.md](fork/guide/running.md) | logs, outputs, W&B, stop and resume, first checks on failure |
 | [limits.md](fork/guide/limits.md) | what is known not to work yet |
+| [image.md](fork/guide/image.md) | running the image without Modal: the node commands and the caller's side |
 | [help.md](fork/guide/help.md) | the responsibility boundary, issues and PRs |
 
 Agents: [.claude/skills/miles-use](.claude/skills/miles-use/SKILL.md).

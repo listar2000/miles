@@ -140,6 +140,11 @@ evidence is a GPU run on the patched image beside the same run without it.
   you use.
 - `miles_ext.platform` is an API other services call. Any change to it is
   caller-facing: say so in the next stable version's release note.
+- Code that runs inside a node goes under `miles_ext/node/`, or anywhere it imports
+  no provider SDK at import time (RFC 0005). It reaches storage, run state and other
+  nodes through `node/storage.py`, `node/state.py` and `node/registry.py`, never
+  `modal.Volume` or `modal.Dict` directly. Changing `node/contract.py` is caller-facing
+  too.
 
 ## Porting an upstream file (vendoring)
 

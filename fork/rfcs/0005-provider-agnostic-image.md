@@ -85,5 +85,5 @@ unchanged, and one smoke passes.
 | 3 | Trainer gang from env; worker release and shard tokens through rank 0's gang server | 2-node Qwen3.5-9B |
 | 4 | Elastic pool on the engine provider hook; late joiners; load in the status file | second rollout node mid-run |
 | 5 | `python -m miles_ext.node` for every role and job; wrappers read `manifest` | Qwen3.5-9B, 2 steps |
-| 6 | Launching code leaves the image source | decided by the owner |
-| 7 | Docs and skills | none |
+| 6 | Launching code leaves the image source: deferred, `modal_app` stays as the stand-in caller until the owner moves it | decided by the owner |
+| 7 | Docs and skills: `fork/guide/image.md` now; the Modal how-tos move with phase 6 | none |
