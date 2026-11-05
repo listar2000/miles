@@ -586,7 +586,7 @@ def _validate_sampling(recipe: dict) -> None:
     algo, spec = recipe["algorithm"], speculative_algorithm(recipe)
 
     def in_extra_args(flag: str) -> bool:
-        return any(arg == flag or arg.startswith(f"{flag}=") for arg in recipe["extra_args"])
+        return any(str(arg) == flag or str(arg).startswith(f"{flag}=") for arg in recipe["extra_args"])
 
     top_p = algo["top_p"] is not None or in_extra_args("--rollout-top-p")
     top_k = algo["top_k"] is not None or in_extra_args("--rollout-top-k")
