@@ -2,8 +2,8 @@
 
 ## Why
 `cluster.placement: split` required whole nodes for the trainer and always gave the engine container 8 GPUs, so the
-smallest split run cost two nodes. A GLM-5.3-Flash LoRA run fits 4 trainer + 4 engine GPUs (G2, one cluster), and split
-at that size costs the same as one cluster while measuring the volume sync and the tunnel.
+smallest split run cost two nodes. A GLM-5.3-Flash LoRA run fits 4 trainer + 4 engine GPUs (the one-cluster run of 2026-11-05), and
+split at that size costs the same as one cluster while measuring the volume sync and the tunnel.
 
 ## Decision
 - `cluster.engine.gpus` (default 8) sizes the engine container. `cluster.train_gpus` may be a divisor of 8 when
