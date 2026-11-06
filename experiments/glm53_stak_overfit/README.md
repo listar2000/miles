@@ -67,3 +67,16 @@ sync 13-35 s for a 252 MB adapter.
 
 Both runs level off near 0.63 as capped replies grow. Batch 0 is the same zero-adapter policy in both (0.38 and 0.52), so
 one batch moves by more than its binomial noise of 0.044. The log-prob gap reached 0.083, against 0.055 with `policy_loss`.
+
+`glm53ov-sc-1106-a2` (12 prompts, score centering + MIS, lr 5e-5, in-flight 32), 10 steps, finished with no crash, about
+$75:
+
+| Batch | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Reward | 0.60 | 0.60 | 0.70 | 0.48 | 0.71 | 0.61 | 0.68 | 0.65 | 0.69 | 0.73 |
+| Capped at 6k | 2% | 2% | 4% | 4% | 9% | 5% | 15% | 13% | 11% | 17% |
+
+Pooled pass over the first and last 3 batches: 0.635 to 0.688, with 6 prompts up, 5 down and 1 level, so the rise is small
+against the noise. In-flight 32 brought samples to 1.4-1.5 versions old and held the log-prob gap at 0.037, against 0.083
+in the crashed run; the lower lr contributes too. The engine crash did not repeat, at a quarter of that run's in-flight load.
+
