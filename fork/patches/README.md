@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-068 | Ext | `cluster.placement: split` on part of a node: `cluster.engine.gpus`, and a plain-function trainer below 8 GPUs | active; remove with ext-036 | [ext-068-split-part-node.md](ext-068-split-part-node.md) |
 | ext-060 | Ext | Single-turn graders by dotted path in `metadata.task` | active | [ext-060-single-turn-grader-paths.md](ext-060-single-turn-grader-paths.md) |
 | ext-059 | Ext | `cluster.placement: split` with N trainer nodes: relays and commits on every node, GPU-delta budget per node | active; remove with ext-036 | [ext-059-split-trainer-nodes.md](ext-059-split-trainer-nodes.md) |
 | ext-057 | Ext | Host memory breakdown per trainer rank and node, peak per minute (`miles_ext.obs.host_ram`, via `--custom-megatron-init-path`) | active; remove when the host-RAM budget is settled | [ext-057-host-ram-log.md](ext-057-host-ram-log.md) |
