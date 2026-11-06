@@ -18,7 +18,8 @@ from miles.utils.workers.worker_spec import HostAndPort, NamedHostAndPorts
 
 logger = logging.getLogger(__name__)
 
-DISCOVERY_TIMEOUT_SECONDS = 600.0
+# [fork fix-086] the split trainer starts while its engines load; same budget as CELLS_READY_TIMEOUT_SECONDS
+DISCOVERY_TIMEOUT_SECONDS = 3600.0
 
 _EXTERNAL_ENGINE_POOL_ID = "external-inference-engine-0"
 _EXTERNAL_MODEL_ID = "default"
