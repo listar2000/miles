@@ -40,4 +40,14 @@ the 16 prompts improved.
 
 ## Results
 
-Not run yet.
+`glm53ov-1106-a1` (2026-11-06, PPO clip + MIS, image from 0824d2ccf5, W&B `mobiuslab/miles-glm53`), stopped on request
+after step 8, about $100:
+
+| Batch | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Reward | 0.38 | 0.53 | 0.41 | 0.57 | 0.65 | 0.63 | 0.62 | 0.63 | 0.63 |
+| Capped at 6k | 9% | 14% | 17% | 15% | 13% | 24% | 21% | 27% | 33% |
+
+Short of the success bar (first two 0.46, last three 0.63). Pass rates rose most where replies stay short: L4-019 0/16 to
+15/16, L4-014 0/16 to 8/16. L4-009 fell 5/16 to 0/16 as 13 of 16 replies hit the cap. Log-prob gap 0.028 to 0.055; volume
+sync 13-35 s for a 252 MB adapter.
