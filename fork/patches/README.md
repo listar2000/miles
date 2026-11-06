@@ -7,6 +7,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
 | ext-060 | Ext | Single-turn graders by dotted path in `metadata.task` | active | [ext-060-single-turn-grader-paths.md](ext-060-single-turn-grader-paths.md) |
+| ext-069 | Ext | A split trainer starts with its engines instead of after them, so Ray, the router, the session servers and the model build overlap the engine load (rollout 0 was 8m55 after engines ready on GLM-5.3-Flash) | active; remove with ext-036 | [ext-069-split-overlap-startup.md](ext-069-split-overlap-startup.md) |
 | ext-059 | Ext | `cluster.placement: split` with N trainer nodes: relays and commits on every node, GPU-delta budget per node | active; remove with ext-036 | [ext-059-split-trainer-nodes.md](ext-059-split-trainer-nodes.md) |
 | ext-057 | Ext | Host memory breakdown per trainer rank and node, peak per minute (`miles_ext.obs.host_ram`, via `--custom-megatron-init-path`) | active; remove when the host-RAM budget is settled | [ext-057-host-ram-log.md](ext-057-host-ram-log.md) |
 | fix-085 | Fix | Score centering accepts DFLASH with acceptance thresholds at 1.0 | active; remove when upstream accepts it | [fix-085-score-centering-dflash.md](fix-085-score-centering-dflash.md) |
