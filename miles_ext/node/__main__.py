@@ -1,11 +1,11 @@
 """``python -m miles_ext.node <role> ...``: RFC 0005's entry commands.
 
-    spec --recipe <yaml> --run-id I [--num-rollout N]  write the spec for a recipe file to stdout
-    trainer|rollout|check|manifest --spec <file>       the spec is {"run_id": ..., "recipe": {...}}
-    prepare-weights --hf-repo R --revision C --path P  base weights from the HF Hub
-    convert-fsdp --step N --spec <file>                FSDP's save to HF weights
-    sft-prepare --config <yaml> [--tests]              SFT records to token shards
-    sft-train --config <yaml> --run-id I --num-rollout N --save-interval M
+spec --recipe <yaml> --run-id I [--num-rollout N]  write the spec for a recipe file to stdout
+trainer|rollout|check|manifest --spec <file>       the spec is {"run_id": ..., "recipe": {...}}
+prepare-weights --hf-repo R --revision C --path P  base weights from the HF Hub
+convert-fsdp --step N --spec <file>                FSDP's save to HF weights
+sft-prepare --config <yaml> [--tests]              SFT records to token shards
+sft-train --config <yaml> --run-id I --num-rollout N --save-interval M
 """
 
 import argparse
@@ -32,13 +32,22 @@ def _require(recipe: dict, role: str) -> None:
         sys.exit(
             f"{role}: the caller did not provide: {', '.join(missing)} (fork/rfcs/0005-provider-agnostic-image.md)"
         )
-
-
-def _tee(run_id: str, name: str) -> None:
-    from miles_ext.node import runtime
+    from miles_ext.node import state as node_state
+    from miles_ext.node import storage as node_storage
     from miles_ext.recipes import recipe as R
 
-    runtime.tee_logs(R.RESULTS, run_id, name)
+    if (os.environ.get(C.STATE_ENV) or node_state.FILE) == node_state.FILE and not node_storage.for_mount(
+        R.RESULTS
+    ).live:
+        sys.exit(f"{role}: {C.STATE_ENV}={node_state.FILE} needs live {R.RESULTS} storage: a caller could not read it")
+
+
+def _log(run_id: str, name: str):
+    from miles_ext.node import runtime
+    from miles_ext.node import storage as node_storage
+    from miles_ext.recipes import recipe as R
+
+    return runtime.node_log(R.RESULTS, run_id, name, node_storage.for_mount(R.RESULTS))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -91,15 +100,15 @@ def main(argv: list[str] | None = None) -> int:
 
         recipe, run_id = load_spec(a.spec)
         _require(recipe, a.role)
-        _tee(run_id, f"trainer-{os.environ[C.NODE_RANK_ENV]}")
-        trainer.run(recipe, run_id)
+        with _log(run_id, f"trainer-{os.environ[C.NODE_RANK_ENV]}"):
+            trainer.run(recipe, run_id)
     elif a.role == "rollout":
         from miles_ext.node import rollout
 
         recipe, run_id = load_spec(a.spec)
         _require(recipe, a.role)
-        _tee(run_id, f"rollout-{socket.gethostname()}")
-        rollout.run(recipe, run_id)
+        with _log(run_id, f"rollout-{socket.gethostname()}"):
+            rollout.run(recipe, run_id)
     elif a.role == "check":
         from miles_ext.platform.validate import run_deep_check
 
@@ -108,26 +117,37 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=1, default=str))
         return 1 if result["errors"] else 0
     elif a.role == "prepare-weights":
+        from miles_ext.node import storage as node_storage
         from miles_ext.platform.weights_job import download
+        from miles_ext.recipes import recipe as R
 
         print(json.dumps(download(a.hf_repo, a.revision, a.path)))
+        node_storage.for_mount(R.MODELS).commit()
     elif a.role == "convert-fsdp":
+        from miles_ext.node import storage as node_storage
         from miles_ext.platform.checkpoints import finalize_hf_command
         from miles_ext.recipes import recipe as R
 
         recipe, run_id = load_spec(a.spec)
+        results = node_storage.for_mount(R.RESULTS)
+        node_storage.for_mount(R.MODELS).refresh()
+        results.refresh()
         subprocess.run(finalize_hf_command(run_id, a.step, str(R.model_dir(recipe))), check=True)
+        results.commit()
     elif a.role == "sft-prepare":
         from miles_ext.node import storage as node_storage
         from miles_ext.sft import config as sft_config
         from miles_ext.sft import job
 
+        node_storage.for_mount(sft_config.DATA_MOUNT).refresh()
         job.prepare(Path(a.config).read_text(), a.tests, node_storage.for_mount(sft_config.DATA_MOUNT).commit)
     elif a.role == "sft-train":
         from miles_ext.node import storage as node_storage
         from miles_ext.sft import config as sft_config
         from miles_ext.sft import job
 
+        node_storage.for_mount(sft_config.DATA_MOUNT).refresh()
+        node_storage.for_mount(sft_config.RESULTS_MOUNT).refresh()
         job.train(
             Path(a.config).read_text(),
             a.run_id,

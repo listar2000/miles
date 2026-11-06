@@ -241,7 +241,7 @@ def run(recipe: dict, run_id: str, *, on_state: Callable[[dict], None] | None = 
     gpu = recipe["cluster"]["gpu"]
     node_storage.for_mount(R.MODELS).refresh()
     cache_key = runtime.compile_cache_key(gpu)
-    compile_cache.restore(cache_key)
+    runtime.restore_compile_cache(cache_key)
     saver = compile_cache.Saver(cache_key, node_storage.for_mount(compile_cache.MOUNT).commit).start()
     env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": runtime.pythonpath()}
     try:

@@ -493,7 +493,7 @@ def run(recipe: dict, run_id: str, *, wait_check: Callable[[], None] | None = No
         print(f"{run_id} is already complete (checkpoint {read_tracker(run_dir)}); nothing to train", flush=True)
         return _complete_at_launch(recipe, run_id, run_dir, backend) if gang.rank == 0 else None
     cache_key = runtime.compile_cache_key(R.shape(recipe)["gpu"])
-    compile_cache.restore(cache_key)
+    runtime.restore_compile_cache(cache_key)
     env = _ray_env(recipe, run_id, gang)
     start = [
         "ray",

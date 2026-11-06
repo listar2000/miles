@@ -35,7 +35,7 @@ Recipes that exist are in `miles_ext/recipes/configs/`, and `fork/guide/recipes.
 ## 2. Storage
 
 `/models`, `/results` and the others are plain mounts: NFS, a provider volume, or a bucket through a CSI driver. If your
-mount needs a flush after writing, write an adapter with `commit`, `refresh` and `remove`
+mount needs a flush after writing, write an adapter with `live`, `commit`, `refresh` and `remove`
 (`miles_ext/node/storage.py`) and set `MILES_STORAGE` to its dotted path. Weights can be fetched with
 `python -m miles_ext.node prepare-weights --hf-repo R --revision C --path <inputs.model_dir>`, and likewise for
 `inputs.draft_checkpoint` when the manifest names one.
@@ -54,7 +54,7 @@ node the manifest's `gpus_per_node`. Each node gets its own rank from 0 to N-1 a
 
 A node missing something names it and exits before doing anything. Exit code 0 means done or segment end: run the same
 command again and it resumes from the newest save. SIGTERM saves and exits, and so does `MILES_SEGMENT_DEADLINE` (epoch
-seconds). Otherwise read `/results/<run_id>/exit.json`. Each node's log is in `/results/<run_id>/logs/`. Heartbeat and exit are in `/results/<run_id>/state/`, one JSON file per key with the name URL-encoded; write
+seconds). Otherwise read `/results/<run_id>/exit.json`. Each node's log is in `/results/<run_id>/logs/`: as it grows on live storage (`posix`, or an adapter with `live = True`), otherwise only when the node exits, with the node's stdout as the live copy. With live `/results` storage, heartbeat and exit are in `/results/<run_id>/state/`, one JSON file per key with the name URL-encoded; an adapter with `live = False` refuses `MILES_STATE=file` because you could not read it. Write
 `lease%3A<run_id>.json` there as `{"expires_at": <epoch seconds>}` to bound a run.
 
 In-sandbox harnesses also need `MILES_SESSION_PUBLIC_URL` on rank 0: the public URL of port 29999.

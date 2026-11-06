@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-071 | Ext | A node keeps its log off storage that is not live, and node jobs commit and refresh what they use | active | [ext-071-node-log-local.md](ext-071-node-log-local.md) |
 | ext-070 | Ext | The run monitor leaves the fork for the launcher side; nodes can push run state (`MILES_STATE=http`) and write logs to `/results/<run>/logs/` | active | [ext-070-monitor-out.md](ext-070-monitor-out.md) |
 | ext-066 | Ext | Elastic rollout pool: `cluster.engine.elastic`, rollout nodes joining and leaving through upstream's `--custom-inference-engine-provider-path`, a failed node evicted, load in run state | active | [ext-066-elastic-pool.md](ext-066-elastic-pool.md) |
 | ext-065 | Ext | Every role and job as a node command: `trainer`, `rollout`, `check`, `prepare-weights`, `convert-fsdp`, `sft-prepare`, `sft-train` | active | [ext-065-node-commands.md](ext-065-node-commands.md) |

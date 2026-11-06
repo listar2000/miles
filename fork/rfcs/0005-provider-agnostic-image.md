@@ -41,7 +41,7 @@ providers or regions. Rollout nodes can be heterogeneous and come from anywhere.
 torch.distributed group whose collectives run every step, while engines are independent replicas behind a router.
 
 A node gives back: rank 0's session proxy (29999) and registry (30999), a rollout node's proxy (32999) with `/healthz`;
-under `/results/<run_id>/` the checkpoints, HF exports, `exit.json`, `exits.jsonl`, launch records and `logs/<role>.log`; exit code 0 for
+under `/results/<run_id>/` the checkpoints, HF exports, `exit.json`, `exits.jsonl`, launch records and `logs/<role>.log` (on exit, unless the storage is live); exit code 0 for
 done or segment end (relaunch resumes), non-zero with a reason in `exit.json`.
 
 The image never creates apps, volumes or secrets, never picks GPUs, and never starts a node. The one provider SDK it

@@ -10,6 +10,8 @@ VOLUMES_ENV = "MILES_MODAL_VOLUMES"  # {"<mount>": "<volume name>"}, set by the 
 
 
 class ModalVolumeStorage:
+    live = False
+
     def __init__(self, mount: Path):
         name = json.loads(os.environ[VOLUMES_ENV])[str(mount)]
         self.volume = modal.Volume.from_name(name)

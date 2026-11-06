@@ -12,6 +12,8 @@ POSIX = "posix"
 
 
 class Storage(Protocol):
+    live: bool  # every node sees writes as they happen, and an open file blocks nothing
+
     def commit(self) -> None:
         """Make this node's writes under the mount durable and visible to other nodes' next ``refresh``."""
 
@@ -25,6 +27,8 @@ class Storage(Protocol):
 
 class PosixStorage:
     """A filesystem every node sees alike: nothing to flush or refresh, and a delete is already global."""
+
+    live = True
 
     def __init__(self, mount: Path):
         self.mount = mount

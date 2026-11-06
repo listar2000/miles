@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -108,18 +109,26 @@ def test_a_node_whose_gpu_differs_keeps_its_own_compile_cache(monkeypatch):
     assert runtime.compile_cache_key("H200") == "b300/sglang-1"
 
 
-def test_tee_logs_copies_a_process_and_its_children(tmp_path):
-    runtime = pytest.importorskip("miles_ext.node.runtime")
-    code = (
-        "import os, subprocess, sys\n"
-        "from pathlib import Path\n"
-        "from miles_ext.node import runtime\n"
-        f"runtime.tee_logs(Path({str(tmp_path)!r}), 'run1', 'trainer-0')\n"
-        "print('from me', flush=True)\n"
-        "subprocess.run(['sh', '-c', 'echo from a child; echo to stderr 1>&2'])\n"
-    )
+_LOG_ROLE = (
+    "import subprocess, sys\n"
+    "from pathlib import Path\n"
+    "from miles_ext.node import runtime\n"
+    "class Storage:\n"
+    "    live = {live}\n"
+    "    def commit(self):\n"
+    "        print('committed', Path({root!r}, 'run1', 'logs', 'trainer-0.log').read_text().count('from'), file=sys.__stderr__)\n"
+    "runtime.LOCAL_LOGS = Path({root!r}, 'local')\n"
+    "with runtime.node_log(Path({root!r}), 'run1', 'trainer-0', Storage()):\n"
+    "    print('from me', flush=True)\n"
+    "    subprocess.run(['sh', '-c', 'echo from a child; echo to stderr 1>&2'])\n"
+)
+
+
+def test_node_log_on_live_storage_copies_a_process_and_its_children(tmp_path):
+    pytest.importorskip("miles_ext.node.runtime")
+    code = _LOG_ROLE.format(live=True, root=str(tmp_path))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
-    assert runtime and "from me" in out.stdout
+    assert "from me" in out.stdout
     for _ in range(50):
         log = (tmp_path / "run1" / "logs" / "trainer-0.log").read_text()
         if "to stderr" in log:
@@ -214,3 +223,49 @@ def test_the_trainer_waits_for_the_first_node_as_long_as_the_env_says(monkeypatc
         return real("http://127.0.0.1:9", token, timeout=timeout, check=check)
 
     assert "no rollout node joined" in _links(monkeypatch, wait_members)[0]
+
+
+def test_node_log_elsewhere_stays_off_the_storage_until_exit_and_then_appends(tmp_path):
+    pytest.importorskip("miles_ext.node.runtime")
+    dest = tmp_path / "run1" / "logs" / "trainer-0.log"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("earlier segment\n")
+    code = _LOG_ROLE.format(live=False, root=str(tmp_path)).replace(
+        "    print('from me', flush=True)\n",
+        f"    print('from me', flush=True)\n    assert Path({str(dest)!r}).read_text() == 'earlier segment\\n'\n",
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert "committed 2" in out.stderr  # the log was on the storage when it committed
+    assert dest.read_text().startswith("earlier segment\n")
+    assert all(line in dest.read_text() for line in ("from me", "from a child", "to stderr"))
+    assert "from me" in (tmp_path / "local" / "run1" / "trainer-0.log").read_text()
+
+
+def test_a_second_segment_in_one_container_does_not_publish_the_first_twice(tmp_path):
+    pytest.importorskip("miles_ext.node.runtime")
+    code = _LOG_ROLE.format(live=False, root=str(tmp_path))
+    for _ in range(2):
+        subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert (tmp_path / "run1" / "logs" / "trainer-0.log").read_text().count("from me") == 2
+
+
+def test_a_failed_log_publish_does_not_fail_the_role(tmp_path):
+    pytest.importorskip("miles_ext.node.runtime")
+    commit = "print('committed', Path({root!r}, 'run1', 'logs', 'trainer-0.log').read_text().count('from'), file=sys.__stderr__)"
+    code = _LOG_ROLE.format(live=False, root=str(tmp_path)).replace(
+        commit.format(root=str(tmp_path)), "raise OSError('no')"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert "not published" in out.stdout
+
+
+def test_compile_cache_restore_survives_a_failed_refresh(monkeypatch):
+    runtime = pytest.importorskip("miles_ext.node.runtime")
+    storage = Mock()
+    storage.refresh.side_effect = OSError("no")
+    restored = []
+    monkeypatch.setattr(runtime.node_storage, "for_mount", lambda mount: storage)
+    monkeypatch.setattr(runtime.compile_cache, "restore", restored.append)
+    runtime.restore_compile_cache("k")
+    assert restored == ["k"]

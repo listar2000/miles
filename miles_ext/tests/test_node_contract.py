@@ -4,11 +4,13 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from miles_ext.node import __main__ as node_main
 from miles_ext.node import contract
+from miles_ext.node import storage as node_storage
 from miles_ext.recipes import recipe as R
 
 CONFIGS = Path(__file__).resolve().parents[1] / "recipes" / "configs"
@@ -142,3 +144,51 @@ def test_a_rollout_node_needs_the_trainer_url_in_either_form(monkeypatch):
     }
     assert contract.missing(recipe, "rollout", env) == [contract.TRAINER_URL_ENV]
     assert contract.missing(recipe, "rollout", {**env, contract.TRAINER_URL_FILE_ENV: "/tmp/u"}) == []
+
+
+def test_file_state_needs_live_results(monkeypatch):
+    monkeypatch.setattr(contract, "missing", lambda *a: [])
+    monkeypatch.setattr(node_storage, "for_mount", lambda mount: SimpleNamespace(live=False))
+    monkeypatch.delenv(contract.STATE_ENV, raising=False)
+    with pytest.raises(SystemExit, match="live"):
+        node_main._require({}, "trainer")
+    monkeypatch.setenv(contract.STATE_ENV, "http")
+    node_main._require({}, "trainer")
+
+
+def _job(monkeypatch):
+    """Record each storage call with the mount it went to."""
+    calls = []
+
+    def for_mount(mount):
+        return SimpleNamespace(
+            live=True,
+            refresh=lambda: calls.append(("refresh", str(mount))),
+            commit=lambda: calls.append(("commit", str(mount))),
+        )
+
+    monkeypatch.setattr(node_storage, "for_mount", for_mount)
+    monkeypatch.setattr(node_main, "load_spec", lambda path: ({}, "run1"))
+    return calls
+
+
+def test_prepare_weights_commits_what_it_downloaded_to_the_models_mount(monkeypatch, tmp_path):
+    from miles_ext.platform import weights_job
+
+    calls = _job(monkeypatch)
+    monkeypatch.setattr(weights_job, "download", lambda *a: calls.append("download") or {"bytes": 1})
+    node_main.main(["prepare-weights", "--hf-repo", "r", "--revision", "c", "--path", str(tmp_path)])
+    assert calls == ["download", ("commit", str(R.MODELS))]
+
+
+def test_convert_fsdp_reads_committed_inputs_and_commits_the_export_to_results(monkeypatch):
+    from miles_ext.platform import checkpoints
+
+    calls = _job(monkeypatch)
+    monkeypatch.setattr(checkpoints, "finalize_hf_command", lambda *a: ["convert"])
+    monkeypatch.setattr(R, "model_dir", lambda recipe: "/models/m")
+    monkeypatch.setattr(node_main.subprocess, "run", lambda cmd, check: calls.append(cmd[0]))
+    node_main.main(["convert-fsdp", "--spec", "s", "--step", "1"])
+    convert = calls.index("convert")
+    assert {("refresh", str(R.MODELS)), ("refresh", str(R.RESULTS))} == set(calls[:convert])
+    assert calls[convert + 1 :] == [("commit", str(R.RESULTS))]
