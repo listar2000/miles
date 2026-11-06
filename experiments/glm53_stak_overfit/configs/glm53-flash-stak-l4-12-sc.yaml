@@ -39,7 +39,7 @@ algorithm:
   temperature: 1.0
   top_p: 0.95
   top_k: 32
-  max_response_len: 6144  # a capped reply usually scores 0; G2 at 4096 capped 22.5% of L4 replies
+  max_response_len: 6144  # a capped reply usually scores 0; at 4096, 22.5% of level-4 replies capped
   max_seq_len: 8192
   max_tokens_per_gpu: 8192
   lr: 5.0e-5
