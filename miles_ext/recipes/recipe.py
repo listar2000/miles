@@ -113,7 +113,14 @@ DEFAULTS: dict[str, Any] = {
         "timeout_hours": 6,
         "disk_gib": None,
         "placement": "one_cluster",
-        "engine": {"cpu": None, "memory_gib": None, "disk_gib": None, "timeout_hours": None, "idle_minutes": 30},
+        "engine": {
+            "gpus": GPUS_PER_NODE,
+            "cpu": None,
+            "memory_gib": None,
+            "disk_gib": None,
+            "timeout_hours": None,
+            "idle_minutes": 30,
+        },
     },
     # tasks_volume "<volume>:/<path>": the task dirs on a Modal volume, instead of tasks_dir
     "taskset": {"tasks_dir": None, "tasks_volume": None, "prompts": None, "harness": HARNESS_SANDBOX},
@@ -318,6 +325,7 @@ FIELD_RULES: dict[str, dict] = {
     "cluster.timeout_hours": {"type": "number", "min": 0.1, "max": 24},
     "cluster.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},  # Modal's ephemeral_disk cap
     "cluster.placement": {"type": "str", "enum": PLACEMENTS},
+    "cluster.engine.gpus": {"type": "int", "min": 1, "max": GPUS_PER_NODE},
     "cluster.engine.cpu": {"type": "number", "nullable": True, "min": 1},
     "cluster.engine.memory_gib": {"type": "int", "nullable": True, "min": 1},
     "cluster.engine.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},
@@ -561,16 +569,29 @@ def _validate_split(recipe: dict) -> None:
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
-    if int(cluster["train_gpus"]) != (whole_nodes := int(cluster["nodes"]) * GPUS_PER_NODE):
-        raise ValueError(f"cluster.placement split: the trainer uses whole nodes, cluster.train_gpus {whole_nodes}")
+    train_gpus, whole_nodes = int(cluster["train_gpus"]), int(cluster["nodes"]) * GPUS_PER_NODE
+    partial_node = int(cluster["nodes"]) == 1 and 0 < train_gpus < GPUS_PER_NODE and GPUS_PER_NODE % train_gpus == 0
+    if train_gpus != whole_nodes and not partial_node:
+        raise ValueError(
+            f"cluster.placement split: the trainer uses whole nodes (cluster.train_gpus {whole_nodes}), "
+            f"or one container with a divisor of {GPUS_PER_NODE} GPUs (Modal's multi-node functions need full nodes)"
+        )
+    if GPUS_PER_NODE % int(cluster["engine"]["gpus"]):
+        raise ValueError(f"cluster.engine.gpus must divide {GPUS_PER_NODE}")
 
 
 def rollout_gpus(recipe: dict) -> int:
     """GPUs serving rollouts: one engine container in split, else the cluster's GPUs the trainer leaves."""
     cluster = recipe["cluster"]
     if is_split(recipe):
-        return GPUS_PER_NODE
+        return int(cluster["engine"]["gpus"])
     return int(cluster["nodes"]) * GPUS_PER_NODE - int(cluster["train_gpus"])
+
+
+def gpus_per_node(recipe: dict) -> int:
+    """GPUs of a trainer container: a whole node, except a split trainer on part of one."""
+    cluster = recipe["cluster"]
+    return int(cluster["train_gpus"]) if is_split(recipe) and int(cluster["nodes"]) == 1 else GPUS_PER_NODE
 
 
 def num_engines(recipe: dict) -> int:
@@ -795,8 +816,11 @@ def shape(recipe: dict) -> dict[str, Any]:
     if is_split(recipe):
         engine = cluster["engine"]
         out["placement"] = SPLIT
+        if (node_gpus := gpus_per_node(recipe)) != GPUS_PER_NODE:
+            out["gpus_per_node"] = node_gpus
         out["engine"] = {
             "gpu": cluster["gpu"],
+            **({"gpus": engine["gpus"]} if engine["gpus"] != GPUS_PER_NODE else {}),
             "cpu": engine["cpu"] or cluster["cpu"],
             "memory_gib": engine["memory_gib"] or cluster["memory_gib"],
             "disk_gib": engine["disk_gib"] or cluster["disk_gib"],
@@ -987,7 +1011,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool =
         # upstream af4413b74.
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
-        --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {GPUS_PER_NODE}
+        --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {gpus_per_node(recipe)}
         {_split_args(recipe, run_id)}
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}

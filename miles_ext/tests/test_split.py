@@ -15,6 +15,23 @@ def _split(monkeypatch, **overrides) -> dict:
     return R.load(CONFIGS / "dsv41-flash-lora-split.yaml", overrides)
 
 
+def test_split_on_part_of_a_node(monkeypatch):
+    recipe = _split(
+        monkeypatch,
+        cluster={"train_gpus": 4, "engine": {"gpus": 4}},
+        parallel={"tp": 4, "cp": 1, "ep": 4},
+    )
+    R.validate(recipe, local_inputs=False)
+    argv = R.miles_args(recipe, "run1", resume=False)
+    i = argv.index("--rollout-external-engine-addrs")
+    assert argv[i + 1] == "127.0.0.1:31000" and argv[i + 2].startswith("--")
+    assert argv[argv.index("--rollout-num-gpus") + 1] == "4"
+    assert argv[argv.index("--num-gpus-per-node") + 1] == "4"
+    assert argv[argv.index("--actor-num-gpus-per-node") + 1] == "4"
+    shape = R.shape(recipe)
+    assert shape["gpus_per_node"] == 4 and shape["engine"]["gpus"] == 4
+
+
 def test_split_argv_and_shape(monkeypatch):
     recipe = _split(monkeypatch)
     argv = R.miles_args(recipe, "run1", resume=False)
@@ -34,8 +51,10 @@ def test_split_argv_and_shape(monkeypatch):
     "overrides,message",
     [
         ({"lora": {"rank": 0}}, "supports LoRA, or full-parameter"),
-        ({"cluster": {"train_gpus": 4}}, "whole nodes, cluster.train_gpus 8"),
-        ({"cluster": {"nodes": 2}}, "whole nodes, cluster.train_gpus 16"),
+        ({"cluster": {"train_gpus": 3}}, r"whole nodes \(cluster.train_gpus 8\)"),
+        ({"cluster": {"nodes": 2, "train_gpus": 4}}, r"whole nodes \(cluster.train_gpus 16\)"),
+        ({"cluster": {"nodes": 2}}, r"whole nodes \(cluster.train_gpus 16\)"),
+        ({"cluster": {"engine": {"gpus": 3}}}, "cluster.engine.gpus must divide 8"),
     ],
 )
 def test_split_refuses_what_it_cannot_sync(monkeypatch, overrides, message):
