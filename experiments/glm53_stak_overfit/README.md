@@ -51,3 +51,15 @@ after step 8, about $100:
 Short of the success bar (first two 0.46, last three 0.63). Pass rates rose most where replies stay short: L4-019 0/16 to
 15/16, L4-014 0/16 to 8/16. L4-009 fell 5/16 to 0/16 as 13 of 16 replies hit the cap. Log-prob gap 0.028 to 0.055; volume
 sync 13-35 s for a 252 MB adapter.
+
+`glm53ov-sc-1106-a1` (score centering, otherwise the same): the engine crashed in batch 7 with a CUDA illegal address
+(`dflash_worker_v2.py:2602`, cause unknown), about $72, no checkpoint saved:
+
+| Batch | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Reward | 0.52 | 0.45 | 0.40 | 0.60 | 0.68 | 0.63 | 0.59 |
+| Capped at 6k | 8% | 14% | 13% | 20% | 23% | 42% | 42% |
+
+Both runs level off near 0.63 as capped replies grow. Batch 0 is the same zero-adapter policy in both (0.38 and 0.52), so
+one batch moves by more than its binomial noise of 0.044. The log-prob gap reached 0.083, against 0.055 without score
+centering.
