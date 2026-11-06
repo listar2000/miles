@@ -78,23 +78,31 @@ async def _follow(registry_url: str, pool_token: str, poll: float = POLL_SECS):
         await asyncio.sleep(poll)
 
 
-def connect(recipe: dict, registry_url: str, pool_token: str, members: list[dict]) -> subprocess.Popen:
-    """Start this node's relay, once the first joined nodes' slots are open. Returns the process."""
-    if not R.is_elastic(recipe):
-        for m in members:
-            if len(m["engine_ports"]) != R.num_engines(recipe):
-                raise RuntimeError(
-                    f"the rollout node serves {len(m['engine_ports'])} engines, the recipe expects "
-                    f"{R.num_engines(recipe)}; relaunch both with the same recipe"
-                )
-    proc = subprocess.Popen(
+def start(registry_url: str, pool_token: str) -> subprocess.Popen:
+    """Start this node's relay. Its slots open as rollout nodes join, and Miles retries them until then (ext-069)."""
+    return subprocess.Popen(
         [sys.executable, "-m", "miles_ext.launch.split.relay", "--registry", registry_url],
         env={**os.environ, C.POOL_TOKEN_ENV: pool_token},
     )
+
+
+def check_members(recipe: dict, members: list[dict]) -> None:
+    """Refuse a rollout node the fixed addresses in a non-elastic recipe's argv cannot reach."""
+    if R.is_elastic(recipe):
+        return
+    for m in members:
+        if len(m["engine_ports"]) != R.num_engines(recipe):
+            raise RuntimeError(
+                f"the rollout node serves {len(m['engine_ports'])} engines, the recipe expects "
+                f"{R.num_engines(recipe)}; relaunch both with the same recipe"
+            )
+
+
+def wait_open(members: list[dict], proc: subprocess.Popen) -> None:
+    """Block until the relay has these nodes' slots open, or raise if it does not."""
     for slot in desired(members):
         _wait_port(slot, proc)
     print(f"split: rollout nodes relayed at 127.0.0.1:{sorted(desired(members))}", flush=True)
-    return proc
 
 
 def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):

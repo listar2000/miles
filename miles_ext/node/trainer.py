@@ -191,18 +191,60 @@ def _split_links(
     stack_ctx: contextlib.ExitStack,
     registry_url: str,
     wait_check: Callable[[], None] | None,
+    on_failure: Callable[[str], None],
 ) -> None:
-    """Split, on each trainer node before `ray start` (Ray workers inherit env): a rank on any node reaches the
-    rollout node through its local relay, and a node's writes reach the storage only when that node commits."""
+    """Split, on each trainer node before `ray start` (Ray workers inherit env): start the relay and the commit watcher,
+    and stop the run through ``on_failure`` if no rollout node comes (ext-069)."""
     from miles_ext.launch.split import relay, volume_sync
     from miles_ext.node import registry as node_registry
 
     stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.RESULTS).commit).set)
-    timeout = int(R.shape(recipe)["engine"]["timeout_hours"] * 3600)
     pool_token = os.environ[C.POOL_TOKEN_ENV]
-    members = node_registry.wait_members(registry_url, pool_token, timeout=timeout, check=wait_check)
-    stack_ctx.callback(relay.connect(recipe, registry_url, pool_token, members).terminate)
+    proc = relay.start(registry_url, pool_token)
+    stack_ctx.callback(proc.terminate)
     env[volume_sync.REGISTRY_ENV], env[volume_sync.RUN_DIR_ENV] = registry_url, str(run_dir)
+    timeout = int(R.shape(recipe)["engine"]["timeout_hours"] * 3600)
+    stopped = threading.Event()
+    stack_ctx.callback(stopped.set)
+
+    def check() -> None:
+        if stopped.is_set():
+            raise _Stopped
+        if wait_check:
+            wait_check()
+
+    def watch() -> None:
+        try:
+            members = node_registry.wait_members(registry_url, pool_token, timeout=timeout, check=check)
+            relay.check_members(recipe, members)
+            relay.wait_open(members, proc)
+        except _Stopped:
+            pass
+        except Exception as e:
+            note = f"split: no relay to a rollout node: {type(e).__name__}: {e}"
+            print(note, flush=True)
+            if not stopped.is_set():
+                on_failure(note)
+
+    threading.Thread(target=watch, daemon=True, name="split-links").start()
+
+
+class _Stopped(Exception):
+    """This node is shutting down, so nobody waits for a rollout node any more."""
+
+
+def _relay_failure_key(run_id: str) -> str:
+    return f"relay-failure:{run_id}"
+
+
+def _watch_worker_relays(
+    server: GangServer, run_id: str, on_failure: Callable[[str], None], stop: threading.Event
+) -> None:
+    """Stop the run when a worker node reports it has no relay."""
+    while not stop.wait(5):
+        if note := server.kv.get(_relay_failure_key(run_id)):
+            on_failure(note)
+            return
 
 
 def _publish_pool_status(registry, state, key: str, stop: threading.Event, every: float = 30.0) -> None:
@@ -239,11 +281,15 @@ def _worker(
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS},
     ).start()
     try:
-        if R.is_split(
-            recipe
-        ):  # first: the head opens its port only after the engines serve, which can take longer than this wait
-            _split_links(recipe, run_dir, env, stack_ctx, f"http://{gang.head_addr}:{C.REGISTRY_PORT}", wait_check)
         _wait_for_port(gang.head_addr, HEAD_PORT, timeout=600)
+        if R.is_split(recipe):
+
+            def report_relay_failure(note: str) -> None:
+                with contextlib.suppress(OSError):
+                    client.kv[_relay_failure_key(run_id)] = note
+
+            registry_url = f"http://{gang.head_addr}:{C.REGISTRY_PORT}"
+            _split_links(recipe, run_dir, env, stack_ctx, registry_url, wait_check, report_relay_failure)
         subprocess.run(start + [f"--address={gang.head_addr}:{HEAD_PORT}"], env=env, check=True)
         if not client.wait_release(run_id, gang.rank, timeout=int(R.shape(recipe)["timeout_hours"] * 3600)):
             raise RuntimeError("Miles training failed on the head node; see the App logs")
@@ -363,14 +409,22 @@ def _head(
                 daemon=True,
                 args=(registry, node_state.for_run(run_id), P.keys(run_id)["pool"], status_stop),
             ).start()
-            _split_links(recipe, run_dir, env, stack_ctx, f"http://127.0.0.1:{C.REGISTRY_PORT}", wait_check)
+            registry_url = f"http://127.0.0.1:{C.REGISTRY_PORT}"
+            _split_links(recipe, run_dir, env, stack_ctx, registry_url, wait_check, supervisor.fail)
+            if nodes > 1:
+                threading.Thread(
+                    target=_watch_worker_relays,
+                    args=(server, run_id, supervisor.fail, status_stop),
+                    daemon=True,
+                    name="worker-relays",
+                ).start()
 
         if final_retention:  # ext-056: prune old saves while training, so a long run does not fill the storage
             stack_ctx.callback(_retention_while_training(recipe, run_dir, nodes).set)
         subprocess.run(start + ["--head", f"--port={HEAD_PORT}", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{gang.head_addr}:{HEAD_PORT}")
         ray_ready_by = time.monotonic() + 600
-        while ray.cluster_resources().get("GPU", 0) < nodes * R.GPUS_PER_NODE:
+        while ray.cluster_resources().get("GPU", 0) < nodes * R.gpus_per_node(recipe):
             if time.monotonic() > ray_ready_by:
                 raise TimeoutError(f"Ray cluster incomplete: {ray.cluster_resources()}")
             time.sleep(2)
@@ -445,7 +499,7 @@ def run(recipe: dict, run_id: str, *, wait_check: Callable[[], None] | None = No
         "ray",
         "start",
         f"--node-ip-address={gang.node_ip}",
-        f"--num-gpus={R.GPUS_PER_NODE}",
+        f"--num-gpus={R.gpus_per_node(recipe)}",
         "--disable-usage-stats",
     ]
     if gang.rank != 0:

@@ -126,3 +126,78 @@ def test_tee_logs_copies_a_process_and_its_children(tmp_path):
             break
         time.sleep(0.1)
     assert "from me" in log and "from a child" in log and "to stderr" in log
+
+
+def _links(monkeypatch, wait_members):
+    """Run the trainer's split links with a fake relay; returns what reached on_failure."""
+    pytest.importorskip("aiohttp")
+    pytest.importorskip("torch")
+    import contextlib
+
+    from miles_ext.launch.split import relay
+    from miles_ext.node import registry, trainer
+
+    monkeypatch.setenv(C.POOL_TOKEN_ENV, "t")
+    monkeypatch.setattr(relay, "start", lambda url, token: subprocess.Popen(["sleep", "30"]))
+    monkeypatch.setattr(relay, "wait_open", lambda members, proc: None)
+    monkeypatch.setattr(relay, "check_members", lambda recipe, members: None)
+    monkeypatch.setattr(registry, "wait_members", wait_members)
+    monkeypatch.setattr(trainer.R, "shape", lambda recipe: {"engine": {"timeout_hours": 1}})
+    failures: list[str] = []
+    done = threading.Event()
+
+    def on_failure(note):
+        failures.append(note)
+        done.set()
+
+    env: dict = {}
+    with contextlib.ExitStack() as stack:
+        trainer._split_links({}, "/results/r1", env, stack, "http://registry", None, on_failure)
+        assert "MILES_SPLIT_REGISTRY_URL" in env  # known at once: Ray starts without waiting for the engines
+        done.wait(5)
+    return failures
+
+
+def test_a_rollout_node_that_never_comes_stops_the_run(monkeypatch):
+    def wait_members(url, token, *, timeout, check):
+        raise TimeoutError("no rollout node joined")
+
+    assert "no rollout node joined" in _links(monkeypatch, wait_members)[0]
+
+
+def test_ray_can_start_while_a_rollout_node_is_still_pending(monkeypatch):
+    pending, returned_while_pending = threading.Event(), threading.Event()
+    joined = threading.Event()
+
+    def wait_members(url, token, *, timeout, check):
+        pending.set()
+        assert joined.wait(5)
+        returned_while_pending.set()
+        return []
+
+    pytest.importorskip("aiohttp")
+    pytest.importorskip("torch")
+    import contextlib
+
+    from miles_ext.launch.split import relay
+    from miles_ext.node import registry, trainer
+
+    monkeypatch.setenv(C.POOL_TOKEN_ENV, "t")
+    monkeypatch.setattr(relay, "start", lambda url, token: subprocess.Popen(["sleep", "30"]))
+    monkeypatch.setattr(relay, "wait_open", lambda members, proc: None)
+    monkeypatch.setattr(relay, "check_members", lambda recipe, members: None)
+    monkeypatch.setattr(registry, "wait_members", wait_members)
+    monkeypatch.setattr(trainer.R, "shape", lambda recipe: {"engine": {"timeout_hours": 1}})
+    failures: list[str] = []
+    env: dict = {}
+    try:
+        with contextlib.ExitStack() as stack:
+            trainer._split_links({}, "/results/r1", env, stack, "http://registry", None, failures.append)
+            # _split_links is back, with the env Ray needs, and the node has not joined
+            assert pending.wait(5) and not returned_while_pending.is_set()
+            assert "MILES_SPLIT_REGISTRY_URL" in env
+            joined.set()
+            assert returned_while_pending.wait(5)
+    finally:
+        joined.set()
+    assert not failures

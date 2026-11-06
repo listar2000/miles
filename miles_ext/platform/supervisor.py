@@ -189,6 +189,7 @@ class Supervisor:
         self.events = _EventTail(self.run_dir / "checkpoints" / "events", since=self.started)
         self.phase = "starting"
         self.sigterm = threading.Event()
+        self.fatal: str | None = None  # set by fail(): something Miles depends on is gone, so Miles is stopped
         self.save_requested: tuple[float, str] | None = None  # (when, why) while a requested save is pending
         self.final_saved = False  # a requested save landed on the last step: Miles finishes by itself
         self.save_secs: float | None = None
@@ -245,6 +246,10 @@ class Supervisor:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
 
+    def fail(self, note: str):
+        """Stop Miles from another thread; run() returns an "error" record carrying this note."""
+        self.fatal = note
+
     # ---- the run ----
     def run(self, cmd: list[str], cwd: str, env: dict) -> dict:
         try:
@@ -270,6 +275,9 @@ class Supervisor:
                 print(f"supervisor: save {tracker} committed", flush=True)
             if self.sigterm.is_set():
                 reason = "stopped"
+                break
+            if self.fatal is not None:
+                reason = "error"
                 break
             if self.save_requested is None and not self.final_saved:
                 expires = self._lease_expires()
@@ -308,7 +316,9 @@ class Supervisor:
         lines = self.cause_lines + self.error_lines + list(self.tail)
         if reason is None:
             reason = classify(proc.returncode, lines)
-        note = first_error(lines, reason) if reason not in ("success", "segment_end", "lease_expired") else None
+        note = self.fatal or (
+            first_error(lines, reason) if reason not in ("success", "segment_end", "lease_expired") else None
+        )
         return self.finish(reason, proc.returncode, note=note)
 
     def _commit_last_save(self):

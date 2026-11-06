@@ -129,7 +129,8 @@ def serve(recipe: dict, run_id: str, *, env: dict, storage, on_state: Callable[[
     idle_secs = int(recipe["cluster"]["engine"]["idle_minutes"]) * 60
     public_url, pool_token = env[C.ROLLOUT_URL_ENV], env[C.POOL_TOKEN_ENV]
     notify = on_state or (lambda state: None)
-    state = {"run_id": run_id, "phase": "starting", "started_at": time.time()}
+    now = time.time()
+    state = {"run_id": run_id, "phase": "starting", "started_at": now, "container_at": now}
     notify(state)
     spec = commands(recipe, run_id, env)
     engine_env = {**env, **spec["env"]}

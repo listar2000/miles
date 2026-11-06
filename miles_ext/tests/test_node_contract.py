@@ -50,6 +50,24 @@ def test_split_manifest_has_a_rollout_role_with_no_node_count(monkeypatch):
     assert roles["rollout"]["gpus_per_engine"] == 4 and roles["rollout"]["precision"] == "fp8_fp4"
 
 
+def test_a_part_node_split_says_so_for_each_role(monkeypatch):
+    recipe = _recipe("dsv41-flash-lora-split", monkeypatch)
+    recipe["cluster"]["train_gpus"] = 4
+    recipe["cluster"]["engine"]["gpus"] = 4
+    roles = contract.manifest(recipe, "run1")["roles"]
+    assert roles["trainer"]["gpus_per_node"] == 4 and roles["rollout"]["gpus_per_node"] == 4
+
+
+def test_the_manifest_names_a_draft_checkpoint_only_when_the_run_uses_one(monkeypatch):
+    recipe = _recipe("glm53-flash-lora-dflash2", monkeypatch)
+    draft = contract.manifest(recipe, "r1")["inputs"]["draft_checkpoint"]
+    assert draft["hf_repo"] == "incoai/GLM-5.3-Flash-DFlash2" and draft["path"].startswith("/models/")
+    recipe["rollout"]["speculative"] = False
+    assert contract.manifest(recipe, "r1")["inputs"]["draft_checkpoint"] is None
+    single = _recipe("qwen35-9b-split-elastic", monkeypatch)
+    assert contract.manifest(single, "r1")["inputs"]["draft_checkpoint"] is None
+
+
 def test_a_trainer_of_several_nodes_is_one_cluster_with_rdma(monkeypatch):
     several = contract.manifest(_recipe("qwen35-9b-swegym8-megatron-2node", monkeypatch), "run1")["roles"]["trainer"]
     assert several["placement"] == "one_cluster" and several["interconnect"] == "rdma"

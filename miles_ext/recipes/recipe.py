@@ -114,6 +114,7 @@ DEFAULTS: dict[str, Any] = {
         "disk_gib": None,
         "placement": "one_cluster",
         "engine": {
+            "gpus": GPUS_PER_NODE,
             "cpu": None,
             "memory_gib": None,
             "disk_gib": None,
@@ -163,6 +164,9 @@ DEFAULTS: dict[str, Any] = {
         "rollout_batch_size": 8,
         "n_samples": 8,
         "temperature": 1.0,
+        # sampling bounds, replayed in training; top_p needs top_k (SGLang returns the support only then)
+        "top_p": None,
+        "top_k": None,
         "max_response_len": 4096,
         "max_seq_len": 32768,
         "lr": 1e-6,
@@ -323,6 +327,7 @@ FIELD_RULES: dict[str, dict] = {
     "cluster.timeout_hours": {"type": "number", "min": 0.1, "max": 24},
     "cluster.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},  # Modal's ephemeral_disk cap
     "cluster.placement": {"type": "str", "enum": PLACEMENTS},
+    "cluster.engine.gpus": {"type": "int", "min": 1, "max": GPUS_PER_NODE},
     "cluster.engine.cpu": {"type": "number", "nullable": True, "min": 1},
     "cluster.engine.memory_gib": {"type": "int", "nullable": True, "min": 1},
     "cluster.engine.disk_gib": {"type": "int", "nullable": True, "min": 1, "max": 3072},
@@ -353,6 +358,8 @@ FIELD_RULES: dict[str, dict] = {
     "algorithm.rollout_batch_size": {"type": "int", "min": 1},
     "algorithm.n_samples": {"type": "int", "min": 1},
     "algorithm.temperature": {"type": "number", "min": 0},
+    "algorithm.top_p": {"type": "number", "nullable": True, "min": 0, "max": 1},
+    "algorithm.top_k": {"type": "int", "nullable": True, "min": 1},
     "algorithm.max_response_len": {"type": "int", "min": 1},
     "algorithm.max_seq_len": {"type": "int", "min": 1},
     "algorithm.lr": {"type": "number", "min": 0, "exclusive_min": True},
@@ -569,8 +576,15 @@ def _validate_split(recipe: dict) -> None:
         )
     if backend(recipe) != "megatron" or megatron_parallel(recipe)["pp"] != 1:
         raise ValueError("cluster.placement split needs the Megatron trainer with parallel.pp 1")
-    if int(cluster["train_gpus"]) != (whole_nodes := int(cluster["nodes"]) * GPUS_PER_NODE):
-        raise ValueError(f"cluster.placement split: the trainer uses whole nodes, cluster.train_gpus {whole_nodes}")
+    train_gpus, whole_nodes = int(cluster["train_gpus"]), int(cluster["nodes"]) * GPUS_PER_NODE
+    partial_node = int(cluster["nodes"]) == 1 and 0 < train_gpus < GPUS_PER_NODE and GPUS_PER_NODE % train_gpus == 0
+    if train_gpus != whole_nodes and not partial_node:
+        raise ValueError(
+            f"cluster.placement split: the trainer uses whole nodes (cluster.train_gpus {whole_nodes}), "
+            f"or one container with a divisor of {GPUS_PER_NODE} GPUs (Modal's multi-node functions need full nodes)"
+        )
+    if GPUS_PER_NODE % int(cluster["engine"]["gpus"]):
+        raise ValueError(f"cluster.engine.gpus must divide {GPUS_PER_NODE}")
     if is_elastic(recipe) and gpu_delta(recipe):
         raise ValueError("cluster.engine.elastic needs LoRA: a late node has no base for GPU deltas yet")
 
@@ -579,8 +593,14 @@ def rollout_gpus(recipe: dict) -> int:
     """GPUs serving rollouts: one engine container in split, else the cluster's GPUs the trainer leaves."""
     cluster = recipe["cluster"]
     if is_split(recipe):
-        return GPUS_PER_NODE
+        return int(cluster["engine"]["gpus"])
     return int(cluster["nodes"]) * GPUS_PER_NODE - int(cluster["train_gpus"])
+
+
+def gpus_per_node(recipe: dict) -> int:
+    """GPUs of a trainer container: a whole node, except a split trainer on part of one."""
+    cluster = recipe["cluster"]
+    return int(cluster["train_gpus"]) if is_split(recipe) and int(cluster["nodes"]) == 1 else GPUS_PER_NODE
 
 
 def num_engines(recipe: dict) -> int:
@@ -591,7 +611,31 @@ def rollout_precision(recipe: dict) -> str:
     return recipe["rollout"]["precision"] or next(iter(PRESETS[recipe["model"]["preset"]].precisions))
 
 
+def _validate_sampling(recipe: dict) -> None:
+    """Combinations SGLang or Miles would only refuse after the engines start."""
+    algo, spec = recipe["algorithm"], speculative_algorithm(recipe)
+
+    def in_extra_args(flag: str) -> bool:
+        return any(str(arg) == flag or str(arg).startswith(f"{flag}=") for arg in recipe["extra_args"])
+
+    top_p = algo["top_p"] is not None or in_extra_args("--rollout-top-p")
+    top_k = algo["top_k"] is not None or in_extra_args("--rollout-top-k")
+    if top_p and not top_k:
+        raise ValueError("algorithm.top_p needs algorithm.top_k: top-p alone does not bound the returned support")
+    if (top_p or top_k) and spec and spec not in EXACT_SAMPLING_DRAFTS:
+        raise ValueError(
+            f"top-p or top-k replay needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec}: "
+            "SGLang refuses return_sampling_mask with it; set rollout.speculative false"
+        )
+    if algo["loss"] == "score_centering" and spec and spec not in EXACT_SAMPLING_DRAFTS:
+        raise ValueError(
+            f"score_centering needs an exact-sampling draft {EXACT_SAMPLING_DRAFTS}, not {spec} "
+            "(fix-058, fix-085); set rollout.speculative false"
+        )
+
+
 def _validate_rollout(recipe: dict) -> None:
+    _validate_sampling(recipe)
     preset, roll = PRESETS[recipe["model"]["preset"]], recipe["rollout"]
     precision, gpus = rollout_precision(recipe), int(roll["gpus_per_engine"])
     if precision not in preset.precisions:
@@ -629,6 +673,10 @@ def expert_qat(recipe: dict) -> bool:
     """A full-weight run on fp8_fp4 engines keeps its FP4 experts on the engine's grid (fix-006); LoRA leaves
     the experts frozen."""
     return rollout_precision(recipe) == FP8_FP4 and not recipe["lora"]["rank"]
+
+
+# Drafts whose committed tokens SGLang can report as exact samples with their support (spec_sampling_mask.py).
+EXACT_SAMPLING_DRAFTS = ("DFLASH", "DSPARK")
 
 
 def speculative_algorithm(recipe: dict) -> str | None:
@@ -745,6 +793,8 @@ def _lora_args(recipe: dict) -> str:
         args += f" --target-modules {lora['target_modules']}"
     if spec := PRESETS[recipe["model"]["preset"]].lora_spec_path:
         args += f" --custom-lora-spec-path {spec}"
+    if exclude := PRESETS[recipe["model"]["preset"]].lora_exclude_modules:
+        args += f" --exclude-modules {exclude}"
     return args
 
 
@@ -775,8 +825,11 @@ def shape(recipe: dict) -> dict[str, Any]:
     if is_split(recipe):
         engine = cluster["engine"]
         out["placement"] = SPLIT
+        if (node_gpus := gpus_per_node(recipe)) != GPUS_PER_NODE:
+            out["gpus_per_node"] = node_gpus
         out["engine"] = {
             "gpu": cluster["gpu"],
+            **({"gpus": engine["gpus"]} if engine["gpus"] != GPUS_PER_NODE else {}),
             "cpu": engine["cpu"] or cluster["cpu"],
             "memory_gib": engine["memory_gib"] or cluster["memory_gib"],
             "disk_gib": engine["disk_gib"] or cluster["disk_gib"],
@@ -803,13 +856,18 @@ def reads_task_dirs(recipe: dict) -> bool:
     return not is_single_turn(recipe) and tasks_volume(recipe) is None
 
 
+def weights_path(hf_repo: str, revision: str) -> Path:
+    """A checkpoint's directory on the weights volume (miles_ext.platform.weights key)."""
+    return MODELS / f"{hf_repo.replace('/', '--')}/{revision}"
+
+
 def model_dir(recipe: dict) -> Path:
     preset = PRESETS[recipe["model"]["preset"]]
     if preset.train_dir_name and rollout_precision(recipe) != FP8_FP4:
         # BF16 engines serve the trainer's BF16 copy: the released checkpoint would load as FP8 dense
         return MODELS / preset.train_dir_name
     if revision := recipe["model"].get("revision"):
-        return MODELS / f"{preset.hf_repo.replace('/', '--')}/{revision}"  # miles_ext.platform.weights key
+        return weights_path(preset.hf_repo, revision)
     return MODELS / preset.dir_name
 
 
@@ -962,7 +1020,7 @@ def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool =
         # upstream af4413b74.
         placement = f"""
         --actor-num-nodes {actor_nodes} --actor-num-gpus-per-node {actor_gpus_per_node}
-        --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {GPUS_PER_NODE}
+        --rollout-num-gpus {rollout_gpus(recipe)} --num-gpus-per-node {gpus_per_node(recipe)}
         {_split_args(recipe, run_id)}
         --fully-async --update-weights-interval 1 --pause-generation-mode {aio["pause_generation"]}
         --async-max-concurrent-samples {aio["max_concurrent_samples"] or batch * n}
@@ -993,6 +1051,8 @@ def miles_args(recipe: dict, run_id: str, resume: bool, resume_optimizer: bool =
         --rollout-shuffle --num-rollout {algo["num_rollout"]}
         --rollout-batch-size {batch} --n-samples-per-prompt {n} --global-batch-size {batch * n}
         --rollout-temperature {algo["temperature"]}
+        {f"--rollout-top-p {algo['top_p']}" if algo["top_p"] is not None else ""}
+        {f"--rollout-top-k {algo['top_k']}" if algo["top_k"] is not None else ""}
         --rollout-max-response-len {algo["max_response_len"]} --max-seq-len {algo["max_seq_len"]}
 
         --advantage-estimator {algo["advantage_estimator"]}
@@ -1139,7 +1199,9 @@ def _rollout_args(recipe: dict) -> str:
     if expert_qat(recipe):
         args += " --mxfp4-qat-routed-experts"  # fix-006
     if spec := speculative_algorithm(recipe):
-        args += f" --sglang-speculative-algorithm {spec} {PRESETS[recipe['model']['preset']].speculative_args}"
+        args += f" --sglang-speculative-algorithm {spec} {preset.speculative_args}"
+        if preset.speculative_draft:
+            args += f" --sglang-speculative-draft-model-path {weights_path(*preset.speculative_draft)}"
     return args
 
 

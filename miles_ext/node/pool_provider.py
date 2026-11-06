@@ -17,6 +17,7 @@ from miles.utils.workers.worker_spec import HostAndPort
 _POOL_ID = "registry-inference-engine-0"
 _MODEL_ID = "default"
 POLL_SECS = 5.0
+FIRST_NODE_TIMEOUT_SECS = 3600  # as fix-086 gives a fixed external engine
 
 
 def registry_engine_provider(args, *, capability) -> "RegistryEngineProvider":
@@ -62,6 +63,8 @@ class RegistryEngineProvider(BaseWorkerProvider):
         return self._cells
 
     async def init(self) -> None:
+        """Wait for the first node: the trainer starts before the engines serve (ext-069)."""
+        await asyncio.to_thread(node_registry.wait_members, self._url, self._token, timeout=FIRST_NODE_TIMEOUT_SECS)
         await self._refresh()
 
     def _addrs(self, cell_id: str):

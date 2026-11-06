@@ -145,7 +145,9 @@ def test_a_node_joins_serves_through_a_relay_and_leaves_on_release(node, monkeyp
     assert member["url"] == f"http://127.0.0.1:{C.ROLLOUT_PROXY_PORT}" and len(member["engine_ports"]) == 2
 
     monkeypatch.setattr(relay.R, "is_elastic", lambda recipe: True)
-    proc = relay.connect({}, url, "pool", [member])
+    relay.check_members({}, [member])
+    proc = relay.start(url, "pool")
+    relay.wait_open([member], proc)
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{member['slots'][1]}/generate", timeout=10) as r:
             assert r.read().decode() == f"{member['engine_ports'][1]}/generate"
@@ -258,6 +260,14 @@ def test_an_evicted_node_exits_on_its_next_beat(node):
     registry.evict(member["node_id"], "test")
     _join(thread)
     assert result["state"]["reason"] == "evicted by the trainer"
+
+
+def test_a_non_elastic_recipe_refuses_a_node_of_another_shape(monkeypatch):
+    monkeypatch.setattr(relay.R, "is_elastic", lambda recipe: False)
+    monkeypatch.setattr(relay.R, "num_engines", lambda recipe: 2)
+    relay.check_members({}, [{"engine_ports": [1, 2]}])
+    with pytest.raises(RuntimeError, match="expects 2"):
+        relay.check_members({}, [{"engine_ports": [1]}])
 
 
 def test_the_relay_follows_the_registry(monkeypatch):

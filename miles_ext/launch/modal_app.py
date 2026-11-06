@@ -83,6 +83,9 @@ TRAINER_KEY = "split-trainer:{run_id}"  # the trainer's registry URL, which this
 TRAINER_URL_FILE = "/tmp/miles-trainer-url"
 TRAINER_URL_POLL_SECS = 5
 ENGINE_WAIT_POLL_SECS = 10
+NODE_GPUS = SHAPE.get("gpus_per_node", R.GPUS_PER_NODE)
+# Modal refuses a clustered function on part of a node, even of size 1, so that trainer runs as a plain function
+CLUSTERED = NODE_GPUS == R.GPUS_PER_NODE
 
 
 def _engine_key(run_id: str) -> str:
@@ -203,9 +206,13 @@ def check_cpu(recipe: dict, run_id: str):
         return False
 
 
+def _gang(fn):
+    return modal.clustered(size=SHAPE["nodes"], rdma=SHAPE["nodes"] > 1)(fn) if CLUSTERED else fn
+
+
 @app.function(
     image=image,
-    gpu=f"{SHAPE['gpu']}:{R.GPUS_PER_NODE}",
+    gpu=f"{SHAPE['gpu']}:{NODE_GPUS}",
     cpu=SHAPE["cpu"],
     memory=SHAPE["memory_gib"] * 1024,
     ephemeral_disk=SHAPE["disk_gib"] * 1024 if SHAPE.get("disk_gib") else None,
@@ -214,7 +221,7 @@ def check_cpu(recipe: dict, run_id: str):
     timeout=int(SHAPE["timeout_hours"] * HOURS),
     single_use_containers=True,
 )
-@modal.clustered(size=SHAPE["nodes"], rdma=SHAPE["nodes"] > 1)
+@_gang
 def train(recipe: dict, run_id: str, opts: dict | None = None):
     """One segment. ``opts``: ``segment_seconds``, counted from this container's start (so time
     spent waiting for GPUs is not lost), after which rank 0 saves and exits; the function
@@ -226,9 +233,12 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     opts = opts or {}
     recipe = R.from_dict(recipe)  # defaults for keys a recipe resolved by an older release lacks
     _check_shape(recipe)
-    cluster = modal.Cluster.from_context()
-    rank = cluster.container_rank()
-    ips = cluster.container_ips(family="ipv4")
+    if CLUSTERED:
+        cluster = modal.Cluster.from_context()
+        rank = cluster.container_rank()
+        ips = cluster.container_ips(family="ipv4")
+    else:
+        rank, ips = 0, ["127.0.0.1"]
     os.environ.update(
         {
             C.NODE_RANK_ENV: str(rank),
@@ -263,7 +273,7 @@ if SPLIT:
 
     @app.function(
         image=image,
-        gpu=f"{ENGINE['gpu']}:{R.GPUS_PER_NODE}",
+        gpu=f"{ENGINE['gpu']}:{ENGINE.get('gpus', R.GPUS_PER_NODE)}",
         cpu=ENGINE["cpu"],
         memory=ENGINE["memory_gib"] * 1024,
         ephemeral_disk=ENGINE["disk_gib"] * 1024 if ENGINE.get("disk_gib") else None,
@@ -324,13 +334,17 @@ def _engine_failed(run_id: str, progress) -> None:
         raise RuntimeError(f"the rollout node ended before the trainer connected: {state.get('reason')}")
 
 
-def _wait_engine_ready(run_id: str, progress, *, timeout: float) -> None:
-    """Block until the run's rollout node serves (the trainer node is billed from spawn), or raise if it ended."""
+def _wait_engine_container(run_id: str, progress, *, timeout: float) -> None:
+    """Block until the rollout node's container runs: a trainer is billed from spawn, so it does not wait while the
+    engines queue for GPUs, but it loads alongside them (ext-069). Raise if the node ended."""
     deadline = time.monotonic() + timeout
-    while (progress.get(_engine_key(run_id)) or {}).get("phase") != "ready":
+    while True:
+        state = progress.get(_engine_key(run_id)) or {}
         _engine_failed(run_id, progress)
+        if state.get("phase") == "ready" or "container_at" in state:
+            return
         if time.monotonic() > deadline:
-            raise TimeoutError(f"the rollout node was not ready within {timeout:.0f}s")
+            raise TimeoutError(f"the rollout node's container was not running within {timeout:.0f}s")
         time.sleep(ENGINE_WAIT_POLL_SECS)
 
 
@@ -420,10 +434,10 @@ def main(
     if engine_call := _ensure_engine(recipe, run_id):
         from miles_ext.platform import progress as P
 
-        # the trainer node is billed from spawn; start it once the engines serve, not while they load
-        print(f"split: engine call {engine_call}; the trainer starts when the engines are ready", flush=True)
-        _wait_engine_ready(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
-        print("split: engines ready; starting the trainer", flush=True)
+        # the trainer node is billed from spawn: start it once the engines have GPUs, then both load together (ext-069)
+        print(f"split: engine call {engine_call}; the trainer starts when the engine container runs", flush=True)
+        _wait_engine_container(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
+        print("split: engine container running; starting the trainer", flush=True)
     call = train.spawn(recipe, run_id, opts)
     print(f"trainer call {call.object_id}", flush=True)
     try:

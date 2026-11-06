@@ -50,3 +50,54 @@ def test_rollout_speculative_is_null_or_a_bool():
 
     assert not any(errors(value) for value in (None, True, False))
     assert all(errors(value) for value in ("false", 0, [True]))
+
+
+DFLASH2 = {"model": {"preset": "glm-5.3-flash-dflash2"}}
+BOUNDED = {"algorithm": {"top_p": 0.95, "top_k": 32}}
+
+
+def test_dflash2_serves_its_own_checkpoint_with_top_p_replay(monkeypatch):
+    argv = _argv(monkeypatch, **DFLASH2, **BOUNDED)
+    assert argv[argv.index("--sglang-speculative-algorithm") + 1] == "DFLASH"
+    draft = argv[argv.index("--sglang-speculative-draft-model-path") + 1]
+    assert draft == "/models/incoai--GLM-5.3-Flash-DFlash2/bf582e4eacc1810f76656d1811693ff6c6737d2a"
+    assert argv[argv.index("--rollout-top-p") + 1] == "0.95"
+    assert argv[argv.index("--rollout-top-k") + 1] == "32"
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        (BOUNDED, "exact-sampling draft"),
+        ({"algorithm": {"top_k": 32}}, "exact-sampling draft"),
+        ({"extra_args": ["--rollout-top-p", "0.95", "--rollout-top-k", "32"]}, "exact-sampling draft"),
+        ({"extra_args": ["--rollout-top-p=0.95", "--rollout-top-k=32"]}, "exact-sampling draft"),
+        ({"algorithm": {"loss": "score_centering"}}, "exact-sampling draft"),
+        ({**DFLASH2, "algorithm": {"top_p": 0.95}}, "needs algorithm.top_k"),
+    ],
+    ids=[
+        "eagle-top-p",
+        "eagle-top-k",
+        "eagle-extra-args",
+        "eagle-extra-args-equals",
+        "eagle-score-centering",
+        "no-top-k",
+    ],
+)
+def test_refused_sampling_combinations_fail_at_load(monkeypatch, overrides, message):
+    with pytest.raises(ValueError, match=message):
+        _argv(monkeypatch, **overrides)
+
+
+def test_plain_decode_allows_every_sampling_option(monkeypatch):
+    argv = _argv(
+        monkeypatch, rollout={"speculative": False}, algorithm={"top_p": 0.95, "top_k": 32, "loss": "score_centering"}
+    )
+    assert "--sglang-speculative-algorithm" not in argv
+    assert argv[argv.index("--loss-type") + 1] == "score_centering"
+
+
+def test_dflash2_takes_score_centering_with_top_p(monkeypatch):
+    argv = _argv(monkeypatch, **DFLASH2, algorithm={"top_p": 0.95, "top_k": 32, "loss": "score_centering"})
+    assert argv[argv.index("--loss-type") + 1] == "score_centering"
+    assert argv[argv.index("--sglang-speculative-algorithm") + 1] == "DFLASH"

@@ -1,6 +1,7 @@
 """What a caller gives a node and what a node gives back (RFC 0005): the single owner of these names."""
 
 from miles_ext.recipes import recipe as R
+from miles_ext.recipes.presets import PRESETS
 
 # ---- gang: trainer nodes, as torchrun's RANK, WORLD_SIZE, MASTER_ADDR ----
 NODE_RANK_ENV = "MILES_NODE_RANK"
@@ -58,10 +59,20 @@ def node_secrets(recipe: dict) -> list[str]:
     return keys
 
 
+def _draft_checkpoint(recipe: dict) -> dict | None:
+    """The draft model's weights, when the run decodes speculatively with a separate checkpoint."""
+    draft = PRESETS[recipe["model"]["preset"]].speculative_draft
+    if not R.speculative_algorithm(recipe) or not draft:
+        return None
+    repo, revision = draft
+    return {"path": str(R.weights_path(repo, revision)), "hf_repo": repo, "revision": revision}
+
+
 def _inputs(recipe: dict, run_id: str) -> dict:
     """Where the run reads its inputs. Mount them there, or put prompts and tasks under ``fallback``."""
     tasks = R.tasks_volume(recipe)
     return {
+        "draft_checkpoint": _draft_checkpoint(recipe),
         "model_dir": str(R.model_dir(recipe)),
         "prompts": str(R.PROMPTS),
         "tasks": (
@@ -74,7 +85,7 @@ def _inputs(recipe: dict, run_id: str) -> dict:
 def _role(shape: dict, nodes: int | None) -> dict:
     return {
         "gpu": shape["gpu"],
-        "gpus_per_node": R.GPUS_PER_NODE,
+        "gpus_per_node": shape.get("gpus_per_node", R.GPUS_PER_NODE),
         "nodes": nodes,  # None: as many as the caller wants
         "cpu": shape["cpu"],
         "memory_gib": shape["memory_gib"],
@@ -95,7 +106,8 @@ def manifest(recipe: dict, run_id: str) -> dict:
         roles["trainer"]["ports"].append(SESSION_PROXY_PORT)
     if R.is_split(recipe):
         roles["trainer"]["ports"].append(REGISTRY_PORT)
-        rollout = _role({**shape, **shape["engine"]}, None)
+        engine = {**shape, **shape["engine"], "gpus_per_node": shape["engine"].get("gpus", R.GPUS_PER_NODE)}
+        rollout = _role(engine, None)
         rollout["gpu_advice"] = rollout.pop(
             "gpu"
         )  # not binding: gpus_per_engine, precision and memory for the model are

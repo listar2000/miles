@@ -37,13 +37,14 @@ Recipes that exist are in `miles_ext/recipes/configs/`, and `fork/guide/recipes.
 `/models`, `/results` and the others are plain mounts: NFS, a provider volume, or a bucket through a CSI driver. If your
 mount needs a flush after writing, write an adapter with `commit`, `refresh` and `remove`
 (`miles_ext/node/storage.py`) and set `MILES_STORAGE` to its dotted path. Weights can be fetched with
-`python -m miles_ext.node prepare-weights --hf-repo R --revision C --path <inputs.model_dir>`.
+`python -m miles_ext.node prepare-weights --hf-repo R --revision C --path <inputs.model_dir>`, and likewise for
+`inputs.draft_checkpoint` when the manifest names one.
 
 ## 3. Start the trainer
 
 **Trainer nodes of one run must be one cluster** with a fast private interconnect (RDMA for more than one node): never
-across providers or regions. They reach each other on any port, since Ray and NCCL pick ports at run time. Every
-trainer node has 8 GPUs today. Each node gets its own rank from 0 to N-1 and its own IP; `MILES_NNODES` and
+across providers or regions. They reach each other on any port, since Ray and NCCL pick ports at run time. Give each
+node the manifest's `gpus_per_node`. Each node gets its own rank from 0 to N-1 and its own IP; `MILES_NNODES` and
 `MILES_HEAD_ADDR` (rank 0's IP) are the same on all. Two nodes, rank 0 first:
 
     MILES_NODE_RANK=0 MILES_NNODES=2 MILES_HEAD_ADDR=10.0.0.1 MILES_NODE_IP=10.0.0.1 WANDB_API_KEY=... \
@@ -65,7 +66,7 @@ such a viewer, and it also reads `/results/<run_id>/` directly when it can mount
 ## 4. Start rollout nodes (split recipes)
 
 Rollout nodes need not match each other or the trainer, and can come from anywhere, within what the manifest requires.
-Each has 8 GPUs today. Set `MILES_GPU` if a node's GPU is not the recipe's, so it keeps its own compiled kernels.
+Give each the manifest's `gpus_per_node`. Set `MILES_GPU` if a node's GPU is not the recipe's, so it keeps its own compiled kernels.
 Generate one `MILES_POOL_TOKEN` per run, give it to both roles, and expose rank 0's port 30999:
 
     MILES_POOL_TOKEN=... MILES_TRAINER_URL=https://<rank 0 port 30999> MILES_ROLLOUT_PUBLIC_URL=https://<this node port 32999> \
