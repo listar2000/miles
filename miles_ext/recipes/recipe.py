@@ -113,8 +113,14 @@ DEFAULTS: dict[str, Any] = {
         "timeout_hours": 6,
         "disk_gib": None,
         "placement": "one_cluster",
-        "engine": {"gpus": GPUS_PER_NODE, "cpu": None, "memory_gib": None, "disk_gib": None, "timeout_hours": None,
-                   "idle_minutes": 30},
+        "engine": {
+            "gpus": GPUS_PER_NODE,
+            "cpu": None,
+            "memory_gib": None,
+            "disk_gib": None,
+            "timeout_hours": None,
+            "idle_minutes": 30,
+        },
     },
     # tasks_volume "<volume>:/<path>": the task dirs on a Modal volume, instead of tasks_dir
     "taskset": {"tasks_dir": None, "tasks_volume": None, "prompts": None, "harness": HARNESS_SANDBOX},
