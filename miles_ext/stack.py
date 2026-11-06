@@ -36,6 +36,7 @@ MINI_SWE_AGENT_VERSION = "2.4.6"
 # Sail SDK for the vendored Sail provider (miles_ext/sandboxes/sail), pinned
 # exactly: the vendored file imports SDK internals (sail._core_client, sail.image)
 SAIL_SDK_VERSION = "0.13.0"
+GCS_CLIENT_VERSION = "3.17.1"  # miles_ext/node/adapters/gcs.py: a mount mirrored to a bucket
 
 # The deps layer, for fork/docker/build.py and the launcher's build-from-commit image: uv for the Harbor
 # branch's workspace dependency, the image's Python (/opt/sglang), and precompiled bytecode
@@ -43,7 +44,7 @@ NVCOMP_VERSION = "6.0.0.12"  # radixark/miles#3894 requires nvCOMP 6.x
 DEPS_INSTALL = (
     'uv pip install --compile-bytecode --python "$(command -v python)" '
     f'"harbor[modal] @ git+{HARBOR_REPO}@{HARBOR_COMMIT}" '
-    f'"mini-swe-agent=={MINI_SWE_AGENT_VERSION}" "sail=={SAIL_SDK_VERSION}"'
+    f'"mini-swe-agent=={MINI_SWE_AGENT_VERSION}" "sail=={SAIL_SDK_VERSION}" "google-cloud-storage=={GCS_CLIENT_VERSION}"'
     # GPU-delta's nvCOMP C library (port-001/port-002), as the PR's Dockerfile installs it: no deps
     f' && uv pip install --compile-bytecode --no-deps --python "$(command -v python)" "nvidia-libnvcomp-cu13=={NVCOMP_VERSION}"'
 )
