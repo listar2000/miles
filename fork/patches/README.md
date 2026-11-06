@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-068 | Ext | `cluster.placement: split` on part of a node: `cluster.engine.gpus`, and a plain-function trainer below 8 GPUs | active; remove with ext-036 | [ext-068-split-part-node.md](ext-068-split-part-node.md) |
 | ext-060 | Ext | Single-turn graders by dotted path in `metadata.task` | active | [ext-060-single-turn-grader-paths.md](ext-060-single-turn-grader-paths.md) |
 | ext-069 | Ext | A split trainer starts with its engines instead of after them, so Ray, the router, the session servers and the model build overlap the engine load (rollout 0 was 8m55 after engines ready on GLM-5.3-Flash) | active; remove with ext-036 | [ext-069-split-overlap-startup.md](ext-069-split-overlap-startup.md) |
 | ext-059 | Ext | `cluster.placement: split` with N trainer nodes: relays and commits on every node, GPU-delta budget per node | active; remove with ext-036 | [ext-059-split-trainer-nodes.md](ext-059-split-trainer-nodes.md) |
