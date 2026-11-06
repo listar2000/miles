@@ -30,7 +30,8 @@ modal run -m miles_ext.launch.modal_app --run-id <run-id>
 
 Split placement on two half nodes ([ext-068](../../fork/patches/ext-068-split-part-node.md)): B300:4 trainer (TP4 EP4),
 B300:4 engine, about $75-78 per 8 GPU-hours. 16 prompts x 8 tries, T 1.0, top-p 0.95, top-k 32, 6k reply cap, LoRA r32,
-lr 1e-4, PPO clip 0.2 / 0.28, MIS, staleness 2.
+lr 1e-4, PPO clip 0.2 / 0.28, MIS, staleness 2. `glm53-flash-stak-l4-sc.yaml` is the same run with score centering
+instead of PPO clip.
 
 ## Success
 
