@@ -31,6 +31,8 @@ modal run -m miles_ext.launch.modal_app --run-id <run-id>
 Split placement on two half nodes ([ext-068](../../fork/patches/ext-068-split-part-node.md)): B300:4 trainer (TP4 EP4),
 B300:4 engine, about $75-78 per 8 GPU-hours. 16 prompts x 8 tries, T 1.0, top-p 0.95, top-k 32, 6k reply cap, LoRA r32,
 lr 1e-4, `policy_loss` with MIS, staleness 2. `glm53-flash-stak-l4-sc.yaml` is the same run with score centering.
+`glm53-flash-stak-l4-12-sc.yaml` drops four prompts that capped early (L4-001, 004, 009, 018), halves the lr and cuts
+in-flight samples to 32, so most of a batch is one version old instead of two.
 
 `policy_loss` here is effectively GRPO: group-centered advantages, no std division, per-token loss. Its PPO clip 0.2 / 0.28
 never binds (`train/pg_clipfrac` 0.0 on every step): without `--use-rollout-logprobs` the baseline is the trainer's own
