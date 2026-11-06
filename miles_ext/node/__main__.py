@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,13 @@ def _require(recipe: dict, role: str) -> None:
         sys.exit(
             f"{role}: the caller did not provide: {', '.join(missing)} (fork/rfcs/0005-provider-agnostic-image.md)"
         )
+
+
+def _tee(run_id: str, name: str) -> None:
+    from miles_ext.node import runtime
+    from miles_ext.recipes import recipe as R
+
+    runtime.tee_logs(R.RESULTS, run_id, name)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -83,12 +91,14 @@ def main(argv: list[str] | None = None) -> int:
 
         recipe, run_id = load_spec(a.spec)
         _require(recipe, a.role)
+        _tee(run_id, f"trainer-{os.environ[C.NODE_RANK_ENV]}")
         trainer.run(recipe, run_id)
     elif a.role == "rollout":
         from miles_ext.node import rollout
 
         recipe, run_id = load_spec(a.spec)
         _require(recipe, a.role)
+        _tee(run_id, f"rollout-{socket.gethostname()}")
         rollout.run(recipe, run_id)
     elif a.role == "check":
         from miles_ext.platform.validate import run_deep_check

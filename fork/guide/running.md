@@ -15,11 +15,9 @@ What a run looks like from outside, after `modal run --detach -m miles_ext.launc
 
 ## The run monitor
 
-`miles_ext/monitor/` is a read-only web page over your runs: what is live, every
-run and attempt, trial progress, curves and GPU use. Set `MILES_MONITOR_DIR`
-before you launch, and the launcher registers each run there. Then
-`miles_ext/monitor/start.sh` serves the page locally, and `--tunnel` gives it a
-public URL. Setup and config: [miles_ext/monitor/README.md](../../miles_ext/monitor/README.md).
+The read-only web page over your runs moved out of this repo: it lives on the launcher side, as [`miles-viewer`](https://github.com/listar2000/miles-viewer), with its own
+README. Point it at the `MILES_MONITOR_DIR` you already use. Set `MILES_MONITOR_DIR` before you launch, and `modal_app` registers each run there for it. A node off Modal
+reports to it directly (`MILES_STATE=http`, `fork/guide/image.md`), or it reads `/results/<run_id>/` from shared storage.
 
 ## Lifecycle
 

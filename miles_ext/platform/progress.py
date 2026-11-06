@@ -8,9 +8,8 @@ Two places hold it, so a reader never depends on the trainer being alive:
   ``active:<run_id>`` (the live segment's call id: at most one segment per run),
   ``lease:<run_id>`` (written by the caller, see ``renew_lease``) and
   ``exit:<run_id>`` (the exit record) and ``pool:<run_id>`` (a split run's rollout nodes
-  and their load); teardown deletes all of them, and ``commit:<run_id>``, which only runs
-  before ext-064 wrote here (it now names the commit request in rank 0's gang server,
-  see ``shards``);
+  and their load); teardown deletes them, and ``commit:<run_id>`` too, the name of a commit
+  request in rank 0's gang server (``shards``);
 - the results volume: ``<run_id>/exit.json`` (the newest exit record) and
   ``<run_id>/exits.jsonl`` (one line per segment), next to the checkpoints.
 

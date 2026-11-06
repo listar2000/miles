@@ -1,24 +1,9 @@
-"""Launch manifests for the run monitor: one file per launch (attempt), <data dir>/manifests/<app_id>.json.
-The monitor reads only these (plus runs.json history), so nothing is edited per run.
-
-`miles_ext.launch.modal_app` writes one itself when MILES_MONITOR_DIR is set (`register_launch`); other
-launchers call `write_manifest`, and `register.py` adds one by hand after the fact.
-
-Known fields (all optional except the two ids): title, kind, campaign, gpu, gpu_app_name, sandbox {provider, app},
-wandb {project}, expected_steps, expected_trials, batch_size, n_samples, group_filter, stale_secs, limits
-{agent_secs, trial_secs, verifier_secs, turns, context, hard_stop_h}, launcher, recipe, docs, notes. kind is
-"train" for RL (the recipe's), "sft" for a trainer-only SFT run; an eval of a training run's checkpoint adds
-evaluates {run, step, label} (step = optimizer steps trained, 0 = the base model). `log_path`
-(the launcher's own stdout, when it is redirected to a file) is filled in here: the monitor tails that file for
-live stage, engine and trial-outcome events.
-"""
+"""Write launch manifests for a run viewer: one file per attempt, <MILES_MONITOR_DIR>/manifests/<app_id>.json."""
 
 import json
 import os
 import time
 from pathlib import Path
-
-from . import config
 
 
 def _stdout_file() -> str | None:
@@ -32,7 +17,8 @@ def _stdout_file() -> str | None:
 def write_manifest(app_id: str, run_id: str, overwrite: bool = True, **fields) -> Path:
     """Write (or add to) one attempt's manifest. Fields already in the file are replaced by the given ones, or
     kept with overwrite=False (the launcher's own record never replaces what register.py wrote)."""
-    path = config.DIR / "manifests" / f"{app_id}.json"
+    root = Path(os.environ.get("MILES_MONITOR_DIR") or "~/.miles-monitor").expanduser().resolve()
+    path = root / "manifests" / f"{app_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     m = json.loads(path.read_text()) if path.exists() else {}
     m.setdefault("started_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))

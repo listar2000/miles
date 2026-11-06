@@ -53,10 +53,14 @@ trainer node has 8 GPUs today. Each node gets its own rank from 0 to N-1 and its
 
 A node missing something names it and exits before doing anything. Exit code 0 means done or segment end: run the same
 command again and it resumes from the newest save. SIGTERM saves and exits, and so does `MILES_SEGMENT_DEADLINE` (epoch
-seconds). Otherwise read `/results/<run_id>/exit.json`. Heartbeat and exit are in `/results/<run_id>/state/`, one JSON file per key with the name URL-encoded; write
+seconds). Otherwise read `/results/<run_id>/exit.json`. Each node's log is in `/results/<run_id>/logs/`. Heartbeat and exit are in `/results/<run_id>/state/`, one JSON file per key with the name URL-encoded; write
 `lease%3A<run_id>.json` there as `{"expires_at": <epoch seconds>}` to bound a run.
 
 In-sandbox harnesses also need `MILES_SESSION_PUBLIC_URL` on rank 0: the public URL of port 29999.
+
+To send run state to a viewer instead, W&B style, set `MILES_STATE=http`, `MILES_STATE_URL` and `MILES_STATE_TOKEN` on every
+node. It gets `PUT`, `GET` and `DELETE` on `<url>/<run_id>/<key>`, and a failed call never stops training. [`miles-viewer`](https://github.com/listar2000/miles-viewer) is
+such a viewer, and it also reads `/results/<run_id>/` directly when it can mount that storage.
 
 ## 4. Start rollout nodes (split recipes)
 

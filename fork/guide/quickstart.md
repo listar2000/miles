@@ -98,7 +98,7 @@ modal run --detach -m miles_ext.launch.modal_app --run-id smoke-<you>-1 > smoke-
 Redirecting the launch output to a file lets the monitor tail it for startup
 stages, per-step rewards and errors. The launcher finds that file through `/proc`,
 so on macOS register it by hand after launching:
-`python -m miles_ext.monitor.register smoke-<you>-1 smoke-<you>-1.log <your copy>.yaml`.
+`python -m miles_ui.register smoke-<you>-1 smoke-<you>-1.log <your copy>.yaml` from `miles-viewer`.
 
 The dry check builds the run's arguments in the image, parses them with Miles,
 and checks the tasks and weights, all on one GPU. Fix whatever it reports before
@@ -112,15 +112,5 @@ Its header comment says what it was made for and what it needs.
 
 ## 7. Watch the run
 
-The run monitor is a read-only web page over your runs, served from your machine:
-
-```bash
-pip install wandb                                # Python 3.11+ (the config reader uses tomllib)
-export MILES_MONITOR_DIR=~/miles-monitor         # the same dir your launches use
-miles_ext/monitor/start.sh                       # http://127.0.0.1:8787
-miles_ext/monitor/start.sh --tunnel              # a public URL behind a password (needs cloudflared)
-```
-
-Each launch with `MILES_MONITOR_DIR` set shows up within seconds. Config, run
-groups, the compare page and everything else are in
-[miles_ext/monitor/README.md](../../miles_ext/monitor/README.md).
+The read-only web page over your runs lives on the launcher side, as [`miles-viewer`](https://github.com/listar2000/miles-viewer), with its own README. Each launch with
+`MILES_MONITOR_DIR` set (the dir it reads) shows up within seconds.

@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-070 | Ext | The run monitor leaves the fork for the launcher side; nodes can push run state (`MILES_STATE=http`) and write logs to `/results/<run>/logs/` | active | [ext-070-monitor-out.md](ext-070-monitor-out.md) |
 | ext-066 | Ext | Elastic rollout pool: `cluster.engine.elastic`, rollout nodes joining and leaving through upstream's `--custom-inference-engine-provider-path`, a failed node evicted, load in run state | active | [ext-066-elastic-pool.md](ext-066-elastic-pool.md) |
 | ext-065 | Ext | Every role and job as a node command: `trainer`, `rollout`, `check`, `prepare-weights`, `convert-fsdp`, `sft-prepare`, `sft-train` | active | [ext-065-node-commands.md](ext-065-node-commands.md) |
 | ext-064 | Ext | The trainer role with no Modal: `miles_ext.node.trainer`, gang from env, worker release and shard commits over rank 0's gang server, run state behind `MILES_STATE` | active | [ext-064-node-trainer.md](ext-064-node-trainer.md) |
@@ -105,4 +106,4 @@ One row per change important enough for its own page (rules: fork/README.md,
 | hook-019 | Hook | `--custom-trainer-actor-class`: a run names its trainer Ray actor class (the SFT trainer's validation) | active | [hook-019-custom-trainer-actor-class.md](hook-019-custom-trainer-actor-class.md) |
 | ext-054 | Ext | SFT trainer and Modal launch for prepared shards, driven by one run config (`miles_ext/sft/config.py`); held-out NLL | active | [ext-054-sft-trainer.md](ext-054-sft-trainer.md) |
 | experiments | Infra | `experiments/<folder>` for one experiment's own code, and the `Fork-Exp` commit kind that keeps an experiment commit in its folder | active | [infra-experiments.md](infra-experiments.md) |
-| ext-039 | Ext | Read-only run monitor web page (`miles_ext/monitor/`); `modal_app` registers each launch when `MILES_MONITOR_DIR` is set | active | [ext-039-run-monitor.md](ext-039-run-monitor.md) |
+| ext-039 | Ext | Read-only run monitor web page (`miles_ext/monitor/`); `modal_app` registers each launch when `MILES_MONITOR_DIR` is set | moved out to `miles-viewer` by ext-070 | [ext-039-run-monitor.md](ext-039-run-monitor.md) |

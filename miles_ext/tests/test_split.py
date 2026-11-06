@@ -1,5 +1,6 @@
 """The split recipe: its argv, its Modal shape, and what split placement refuses."""
 
+import re
 import time
 from pathlib import Path
 
@@ -60,7 +61,6 @@ def test_one_cluster_has_no_split_args(monkeypatch):
 
 def test_split_engine_lines_tell_engines_apart(monkeypatch, capsys):
     """Both engines log "[... TP0 EP0] Decode batch"; the tag keeps the monitor from collapsing them into one."""
-    from miles_ext.monitor.metrics import RAY_PREFIX
     from miles_ext.node import rollout as engine
 
     monkeypatch.setattr(engine.stack, "MILES_SRC", Path("."))
@@ -74,7 +74,8 @@ def test_split_engine_lines_tell_engines_apart(monkeypatch, capsys):
         if len(out) == 2:
             break
         time.sleep(0.1)
-    assert {RAY_PREFIX.match(o).group(0) for o in out} == {f"(SplitEngine pid={p.pid})" for p in procs}
+    # the shape a run viewer tells Ray actors apart by
+    assert {re.match(r"^\(\w+ pid=\d+\)", o).group(0) for o in out} == {f"(SplitEngine pid={p.pid})" for p in procs}
 
 
 def test_an_elastic_recipe_uses_the_provider_and_refuses_gpu_delta(monkeypatch):

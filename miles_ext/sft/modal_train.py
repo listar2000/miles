@@ -49,7 +49,7 @@ def main(run_id: str, num_rollout: int = 0):
     call = train.spawn(Path(M.CONFIG_PATH).read_text(), run_id, steps, save_interval)
     print(f"train call {call.object_id}", flush=True)
     if os.environ.get("MILES_MONITOR_DIR"):
-        from miles_ext.monitor import manifest as monitor
+        from miles_ext.launch import manifest as monitor
 
         monitor.write_manifest(
             app.app_id,

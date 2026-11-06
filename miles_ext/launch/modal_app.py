@@ -11,7 +11,7 @@ run inputs (tasks, prompts) and the cluster wiring. ``train`` splits into rank 0
     modal run --detach -m miles_ext.launch.modal_app --run-id <id>        # train (same id again resumes)
 
 With ``MILES_MONITOR_DIR`` set, each launch also registers itself with the run
-monitor (``miles_ext/monitor/README.md``).
+viewer on the launcher side (``miles_ext.launch.manifest``).
 
 Credentials come from the .env in ``MILES_DOTENV_DIR`` (default: cwd) as a
 Modal Secret, or from the per-run secret named by ``MILES_SECRET_NAME``
@@ -413,7 +413,7 @@ def main(
         check.remote(recipe, run_id)
         print("cpu-only parse_args:", "ok" if check_cpu.remote(recipe, run_id) else "failed (see logs)")
         return
-    from miles_ext.monitor.manifest import register_launch
+    from miles_ext.launch.manifest import register_launch
 
     register_launch(app.app_id, app.name, recipe, run_id)
     opts = {"segment_seconds": segment_hours * HOURS} if segment_hours else {}

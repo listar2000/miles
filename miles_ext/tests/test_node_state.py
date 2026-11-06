@@ -1,7 +1,10 @@
 """Run state behind MILES_STATE, and the trainer role's env."""
 
+import http.server
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
@@ -16,6 +19,57 @@ def test_file_state_round_trip(tmp_path):
     assert state.get("run:run1") == {"phase": "training"}
     assert state.pop("run:run1") == {"phase": "training"}
     assert state.pop("run:run1", "gone") == "gone"
+
+
+def test_http_state_round_trip_with_its_token(monkeypatch):
+    store: dict = {}
+    seen: list = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _reply(self, code, body=b"null"):
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_PUT(self):
+            seen.append(self.headers["Authorization"])
+            store[self.path] = self.rfile.read(int(self.headers["Content-Length"]))
+            self._reply(200)
+
+        def do_GET(self):
+            self._reply(200, store[self.path]) if self.path in store else self._reply(404)
+
+        def do_DELETE(self):
+            store.pop(self.path, None)
+            self._reply(200)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setenv(C.STATE_ENV, S.HTTP)
+        monkeypatch.setenv(C.STATE_URL_ENV, f"http://127.0.0.1:{server.server_address[1]}/ingest/")
+        monkeypatch.setenv(C.STATE_TOKEN_ENV, "tok")
+        state = S.for_run("run1")
+        assert state.get("run:run1") is None
+        state["run:run1"] = {"phase": "training"}
+        assert seen == ["Bearer tok"] and "/ingest/run1/run%3Arun1" in store
+        assert state.get("run:run1") == {"phase": "training"}
+        assert state.pop("run:run1") == {"phase": "training"} and state.get("run:run1") is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_state_raises_oserror_when_the_viewer_is_away(monkeypatch):
+    monkeypatch.setenv(C.STATE_URL_ENV, "http://127.0.0.1:9")
+    monkeypatch.setenv(C.STATE_TOKEN_ENV, "tok")
+    state = S.HttpState("run1")
+    with pytest.raises(OSError):
+        state["run:run1"] = {}
 
 
 def test_an_unknown_state_store_is_refused(monkeypatch):
@@ -52,3 +106,23 @@ def test_a_node_whose_gpu_differs_keeps_its_own_compile_cache(monkeypatch):
     assert runtime.compile_cache_key("H200") == "h200/sglang-1"
     monkeypatch.setenv(C.GPU_ENV, "B300")
     assert runtime.compile_cache_key("H200") == "b300/sglang-1"
+
+
+def test_tee_logs_copies_a_process_and_its_children(tmp_path):
+    runtime = pytest.importorskip("miles_ext.node.runtime")
+    code = (
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "from miles_ext.node import runtime\n"
+        f"runtime.tee_logs(Path({str(tmp_path)!r}), 'run1', 'trainer-0')\n"
+        "print('from me', flush=True)\n"
+        "subprocess.run(['sh', '-c', 'echo from a child; echo to stderr 1>&2'])\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert runtime and "from me" in out.stdout
+    for _ in range(50):
+        log = (tmp_path / "run1" / "logs" / "trainer-0.log").read_text()
+        if "to stderr" in log:
+            break
+        time.sleep(0.1)
+    assert "from me" in log and "from a child" in log and "to stderr" in log

@@ -196,7 +196,6 @@ miles_ext/              extensions (top-level package next to miles/, on PYTHONP
                         trial_procs.py: trials forked from a preloaded server (ext-042)
   recipes/              recipe YAML -> Miles argv + Harbor env; model presets
   launch/modal_app.py   test launcher for Modal (not platform API)
-  monitor/              read-only run monitor web page (ext-039)
   sft/                  SFT records tokenized like session-server rollouts: prepare, rollout function (ext-048, RFC 0002);
                         connectors/: other formats to records, Harbor ATIF first (ext-049, RFC 0003)
   obs/                  observers: GPU telemetry, rollout loop watchdog; sandbox_profile + sandbox_bench (ext-040)

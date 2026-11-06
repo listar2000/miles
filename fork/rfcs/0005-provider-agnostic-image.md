@@ -6,7 +6,7 @@ Status: accepted 2026-11-05 (owner). Work lands on the long-lived branch `migrat
 ## Decision
 
 The fork stops doing two jobs. What runs inside a node stays here. What starts a node, picks GPUs, or creates apps,
-volumes or secrets belongs to a caller, whose final home is out of this repository's concern. The two roles, rollout
+volumes or secrets, or watches runs from outside, belongs to a caller, whose final home is out of this repository's concern. The two roles, rollout
 and trainer, may come from different providers and scale separately, as under a SkyPilot-like launcher.
 
 While the migration runs, `miles_ext.launch.modal_app` is the stand-in caller. All phase tests run through it, on
@@ -32,7 +32,7 @@ so old runs reproduce.
 | Pool | `MILES_TRAINER_URL` or `MILES_TRAINER_URL_FILE`, `MILES_POOL_TOKEN`, `MILES_ROLLOUT_PUBLIC_URL` | Split: a rollout node registers its public URL with rank 0 and beats. The file form is reread on each beat, because a relaunched trainer can move |
 | Ingress | `MILES_SESSION_PUBLIC_URL` | In-sandbox harnesses: reaches rank 0's session proxy |
 | Storage | `/models` ro, `/results` rw, `/datasets` ro, `/compile-cache` rw optional; `MILES_STORAGE` | The caller mounts them. Trainer and rollout nodes share `/results`; S3, GCS, Azure or a provider volume is the caller's business. The adapter names the commit rule: `posix` or `modal-volume` |
-| Run state | `MILES_STATE` | Heartbeat, lease and exit for the caller: `file` under `/results`, or `modal-dict` |
+| Run state | `MILES_STATE` | Heartbeat, lease, exit and pool load for the caller: `file` under `/results`, `http` (`MILES_STATE_URL`, `MILES_STATE_TOKEN`), or `modal-dict` |
 | Secrets | `WANDB_API_KEY`, `SAIL_API_KEY`, ... | Env vars; `manifest` names them. The image never reads a `.env` |
 | Time | `MILES_SEGMENT_DEADLINE`, SIGTERM | Save and exit before the deadline or on the signal |
 
@@ -41,7 +41,7 @@ providers or regions. Rollout nodes can be heterogeneous and come from anywhere.
 torch.distributed group whose collectives run every step, while engines are independent replicas behind a router.
 
 A node gives back: rank 0's session proxy (29999) and registry (30999), a rollout node's proxy (32999) with `/healthz`;
-under `/results/<run_id>/` the checkpoints, HF exports, `exit.json`, `exits.jsonl` and launch records; exit code 0 for
+under `/results/<run_id>/` the checkpoints, HF exports, `exit.json`, `exits.jsonl`, launch records and `logs/<role>.log`; exit code 0 for
 done or segment end (relaunch resumes), non-zero with a reason in `exit.json`.
 
 The image never creates apps, volumes or secrets, never picks GPUs, and never starts a node. The one provider SDK it

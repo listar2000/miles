@@ -1,5 +1,8 @@
 # ext-039: read-only run monitor
 
+**Moved out of the fork by [ext-070](ext-070-monitor-out.md):** the code is in [`miles-viewer`](https://github.com/listar2000/miles-viewer), and its README has the setup.
+The paths below are as they were in the fork.
+
 ## Why
 
 Someone training with the fork needs to see a run while it happens: startup stages, trial progress, rewards per

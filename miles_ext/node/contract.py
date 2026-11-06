@@ -10,6 +10,8 @@ NODE_IP_ENV = "MILES_NODE_IP"
 
 STORAGE_ENV = "MILES_STORAGE"  # miles_ext.node.storage
 STATE_ENV = "MILES_STATE"  # miles_ext.node.state
+STATE_URL_ENV = "MILES_STATE_URL"  # MILES_STATE=http: where a node puts run state, as W&B's endpoint
+STATE_TOKEN_ENV = "MILES_STATE_TOKEN"  # and its bearer token
 
 # ---- optional, for the caller's own records ----
 CALL_ID_ENV = "MILES_CALL_ID"  # names this segment in the exit record
