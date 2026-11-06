@@ -201,3 +201,16 @@ def test_ray_can_start_while_a_rollout_node_is_still_pending(monkeypatch):
     finally:
         joined.set()
     assert not failures
+
+
+def test_the_trainer_waits_for_the_first_node_as_long_as_the_env_says(monkeypatch):
+    monkeypatch.setenv(C.FIRST_NODE_TIMEOUT_ENV, "0.05")
+    registry = pytest.importorskip("miles_ext.node.registry")
+    monkeypatch.setattr(registry, "WAIT_POLL_SECS", 0.01)
+    real = registry.wait_members
+
+    def wait_members(url, token, *, timeout, check):
+        assert timeout == 0.05
+        return real("http://127.0.0.1:9", token, timeout=timeout, check=check)
+
+    assert "no rollout node joined" in _links(monkeypatch, wait_members)[0]

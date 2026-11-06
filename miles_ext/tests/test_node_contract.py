@@ -68,6 +68,11 @@ def test_the_manifest_names_a_draft_checkpoint_only_when_the_run_uses_one(monkey
     assert contract.manifest(single, "r1")["inputs"]["draft_checkpoint"] is None
 
 
+def test_the_first_node_timeout_comes_from_env():
+    assert contract.first_node_timeout_secs({}) == contract.DEFAULT_FIRST_NODE_TIMEOUT_SECS
+    assert contract.first_node_timeout_secs({contract.FIRST_NODE_TIMEOUT_ENV: "90"}) == 90
+
+
 def test_a_trainer_of_several_nodes_is_one_cluster_with_rdma(monkeypatch):
     several = contract.manifest(_recipe("qwen35-9b-swegym8-megatron-2node", monkeypatch), "run1")["roles"]["trainer"]
     assert several["placement"] == "one_cluster" and several["interconnect"] == "rdma"

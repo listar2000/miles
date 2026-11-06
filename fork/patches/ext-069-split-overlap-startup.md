@@ -53,3 +53,5 @@ With ext-036.
 The relay follows the registry there (ext-063, ext-066), so it starts before any node joins and needs no background
 connect: `node/trainer.py` `_split_links` watches for the first node instead, and a worker's failure reaches rank 0
 through the gang server, with no segment token. The launcher's wait is `modal_app._wait_engine_container`.
+The watcher's wait is `MILES_FIRST_ROLLOUT_NODE_TIMEOUT_SECS`, an hour by default: a launcher should stop the trainer sooner
+when it sees a node die, and this is the safety net for when it does not.

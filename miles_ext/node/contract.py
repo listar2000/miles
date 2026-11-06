@@ -1,5 +1,7 @@
 """What a caller gives a node and what a node gives back (RFC 0005): the single owner of these names."""
 
+import os
+
 from miles_ext.recipes import recipe as R
 from miles_ext.recipes.presets import PRESETS
 
@@ -31,6 +33,8 @@ TRAINER_URL_ENV = "MILES_TRAINER_URL"  # where a rollout node reaches rank 0's r
 TRAINER_URL_FILE_ENV = "MILES_TRAINER_URL_FILE"  # or a file holding it, reread on each beat (a relaunch moves it)
 POOL_TOKEN_ENV = "MILES_POOL_TOKEN"  # one per run, on both roles
 ROLLOUT_URL_ENV = "MILES_ROLLOUT_PUBLIC_URL"  # the public URL that reaches this rollout node's proxy port
+FIRST_NODE_TIMEOUT_ENV = "MILES_FIRST_ROLLOUT_NODE_TIMEOUT_SECS"  # how long a split trainer waits for a rollout node
+DEFAULT_FIRST_NODE_TIMEOUT_SECS = 3600  # as fix-086 gives a fixed external engine
 
 GPU_ENV = "MILES_GPU"  # a node whose GPU is not the recipe's says which, so it keeps its own compiled kernels
 
@@ -41,6 +45,11 @@ GANG_PORT = 30998  # rank 0 of more than one node, private to the gang's network
 ROLLOUT_PROXY_PORT = 32999  # a rollout node: its engines and sync agent, behind one token
 
 COMPILE_CACHE_MOUNT = "/compile-cache"
+
+
+def first_node_timeout_secs(env=os.environ) -> float:
+    """How long a split trainer waits for its first rollout node before it stops the run."""
+    return float(env.get(FIRST_NODE_TIMEOUT_ENV) or DEFAULT_FIRST_NODE_TIMEOUT_SECS)
 
 
 def required_secrets(recipe: dict) -> list[str]:

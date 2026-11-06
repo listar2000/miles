@@ -29,7 +29,7 @@ so old runs reproduce.
 | Kind | Name | Meaning |
 | --- | --- | --- |
 | Gang | `MILES_NODE_RANK`, `MILES_NNODES`, `MILES_HEAD_ADDR`, `MILES_NODE_IP` | Trainer nodes, as torchrun does |
-| Pool | `MILES_TRAINER_URL` or `MILES_TRAINER_URL_FILE`, `MILES_POOL_TOKEN`, `MILES_ROLLOUT_PUBLIC_URL` | Split: a rollout node registers its public URL with rank 0 and beats. The file form is reread on each beat, because a relaunched trainer can move |
+| Pool | `MILES_TRAINER_URL` or `MILES_TRAINER_URL_FILE`, `MILES_POOL_TOKEN`, `MILES_ROLLOUT_PUBLIC_URL` | Split: a rollout node registers its public URL with rank 0 and beats. The file form is reread on each beat, because a relaunched trainer can move. `MILES_FIRST_ROLLOUT_NODE_TIMEOUT_SECS` bounds a trainer's wait for the first node |
 | Ingress | `MILES_SESSION_PUBLIC_URL` | In-sandbox harnesses: reaches rank 0's session proxy |
 | Storage | `/models` ro, `/results` rw, `/datasets` ro, `/compile-cache` rw optional; `MILES_STORAGE` | The caller mounts them. Trainer and rollout nodes share `/results`; S3, GCS, Azure or a provider volume is the caller's business. The adapter names the commit rule: `posix` or `modal-volume` |
 | Run state | `MILES_STATE` | Heartbeat, lease, exit and pool load for the caller: `file` under `/results`, `http` (`MILES_STATE_URL`, `MILES_STATE_TOKEN`), or `modal-dict` |

@@ -76,6 +76,13 @@ If rank 0 can move (a relaunch on a new host), use `MILES_TRAINER_URL_FILE` and 
 each beat. A node exits when the trainer says done, when it is evicted for failing a sync, or after
 `cluster.engine.idle_minutes` with no trainer. A relaunched trainer finds live nodes by itself.
 
+**If a rollout node never comes.** The trainer starts without waiting for one, but it can't see a node that crashes before
+it registers. Your launcher knows first, so stop the trainer when a node it started dies; that is the quick path. As a safety
+net, a trainer with no rollout node after `MILES_FIRST_ROLLOUT_NODE_TIMEOUT_SECS` (default 3600) stops itself with an `error`
+in `exit.json` naming the cause. Set it on trainer nodes, above your slowest node's queue wait plus engine start (engines
+load in about 6 to 16 minutes on the models we run). It covers the first node only: after that, nodes that stop beating are
+dropped and a node that fails a sync is evicted.
+
 Without `cluster.engine.elastic: true`, a run uses one rollout node with the recipe's engine count. With it, start and
 stop nodes at any time (LoRA recipes only); read `state/pool%3A<run_id>.json` for each engine's load.
 

@@ -203,7 +203,7 @@ def _split_links(
     proc = relay.start(registry_url, pool_token)
     stack_ctx.callback(proc.terminate)
     env[volume_sync.REGISTRY_ENV], env[volume_sync.RUN_DIR_ENV] = registry_url, str(run_dir)
-    timeout = int(R.shape(recipe)["engine"]["timeout_hours"] * 3600)
+    timeout = C.first_node_timeout_secs()
     stopped = threading.Event()
     stack_ctx.callback(stopped.set)
 
