@@ -31,7 +31,7 @@ so old runs reproduce.
 | Gang | `MILES_NODE_RANK`, `MILES_NNODES`, `MILES_HEAD_ADDR`, `MILES_NODE_IP` | Trainer nodes, as torchrun does |
 | Pool | `MILES_TRAINER_URL` or `MILES_TRAINER_URL_FILE`, `MILES_POOL_TOKEN`, `MILES_ROLLOUT_PUBLIC_URL` | Split: a rollout node registers its public URL with rank 0 and beats. The file form is reread on each beat, because a relaunched trainer can move. `MILES_FIRST_ROLLOUT_NODE_TIMEOUT_SECS` bounds a trainer's wait for the first node |
 | Ingress | `MILES_SESSION_PUBLIC_URL` | In-sandbox harnesses: reaches rank 0's session proxy |
-| Storage | `/models` ro, `/results` rw, `/datasets` ro, `/compile-cache` rw optional; `MILES_STORAGE` | The caller mounts them. Trainer and rollout nodes share `/results`; S3, GCS, Azure or a provider volume is the caller's business. The adapter names the commit rule: `posix` or `modal-volume` |
+| Storage | `/models` ro, `/results` rw, `/datasets` ro, `/compile-cache` rw optional; `MILES_STORAGE` | The caller mounts them. Trainer and rollout nodes share `/results`; S3, GCS, Azure or a provider volume is the caller's business. The adapter names the commit rule: `posix` or `modal-volume`. `MILES_GCS_MOUNTS` mirrors a mount to a bucket instead (ext-072) |
 | Run state | `MILES_STATE` | Heartbeat, lease, exit and pool load for the caller: `file` under `/results`, `http` (`MILES_STATE_URL`, `MILES_STATE_TOKEN`), or `modal-dict` |
 | Secrets | `WANDB_API_KEY`, `SAIL_API_KEY`, ... | Env vars; `manifest` names them. The image never reads a `.env` |
 | Time | `MILES_SEGMENT_DEADLINE`, SIGTERM | Save and exit before the deadline or on the signal |
@@ -53,7 +53,7 @@ may call is the sandbox provider the recipe names, plus the adapters below, load
    today's order, per node, so durability does not change.
 2. **Weights:** through the shared `/results` storage only. The trainer writes a numbered version, commits it and tells
    each registered rollout node; a node refreshes, reads and applies it, and a late joiner reads the newest before it
-   reports ready. The image does not know buckets: the storage interface is the whole abstraction.
+   reports ready. The storage interface is the whole abstraction; the image knows one bucket client, GCS (ext-072).
 3. **Membership:** rollout nodes register with rank 0 over HTTP and beat, on upstream's
    `--custom-inference-engine-provider-path`. A missed node is dropped and its in-flight samples retried. When to add or
    drop nodes is the caller's decision; the image reports load and accepts whoever registers.

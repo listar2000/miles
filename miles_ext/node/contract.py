@@ -12,6 +12,8 @@ HEAD_ADDR_ENV = "MILES_HEAD_ADDR"
 NODE_IP_ENV = "MILES_NODE_IP"
 
 STORAGE_ENV = "MILES_STORAGE"  # miles_ext.node.storage
+GCS_MOUNTS_ENV = "MILES_GCS_MOUNTS"  # {"<mount>": "gs://bucket/prefix"}: these mounts are mirrored there
+GCS_CREDENTIALS_ENV = "MILES_GCS_CREDENTIALS"  # a service account key's JSON; unset: Application Default Credentials
 STATE_ENV = "MILES_STATE"  # miles_ext.node.state
 STATE_URL_ENV = "MILES_STATE_URL"  # MILES_STATE=http: where a node puts run state, as W&B's endpoint
 STATE_TOKEN_ENV = "MILES_STATE_TOKEN"  # and its bearer token

@@ -1,11 +1,12 @@
 """Storage adapters for durable writes and cross-node visibility (ext-062)."""
 
 import importlib
+import json
 import os
 from pathlib import Path
 from typing import Protocol
 
-from miles_ext.node.contract import STORAGE_ENV
+from miles_ext.node.contract import GCS_MOUNTS_ENV, STORAGE_ENV
 
 MODAL_VOLUME = "modal-volume"
 POSIX = "posix"
@@ -57,4 +58,8 @@ def _adapter(name: str):
 
 
 def for_mount(mount: str | Path) -> Storage:
+    if uri := json.loads(os.environ.get(GCS_MOUNTS_ENV) or "{}").get(str(mount)):
+        from miles_ext.node.adapters.gcs import mirror
+
+        return mirror(Path(mount), uri)
     return _adapter(os.environ.get(STORAGE_ENV) or POSIX)(Path(mount))

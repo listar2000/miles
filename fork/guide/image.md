@@ -34,11 +34,30 @@ Recipes that exist are in `miles_ext/recipes/configs/`, and `fork/guide/recipes.
 
 ## 2. Storage
 
-`/models`, `/results` and the others are plain mounts: NFS, a provider volume, or a bucket through a CSI driver. If your
+`/models`, `/results` and the others are plain mounts: NFS, a provider volume, or a bucket through a CSI driver. To
+use GCS with no mount, see "GCS" below. If your
 mount needs a flush after writing, write an adapter with `live`, `commit`, `refresh` and `remove`
 (`miles_ext/node/storage.py`) and set `MILES_STORAGE` to its dotted path. Weights can be fetched with
 `python -m miles_ext.node prepare-weights --hf-repo R --revision C --path <inputs.model_dir>`, and likewise for
 `inputs.draft_checkpoint` when the manifest names one.
+
+### GCS
+
+Set `MILES_GCS_MOUNTS='{"/results": "gs://bucket/run-id"}'`, and give each run its own prefix, because a refresh takes
+everything under it. That mount is then a local directory the node mirrors to the bucket, with no FUSE, so it works in
+containers that cannot mount (gVisor). Mounts not listed keep `MILES_STORAGE`. The local disk must hold what the node
+reads and writes there. Commits upload everything changed, checkpoints included, so a weight sync can wait on a save.
+
+Credentials, first match wins:
+
+| Where the node runs | What to set |
+| --- | --- |
+| Anywhere, secret as an env var (Modal) | `MILES_GCS_CREDENTIALS`: the JSON of a service account key |
+| Anywhere, secret as a file | `GOOGLE_APPLICATION_CREDENTIALS`: the path to that key |
+| GKE or GCE | Nothing: Workload Identity or the VM's service account |
+
+The identity needs `roles/storage.objectUser` on the bucket, which covers uploads, downloads, listing, deletes and
+multipart uploads. No project id is needed. Put the bucket in the region of the nodes: traffic across regions is billed.
 
 ## 3. Start the trainer
 

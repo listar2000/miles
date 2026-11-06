@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-072 | Ext | A mount mirrored to a GCS prefix through the client, selected by `MILES_GCS_MOUNTS` | active | [ext-072-gcs-mirror.md](ext-072-gcs-mirror.md) |
 | ext-071 | Ext | A node keeps its log off storage that is not live, and node jobs commit and refresh what they use | active | [ext-071-node-log-local.md](ext-071-node-log-local.md) |
 | ext-070 | Ext | The run monitor leaves the fork for the launcher side; nodes can push run state (`MILES_STATE=http`) and write logs to `/results/<run>/logs/` | active | [ext-070-monitor-out.md](ext-070-monitor-out.md) |
 | ext-066 | Ext | Elastic rollout pool: `cluster.engine.elastic`, rollout nodes joining and leaving through upstream's `--custom-inference-engine-provider-path`, a failed node evicted, load in run state | active | [ext-066-elastic-pool.md](ext-066-elastic-pool.md) |
