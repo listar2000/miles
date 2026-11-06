@@ -1,4 +1,4 @@
-# STAK overfit on GLM-5.3-Flash LoRA r32: split on two half nodes, PPO clip + MIS, DFlash2, top-p replay, thinking low.
+# STAK overfit on GLM-5.3-Flash LoRA r32: split on two half nodes, policy_loss (effectively GRPO) + MIS, DFlash2, top-p replay, thinking low.
 # Prompts: ../prompts/stak_l4_16.jsonl, graded by experiments/dsv41_stak_overfit/stackvm.py.
 name: glm53-flash-lora-overfit-stakl4
 model:

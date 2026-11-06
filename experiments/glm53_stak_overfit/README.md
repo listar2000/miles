@@ -30,8 +30,11 @@ modal run -m miles_ext.launch.modal_app --run-id <run-id>
 
 Split placement on two half nodes ([ext-068](../../fork/patches/ext-068-split-part-node.md)): B300:4 trainer (TP4 EP4),
 B300:4 engine, about $75-78 per 8 GPU-hours. 16 prompts x 8 tries, T 1.0, top-p 0.95, top-k 32, 6k reply cap, LoRA r32,
-lr 1e-4, PPO clip 0.2 / 0.28, MIS, staleness 2. `glm53-flash-stak-l4-sc.yaml` is the same run with score centering
-instead of PPO clip.
+lr 1e-4, `policy_loss` with MIS, staleness 2. `glm53-flash-stak-l4-sc.yaml` is the same run with score centering.
+
+`policy_loss` here is effectively GRPO: group-centered advantages, no std division, per-token loss. Its PPO clip 0.2 / 0.28
+never binds (`train/pg_clipfrac` 0.0 on every step): without `--use-rollout-logprobs` the baseline is the trainer's own
+fresh forward, so the ratio is 1 on the single update per rollout.
 
 ## Success
 
@@ -40,7 +43,7 @@ the 16 prompts improved.
 
 ## Results
 
-`glm53ov-1106-a1` (2026-11-06, PPO clip + MIS, image from 0824d2ccf5, W&B `mobiuslab/miles-glm53`), stopped on request
+`glm53ov-1106-a1` (2026-11-06, `policy_loss` + MIS, image from 0824d2ccf5, W&B `mobiuslab/miles-glm53`), stopped on request
 after step 8, about $100:
 
 | Batch | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
@@ -61,5 +64,4 @@ sync 13-35 s for a 252 MB adapter.
 | Capped at 6k | 8% | 14% | 13% | 20% | 23% | 42% | 42% |
 
 Both runs level off near 0.63 as capped replies grow. Batch 0 is the same zero-adapter policy in both (0.38 and 0.52), so
-one batch moves by more than its binomial noise of 0.044. The log-prob gap reached 0.083, against 0.055 without score
-centering.
+one batch moves by more than its binomial noise of 0.044. The log-prob gap reached 0.083, against 0.055 with `policy_loss`.
