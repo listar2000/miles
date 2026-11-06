@@ -82,6 +82,9 @@ else:
 
 HOURS = 3600
 SPLIT = SHAPE.get("placement") == R.SPLIT  # cluster.placement split: the engines run in their own function
+NODE_GPUS = SHAPE.get("gpus_per_node", R.GPUS_PER_NODE)
+# Modal refuses a clustered function on part of a node, even of size 1, so that trainer runs as a plain function
+CLUSTERED = NODE_GPUS == R.GPUS_PER_NODE
 # Upstream's launchers put the Megatron-LM checkout on PYTHONPATH (command_utils'
 # ray backend); its editable install exposes megatron.core but not every package
 # Megatron training imports (megatron.post_training), and the image's
@@ -240,9 +243,13 @@ def _image_info() -> dict:
             "image": _image_ref(), "commit": _image_commit()}
 
 
+def _gang(fn):
+    return modal.clustered(size=SHAPE["nodes"], rdma=SHAPE["nodes"] > 1)(fn) if CLUSTERED else fn
+
+
 @app.function(
     image=image,
-    gpu=f"{SHAPE['gpu']}:{R.GPUS_PER_NODE}",
+    gpu=f"{SHAPE['gpu']}:{NODE_GPUS}",
     cpu=SHAPE["cpu"],
     memory=SHAPE["memory_gib"] * 1024,
     ephemeral_disk=SHAPE["disk_gib"] * 1024 if SHAPE.get("disk_gib") else None,
@@ -251,7 +258,7 @@ def _image_info() -> dict:
     timeout=int(SHAPE["timeout_hours"] * HOURS),
     single_use_containers=True,
 )
-@modal.clustered(size=SHAPE["nodes"], rdma=SHAPE["nodes"] > 1)
+@_gang
 def train(recipe: dict, run_id: str, opts: dict | None = None):
     """One segment. ``opts``: ``segment_seconds``, counted from this container's start (so time
     spent waiting for GPUs is not lost), after which rank 0 saves and exits; the function
@@ -268,10 +275,13 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
     backend = R.backend(recipe)
     _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-    cluster = modal.Cluster.from_context()
-    rank = cluster.container_rank()
-    ips = cluster.container_ips(family="ipv4")
-    head_ip, node_ip = ips[0], ips[rank]
+    if CLUSTERED:
+        cluster = modal.Cluster.from_context()
+        rank = cluster.container_rank()
+        ips = cluster.container_ips(family="ipv4")
+        head_ip, node_ip = ips[0], ips[rank]
+    else:
+        rank, head_ip, node_ip = 0, "127.0.0.1", "127.0.0.1"
     models_volume.reload()
     results_volume.reload()  # see checkpoints committed by an earlier container
     if INPUTS_ON_VOLUME:
@@ -283,7 +293,7 @@ def train(recipe: dict, run_id: str, opts: dict | None = None):
         return _complete_at_launch(recipe, run_id, run_dir, backend) if rank == 0 else None
     compile_cache.restore(_compile_cache_key())
     env = _ray_env(recipe, run_id, head_ip, node_ip)
-    start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={R.GPUS_PER_NODE}", "--disable-usage-stats"]
+    start = ["ray", "start", f"--node-ip-address={node_ip}", f"--num-gpus={NODE_GPUS}", "--disable-usage-stats"]
     if rank != 0:
         return _worker(recipe, run_id, run_dir, rank, head_ip, env, start)
     return _head(recipe, run_id, run_dir, backend, deadline, head_ip, env, start)
@@ -294,7 +304,7 @@ if SPLIT:
 
     @app.function(
         image=image,
-        gpu=f"{ENGINE['gpu']}:{R.GPUS_PER_NODE}",
+        gpu=f"{ENGINE['gpu']}:{ENGINE.get('gpus', R.GPUS_PER_NODE)}",
         cpu=ENGINE["cpu"],
         memory=ENGINE["memory_gib"] * 1024,
         ephemeral_disk=ENGINE["disk_gib"] * 1024 if ENGINE.get("disk_gib") else None,
@@ -547,7 +557,7 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         subprocess.run(start + ["--head", "--port=6379", "--dashboard-host=0.0.0.0"], env=env, check=True)
         ray.init(address=f"{head_ip}:6379")
         ray_ready_by = time.monotonic() + 600
-        while ray.cluster_resources().get("GPU", 0) < nodes * R.GPUS_PER_NODE:
+        while ray.cluster_resources().get("GPU", 0) < nodes * NODE_GPUS:
             if time.monotonic() > ray_ready_by:
                 raise TimeoutError(f"Ray cluster incomplete: {ray.cluster_resources()}")
             time.sleep(2)
