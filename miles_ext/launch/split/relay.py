@@ -1,11 +1,13 @@
 """The split trainer's side: local relays from ``127.0.0.1:<port>`` to the engine tunnel, and its heartbeat."""
 
 import argparse
+import secrets
 import socket
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
@@ -13,6 +15,7 @@ from miles_ext.launch import split
 from miles_ext.recipes import recipe as R
 
 HEARTBEAT_SECS = 30
+POLL_SECS = 10
 _RELEASED = threading.Event()
 _BEAT_LOCK = threading.Lock()  # a beat never lands after release's "done"
 _DROP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "content-encoding"}
@@ -66,25 +69,61 @@ def local_ports(recipe: dict) -> dict[str, list[int] | int]:
     return {"engines": [R.SPLIT_ENGINE_PORT + i for i in range(n)], "agent": R.SPLIT_ENGINE_PORT + n}
 
 
-def wait_ready(run_id: str, progress, *, timeout: float) -> dict:
-    """Block until the run's engine container serves (its published state), or raise if it ended."""
+def agent_url(recipe: dict) -> str:
+    """The sync agent's local URL (MILES_SPLIT_AGENT_URL), known before the engines serve."""
+    return f"http://127.0.0.1:{local_ports(recipe)['agent']}"
+
+
+class _Stopped(Exception):
+    """The trainer node is shutting down, so nobody needs the relay any more."""
+
+
+def _wait_engine(
+    run_id: str,
+    progress,
+    *,
+    timeout: float,
+    reached: Callable[[dict], bool],
+    what: str,
+    stop: threading.Event | None = None,
+) -> dict:
     key, deadline = split.engine_key(run_id), time.monotonic() + timeout
+    stop = stop or threading.Event()
     while True:
         state = progress.get(key) or {}
-        if state.get("phase") == "ready":
-            return state
         if state.get("phase") == "ended":
             raise RuntimeError(f"the engine container ended before the trainer connected: {state.get('reason')}")
+        if reached(state):
+            return state
         if time.monotonic() > deadline:
-            raise TimeoutError(f"the engine container was not ready within {timeout:.0f}s: {state}")
-        time.sleep(10)
+            raise TimeoutError(f"the engine container was not {what} within {timeout:.0f}s: {state}")
+        if stop.wait(POLL_SECS):
+            raise _Stopped
 
 
-def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[subprocess.Popen, dict, str]:
-    """Wait for the run's engine container and start this node's relays.
+def wait_ready(run_id: str, progress, *, timeout: float, stop: threading.Event | None = None) -> dict:
+    """Block until the run's engine container serves (its published state), or raise if it ended."""
+    return _wait_engine(
+        run_id, progress, timeout=timeout, reached=lambda s: s.get("phase") == "ready", what="ready", stop=stop
+    )
 
-    Returns the relay process, the engine state and the agent's local URL (MILES_SPLIT_AGENT_URL)."""
-    state = wait_ready(run_id, progress, timeout=timeout)
+
+def wait_container(run_id: str, progress, *, timeout: float) -> None:
+    """Block until the engine container runs, so a trainer is not billed while the engines queue for GPUs."""
+    _wait_engine(
+        run_id,
+        progress,
+        timeout=timeout,
+        reached=lambda s: s.get("phase") == "ready" or "container_at" in s,
+        what="running",
+    )
+
+
+def connect(
+    recipe: dict, run_id: str, progress, *, timeout: float, stop: threading.Event | None = None
+) -> subprocess.Popen:
+    """Wait for the run's engine container and start this node's relays; returns the relay process."""
+    state = wait_ready(run_id, progress, timeout=timeout, stop=stop)
     ports = local_ports(recipe)
     remote = [*state["engine_ports"], state["agent_port"]]
     local = [*ports["engines"], ports["agent"]]
@@ -105,14 +144,55 @@ def connect(recipe: dict, run_id: str, progress, *, timeout: float) -> tuple[sub
             *mapping,
         ]
     )
-    for port in local:
-        _wait_port(port, proc)
+    try:
+        for port in local:
+            _wait_port(port, proc, stop=stop)
+    except BaseException:
+        proc.terminate()
+        raise
     print(f"split: engines {state['url']}/<token> relayed at 127.0.0.1:{local}", flush=True)
-    return proc, state, f"http://127.0.0.1:{ports['agent']}"
+    return proc
 
 
-def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):
+def connect_in_background(
+    recipe: dict, run_id: str, progress, *, timeout: float, on_failure: Callable[[str], None]
+) -> Callable[[], None]:
+    """Run ``connect`` on its own thread, so Ray, the router and the trainer start while the engines load: Miles
+    retries the relay's closed ports until they open. Returns the function that stops the relay."""
+    stop_event, lock = threading.Event(), threading.Lock()
+    started: list[subprocess.Popen] = []
+
+    def run():
+        try:
+            proc = connect(recipe, run_id, progress, timeout=timeout, stop=stop_event)
+        except _Stopped:
+            return
+        except Exception as e:
+            note = f"split: no relay to the engines: {type(e).__name__}: {e}"
+            print(note, flush=True)
+            if not stop_event.is_set():
+                on_failure(note)
+            return
+        with lock:
+            if stop_event.is_set():
+                proc.terminate()
+            else:
+                started.append(proc)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stop():
+        with lock:
+            stop_event.set()
+            for proc in started:
+                proc.terminate()
+
+    return stop
+
+
+def _wait_port(port: int, proc: subprocess.Popen, *, stop: threading.Event | None = None, timeout: float = 60):
     deadline = time.monotonic() + timeout
+    stop = stop or threading.Event()
     while True:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2):
@@ -120,16 +200,36 @@ def _wait_port(port: int, proc: subprocess.Popen, timeout: float = 60):
         except OSError:
             if proc.poll() is not None or time.monotonic() > deadline:
                 raise RuntimeError(f"relay port {port} did not open (relay exit code {proc.poll()})") from None
-            time.sleep(0.5)
+            if stop.wait(0.5):
+                raise _Stopped from None
 
 
-def start_heartbeat(run_id: str, progress):
+def publish_segment(run_id: str, progress) -> str:
+    """Name this segment for its nodes' failure reports: rank 0 calls this before it opens the head's port."""
+    segment = secrets.token_urlsafe(8)
+    progress[split.segment_key(run_id)] = segment
+    return segment
+
+
+def current_segment(run_id: str, progress) -> str:
+    """The segment a node belongs to: read it once the head's port is open, so after ``publish_segment``."""
+    return progress[split.segment_key(run_id)]
+
+
+def report_node_failure(run_id: str, progress, *, segment: str, note: str) -> None:
+    """Tell rank 0 of that segment this node has no relay; a later segment never reads this report."""
+    progress[split.relay_failure_key(run_id, segment)] = note
+
+
+def start_heartbeat(run_id: str, progress, *, segment: str, on_node_failure: Callable[[str], None]):
     def beat():
         while not _RELEASED.is_set():
             try:
                 with _BEAT_LOCK:
                     if not _RELEASED.is_set():
                         progress[split.trainer_key(run_id)] = {"heartbeat_at": time.time(), "done": False}
+                if note := progress.get(split.relay_failure_key(run_id, segment)):
+                    on_node_failure(note)
             except Exception as e:  # a missed beat is fine; the engine's idle cap is minutes
                 print(f"split heartbeat: {type(e).__name__}: {e}", flush=True)
             _RELEASED.wait(HEARTBEAT_SECS)

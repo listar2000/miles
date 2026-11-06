@@ -125,6 +125,14 @@ def test_error_note_survives_a_long_tail(tmp_path, monkeypatch):
     assert record["reason"] == "error" and record["note"] == "KeyError: missing rollout key"
 
 
+def test_fail_stops_miles_and_the_record_carries_the_note(tmp_path, monkeypatch):
+    sentinel = tmp_path / "save-now"
+    sup, _, _ = _supervisor(tmp_path, monkeypatch, num_rollout=3, segment_secs=None, sentinel=sentinel)
+    sup.fail("split: no relay to the engines: RuntimeError: gone")
+    record = sup.run([sys.executable, "-c", "import time; time.sleep(5)"], cwd=str(tmp_path), env={})
+    assert record["reason"] == "error" and record["note"].startswith("split: no relay")
+
+
 # the supervisor around a fake Miles
 
 FAKE_MILES = textwrap.dedent('''

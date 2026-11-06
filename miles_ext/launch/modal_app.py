@@ -42,6 +42,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 
 import modal
 
@@ -434,18 +435,30 @@ def _ray_env(recipe: dict, run_id: str, head_ip: str, node_ip: str) -> dict:
     }
 
 
-def _split_links(recipe: dict, run_id: str, run_dir, env: dict, stack_ctx: contextlib.ExitStack) -> None:
+def _split_links(
+    recipe: dict,
+    run_id: str,
+    run_dir,
+    env: dict,
+    stack_ctx: contextlib.ExitStack,
+    on_failure: Callable[[str], None],
+) -> None:
     """Split, on each trainer node before `ray start` (Ray workers inherit env): a rank on any node reaches the
-    engines through its local relay, and a node's writes reach the volume only when that node commits."""
+    engines through its local relay, which opens when they serve (ext-069), and a node's writes reach the volume only
+    when that node commits."""
     from miles_ext.launch.split import relay, volume_sync
     from miles_ext.platform import progress as P
 
     stack_ctx.callback(volume_sync.commit_watcher(results_volume.commit).set)
-    relay_proc, _, agent_url = relay.connect(
-        recipe, run_id, P.progress_dict(TARGET), timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS)
+    stop_relay = relay.connect_in_background(
+        recipe,
+        run_id,
+        P.progress_dict(TARGET),
+        timeout=int(SHAPE["engine"]["timeout_hours"] * HOURS),
+        on_failure=on_failure,
     )
-    stack_ctx.callback(relay_proc.terminate)
-    env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = agent_url, str(run_dir)
+    stack_ctx.callback(stop_relay)
+    env[volume_sync.AGENT_ENV], env[volume_sync.RUN_DIR_ENV] = relay.agent_url(recipe), str(run_dir)
 
 
 def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: dict, start: list[str]) -> None:
@@ -462,9 +475,16 @@ def _worker(recipe: dict, run_id: str, run_dir, rank: int, head_ip: str, env: di
         run_id, rank, P.progress_dict(TARGET), completion_queue, results_volume.commit, stop),
         kwargs={"key": P.keys(run_id)["commit"], "every": WORKER_COMMIT_SECS}).start()
     try:
-        if SPLIT:  # first: the head opens its port only after the engines serve, which can take longer than this wait
-            _split_links(recipe, run_id, run_dir, env, stack_ctx)
         _wait_for_port(head_ip, 6379, timeout=600)
+        if SPLIT:  # after the head's port opens: rank 0 has published this segment by then
+            from miles_ext.launch.split import relay
+
+            segment = relay.current_segment(run_id, P.progress_dict(TARGET))
+
+            def report_relay_failure(note: str) -> None:  # rank 0 reads it and stops the run
+                relay.report_node_failure(run_id, P.progress_dict(TARGET), segment=segment, note=note)
+
+            _split_links(recipe, run_id, run_dir, env, stack_ctx, on_failure=report_relay_failure)
         subprocess.run(start + [f"--address={head_ip}:6379"], env=env, check=True)
         if not completion_queue.get(partition=run_id, timeout=int(SHAPE["timeout_hours"] * HOURS)):
             raise RuntimeError("Miles training failed on the head node; see the App logs")
@@ -535,8 +555,13 @@ def _head(recipe: dict, run_id: str, run_dir, backend: str, deadline: float | No
         if SPLIT:  # before `ray start`: Ray workers inherit the relays' addresses through env
             from miles_ext.launch.split import relay
 
-            _split_links(recipe, run_id, run_dir, env, stack_ctx)
-            relay.start_heartbeat(run_id, P.progress_dict(TARGET))  # rank 0 alone: it also writes the release
+            _split_links(recipe, run_id, run_dir, env, stack_ctx, on_failure=supervisor.fail)
+            relay.start_heartbeat(  # rank 0 alone: it also writes the release and stops the run for a failed node
+                run_id,
+                P.progress_dict(TARGET),
+                segment=relay.publish_segment(run_id, P.progress_dict(TARGET)),
+                on_node_failure=supervisor.fail,
+            )
 
         # a segment whose workers died before reading leaves items behind; workers read only after
         # the head's port opens, so clearing here, before the head starts, is safe
@@ -632,10 +657,10 @@ def main(run_id: str = "", num_rollout: int = 0, rollout_batch_size: int = 0, n_
         from miles_ext.launch.split import relay
         from miles_ext.platform import progress as P
 
-        # the trainer node is billed from spawn; start it once the engines serve, not while they load
-        print(f"split: engine call {engine_call}; the trainer starts when the engines are ready", flush=True)
-        relay.wait_ready(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
-        print("split: engines ready; starting the trainer", flush=True)
+        # the trainer node is billed from spawn: start it once the engines have GPUs, then both load together (ext-069)
+        print(f"split: engine call {engine_call}; the trainer starts when the engine container runs", flush=True)
+        relay.wait_container(run_id, P.progress_dict(TARGET), timeout=SHAPE["engine"]["timeout_hours"] * HOURS)
+        print("split: engine container running; starting the trainer", flush=True)
     call = train.spawn(recipe, run_id, opts)
     print(f"trainer call {call.object_id}", flush=True)
     try:

@@ -110,7 +110,8 @@ def serve(recipe: dict, run_id: str, *, progress, env: dict, results_volume, cal
     from miles_ext.launch.split.agent import Agent
 
     key, idle_secs = split.engine_key(run_id), int(recipe["cluster"]["engine"]["idle_minutes"]) * 60
-    state = {"run_id": run_id, "call_id": call_id, "phase": "starting", "started_at": time.time()}
+    now = time.time()
+    state = {"run_id": run_id, "call_id": call_id, "phase": "starting", "started_at": now, "container_at": now}
     progress[key] = state
     spec = commands(recipe, run_id, env)
     engine_env = {**env, **spec["env"]}
