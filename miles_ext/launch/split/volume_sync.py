@@ -14,7 +14,7 @@ from miles_ext.node import contract as C
 from miles_ext.node import registry as node_registry
 
 REGISTRY_ENV = "MILES_SPLIT_REGISTRY_URL"  # rank 0's registry, as this trainer node reaches it
-RUN_DIR_ENV = "MILES_SPLIT_RUN_DIR"  # /results/<run_id> on the trainer
+RUN_DIR_ENV = "MILES_SPLIT_RUN_DIR"  # <weight sync root>/<run_id> on the trainer
 COMMIT_DIR = Path("/tmp/miles-split-commit")  # sender -> function process: "commit this sync"
 COMMIT_TIMEOUT_SECS = 300
 KEEP_SYNCS = 2  # sync dirs kept on the volume (the newest; an engine may still be reading the last)

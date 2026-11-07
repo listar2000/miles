@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from miles_ext import stack
 from miles_ext.checkpoint import save_policy
@@ -198,11 +199,13 @@ def _split_links(
     from miles_ext.launch.split import relay, volume_sync
     from miles_ext.node import registry as node_registry
 
-    stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.RESULTS).commit).set)
+    stack_ctx.callback(volume_sync.commit_watcher(node_storage.for_mount(R.weight_sync_root()).commit).set)
     pool_token = os.environ[C.POOL_TOKEN_ENV]
     proc = relay.start(registry_url, pool_token)
     stack_ctx.callback(proc.terminate)
-    env[volume_sync.REGISTRY_ENV], env[volume_sync.RUN_DIR_ENV] = registry_url, str(run_dir)
+    env[volume_sync.REGISTRY_ENV], env[volume_sync.RUN_DIR_ENV] = registry_url, str(
+        R.weight_sync_root() / Path(run_dir).name
+    )
     timeout = C.first_node_timeout_secs()
     stopped = threading.Event()
     stack_ctx.callback(stopped.set)
@@ -486,6 +489,8 @@ def run(recipe: dict, run_id: str, *, wait_check: Callable[[], None] | None = No
     resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
     node_storage.for_mount(R.MODELS).refresh()
     node_storage.for_mount(R.RESULTS).refresh()  # see checkpoints committed by an earlier container
+    if R.weight_sync_root() != R.RESULTS:
+        node_storage.for_mount(R.weight_sync_root()).refresh()
     _inputs(run_id, tasks=R.reads_task_dirs(recipe))
     # a relaunch of a finished run (the caller's timer fired after the final save): every
     # rank returns before Ray starts, so it costs a container start, not a cluster start

@@ -225,6 +225,47 @@ def test_the_trainer_waits_for_the_first_node_as_long_as_the_env_says(monkeypatc
     assert "no rollout node joined" in _links(monkeypatch, wait_members)[0]
 
 
+def test_a_trainer_commits_and_addresses_weights_on_the_weight_sync_mount(monkeypatch, tmp_path):
+    pytest.importorskip("aiohttp")
+    pytest.importorskip("torch")
+    import contextlib
+
+    from miles_ext.launch.split import relay, volume_sync
+    from miles_ext.node import registry, trainer
+
+    mounts = []
+    monkeypatch.setenv(trainer.R.WEIGHT_SYNC_ENV, "/weight-sync")
+    monkeypatch.setenv(C.POOL_TOKEN_ENV, "t")
+    monkeypatch.setattr(volume_sync, "COMMIT_DIR", tmp_path / "commit")
+    monkeypatch.setattr(trainer.node_storage, "for_mount", lambda mount: mounts.append(str(mount)) or Mock())
+    monkeypatch.setattr(relay, "start", lambda url, token: subprocess.Popen(["sleep", "30"]))
+    monkeypatch.setattr(registry, "wait_members", lambda *a, **kw: time.sleep(0.1) or [])
+    monkeypatch.setattr(relay, "check_members", lambda recipe, members: None)
+    monkeypatch.setattr(relay, "wait_open", lambda members, proc: None)
+    env: dict = {}
+    with contextlib.ExitStack() as stack:
+        trainer._split_links({}, "/results/r1", env, stack, "http://registry", None, lambda note: None)
+    assert mounts == ["/weight-sync"]
+    assert env[volume_sync.RUN_DIR_ENV] == "/weight-sync/r1"
+
+
+def test_a_rollout_node_reads_weights_from_the_weight_sync_mount(monkeypatch):
+    pytest.importorskip("aiohttp")
+    pytest.importorskip("torch")
+    from miles_ext.node import rollout
+
+    seen = {}
+    monkeypatch.setenv(rollout.R.WEIGHT_SYNC_ENV, "/weight-sync")
+    monkeypatch.setattr(rollout.node_storage, "for_mount", lambda mount: Mock(mount=str(mount)))
+    monkeypatch.setattr(rollout.runtime, "compile_cache_key", lambda gpu: "k")
+    monkeypatch.setattr(rollout.runtime, "restore_compile_cache", lambda key: None)
+    monkeypatch.setattr(rollout.compile_cache, "Saver", Mock())
+    monkeypatch.setattr(rollout.R, "trainer_env", lambda recipe: {})
+    monkeypatch.setattr(rollout, "serve", lambda recipe, run_id, **kw: seen.update(kw))
+    rollout.run({"cluster": {"gpu": "H200"}}, "r1")
+    assert seen["storage"].mount == "/weight-sync"
+
+
 def test_node_log_elsewhere_stays_off_the_storage_until_exit_and_then_appends(tmp_path):
     pytest.importorskip("miles_ext.node.runtime")
     dest = tmp_path / "run1" / "logs" / "trainer-0.log"

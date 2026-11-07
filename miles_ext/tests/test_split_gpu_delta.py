@@ -48,6 +48,12 @@ def mapped(monkeypatch):
     monkeypatch.setitem(R.PRESETS, name, replace(R.PRESETS[name], served_gib=476))
 
 
+def test_gpu_delta_writes_to_the_weight_sync_mount_when_a_caller_names_one(mapped, monkeypatch):
+    monkeypatch.setenv(R.WEIGHT_SYNC_ENV, "/weight-sync")
+    argv = R.miles_args(_full_param(), "run1", resume=False)
+    assert argv[argv.index("--update-weight-disk-dir") + 1] == "/weight-sync/run1/gpu_delta"
+
+
 def test_gpu_delta_argv_and_env(mapped):
     r = _full_param()
     R.validate(r, local_inputs=False)

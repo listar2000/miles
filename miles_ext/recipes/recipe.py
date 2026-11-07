@@ -84,6 +84,7 @@ MODELS = Path("/models")
 RESULTS = Path("/results")
 TASKS = Path("/inputs/tasks")
 PROMPTS = Path("/inputs/prompts.jsonl")
+WEIGHT_SYNC_ENV = "MILES_WEIGHT_SYNC_MOUNT"  # weights travel here instead of /results, so a sync never waits on a save
 DATASETS = Path("/datasets")  # taskset.tasks_volume's volume, read-only
 
 DEFAULT_APP_PREFIX = "miles-mobius-"  # sandbox app = <prefix><run_id>
@@ -551,6 +552,10 @@ def is_split(recipe: dict) -> bool:
 
 def is_elastic(recipe: dict) -> bool:
     return is_split(recipe) and bool(recipe["cluster"]["engine"]["elastic"])
+
+
+def weight_sync_root() -> Path:
+    return Path(os.environ.get(WEIGHT_SYNC_ENV) or RESULTS)
 
 
 def gpu_delta(recipe: dict) -> bool:
@@ -1124,7 +1129,7 @@ def _split_args(recipe: dict, run_id: str) -> str:
         --sglang-enable-dp-attention --sglang-dp-size {dp}
         --update-weights-timeout {GPU_DELTA_SYNC_TIMEOUT_S}
         --update-weight-transfer-mode gpu-delta --update-weight-delta-encoding xor
-        --update-weight-disk-dir {RESULTS / run_id / "gpu_delta"}
+        --update-weight-disk-dir {weight_sync_root() / run_id / "gpu_delta"}
         --custom-update-weight-post-write-path {GPU_DELTA_POST_WRITE}"""
     return f"""--rollout-external-engine-addrs {addrs}
         --custom-weight-transfer-protocol-path {SPLIT_SYNC_PROTOCOL}"""

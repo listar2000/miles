@@ -192,3 +192,8 @@ def test_convert_fsdp_reads_committed_inputs_and_commits_the_export_to_results(m
     convert = calls.index("convert")
     assert {("refresh", str(R.MODELS)), ("refresh", str(R.RESULTS))} == set(calls[:convert])
     assert calls[convert + 1 :] == [("commit", str(R.RESULTS))]
+
+
+def test_a_launcher_carries_only_the_storage_choices_the_caller_made():
+    env = {contract.GCS_MOUNTS_ENV: "{}", contract.GCS_CREDENTIALS_ENV: "secret", contract.WEIGHT_SYNC_ENV: ""}
+    assert contract.storage_env(env) == {contract.GCS_MOUNTS_ENV: "{}"}

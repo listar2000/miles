@@ -48,6 +48,13 @@ everything under it. That mount is then a local directory the node mirrors to th
 containers that cannot mount (gVisor). Mounts not listed keep `MILES_STORAGE`. The local disk must hold what the node
 reads and writes there. Commits upload everything changed, checkpoints included, so a weight sync can wait on a save.
 
+To keep checkpoints where they are and send only weights through the bucket, set
+`MILES_WEIGHT_SYNC_MOUNT=/weight-sync` on both roles and map that path instead:
+`MILES_GCS_MOUNTS='{"/weight-sync": "gs://bucket/run-id"}'`. The directory needs no mount, only local disk for two
+syncs. Rollout nodes then read weights from the bucket, and a sync no longer waits on a save. Nothing deletes a
+finished run's prefix, so give the bucket a lifecycle rule. Under `modal_app`, set both variables where you launch, and
+put `MILES_GCS_CREDENTIALS` in the run's secret.
+
 Credentials, first match wins:
 
 | Where the node runs | What to set |

@@ -147,6 +147,7 @@ NODE_ENV = {
     DICT_ENV: json.dumps({"name": progress_dict_name(TARGET), "environment": TARGET.modal_environment}),
     **({C.SANDBOX_ENVIRONMENT_ENV: TARGET.modal_environment} if TARGET.modal_environment else {}),
     VOLUMES_ENV: json.dumps(MOUNTED_VOLUMES),
+    **C.storage_env(os.environ),
 }
 image = image.entrypoint([]).env({"PYTHONUNBUFFERED": "1", "NCCL_NVLS_ENABLE": "0", "NCCL_DEBUG": "WARN",
                                   _SHAPE_ENV: json.dumps(SHAPE, sort_keys=True),

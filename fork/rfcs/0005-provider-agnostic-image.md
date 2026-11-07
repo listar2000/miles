@@ -51,7 +51,7 @@ may call is the sandbox provider the recipe names, plus the adapters below, load
 
 1. **Storage:** `commit()` and `refresh()`, no-ops on a shared POSIX path. The Modal adapter makes today's calls in
    today's order, per node, so durability does not change.
-2. **Weights:** through the shared `/results` storage only. The trainer writes a numbered version, commits it and tells
+2. **Weights:** through the shared `/results` storage, or a mount of their own with `MILES_WEIGHT_SYNC_MOUNT` (ext-074). The trainer writes a numbered version, commits it and tells
    each registered rollout node; a node refreshes, reads and applies it, and a late joiner reads the newest before it
    reports ready. The storage interface is the whole abstraction; the image knows one bucket client, GCS (ext-072).
 3. **Membership:** rollout nodes register with rank 0 over HTTP and beat, on upstream's

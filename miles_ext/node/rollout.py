@@ -245,6 +245,6 @@ def run(recipe: dict, run_id: str, *, on_state: Callable[[dict], None] | None = 
     saver = compile_cache.Saver(cache_key, node_storage.for_mount(compile_cache.MOUNT).commit).start()
     env = {**os.environ, **compile_cache.env(), **R.trainer_env(recipe), "PYTHONPATH": runtime.pythonpath()}
     try:
-        return serve(recipe, run_id, env=env, storage=node_storage.for_mount(R.RESULTS), on_state=on_state)
+        return serve(recipe, run_id, env=env, storage=node_storage.for_mount(R.weight_sync_root()), on_state=on_state)
     finally:
         saver.stop()
