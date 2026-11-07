@@ -42,10 +42,10 @@ each field.
 
 Treat the manifest as binding in these places:
 
-- `roles.trainer`: the node count, 8 GPUs per node, and, with more than one node, `placement: one_cluster` and
+- `roles.trainer`: the node count, `gpus_per_node`, and, with more than one node, `placement: one_cluster` and
   `interconnect: rdma`. Never spread one gang across providers or regions. Miles' trainer runs NCCL collectives
   every step, and they assume a fast private link.
-- `roles.rollout`: `gpus_per_engine`, `precision`, and enough GPU memory for the model. The GPU type
+- `roles.rollout`: `gpus_per_node`, `gpus_per_engine`, `precision`, and enough GPU memory for the model. The GPU type
   (`gpu_advice`) is the recipe's choice, not a requirement, so rollout nodes may differ from each other and from the
   trainer.
 - `mounts`, `secrets`, `ports`.
@@ -143,4 +143,6 @@ behaviour, not its code.
 - Nothing has run off Modal yet. [image.md](image.md#what-has-not-run) keeps that list.
 - The manifest does not yet carry the starting rollout count, the elastic flag or the launch order. This page states
   them until it does.
-- Rollout and trainer nodes are 8-GPU nodes today.
+- Node sizes are fixed per recipe: `gpus_per_node` in the manifest is 8 unless the recipe sets a smaller split
+  (ext-068: a one-node trainer on part of a node, `cluster.engine.gpus` for rollout nodes). A pool of differently sized
+  rollout nodes is not supported yet.
