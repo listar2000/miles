@@ -6,6 +6,7 @@ One row per change important enough for its own page (rules: fork/README.md,
 
 | Id | Kind | What | Status | Page |
 | --- | --- | --- | --- | --- |
+| ext-075 | Ext | Pool load reads SGLang's `/v1/loads`, since `/server_info` does not carry request counts | active | [ext-075-pool-load.md](ext-075-pool-load.md) |
 | ext-074 | Ext | Weight sync on a mount of its own, selected by `MILES_WEIGHT_SYNC_MOUNT` | active | [ext-074-weight-sync-mount.md](ext-074-weight-sync-mount.md) |
 | ext-072 | Ext | A mount mirrored to a GCS prefix through the client, selected by `MILES_GCS_MOUNTS` | active | [ext-072-gcs-mirror.md](ext-072-gcs-mirror.md) |
 | ext-071 | Ext | A node keeps its log off storage that is not live, and node jobs commit and refresh what they use | active | [ext-071-node-log-local.md](ext-071-node-log-local.md) |

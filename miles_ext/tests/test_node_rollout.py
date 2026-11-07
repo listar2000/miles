@@ -1,6 +1,7 @@
 """A rollout node and the trainer's registry, end to end on one host with fake engines (no GPU, no Modal)."""
 
 import contextlib
+import http.server
 import json
 import socket
 import sys
@@ -275,3 +276,27 @@ def test_the_relay_follows_the_registry(monkeypatch):
     assert relay.desired(
         [{"url": "http://a", "token": "t", "slots": [5, 6], "engine_ports": [1, 2], "agent_slot": 7, "agent_port": 3}]
     ) == {5: ("http://a/t", 1), 6: ("http://a/t", 2), 7: ("http://a/t", 3)}
+
+
+def test_load_sums_each_engines_dp_ranks_and_names_one_that_does_not_answer():
+    class Loads(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            assert self.path == "/v1/loads?include=core"
+            ranks = [{"num_running_reqs": 13, "num_waiting_reqs": 2}, {"num_running_reqs": 1, "num_waiting_reqs": 0}]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps({"loads": ranks}).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Loads)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    up, down = server.server_address[1], _free_port()
+    try:
+        assert rollout._load([up, down]) == [
+            {"port": up, "running": 14, "waiting": 2},
+            {"port": down, "running": None, "waiting": None},
+        ]
+    finally:
+        server.shutdown()

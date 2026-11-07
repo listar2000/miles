@@ -189,20 +189,20 @@ def serve(recipe: dict, run_id: str, *, env: dict, storage, on_state: Callable[[
 
 
 def _load(ports: list[int]) -> list[dict]:
-    """Each engine's running and waiting requests, as SGLang reports them, for a caller's scaling decision."""
+    """Each engine's running and waiting requests, from SGLang's /v1/loads, for a caller's scaling decision."""
     out = []
     for port in ports:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/server_info", timeout=5) as r:
-                states = json.loads(r.read()).get("internal_states") or [{}]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/loads?include=core", timeout=5) as r:
+                ranks = json.loads(r.read())["loads"]
             out.append(
                 {
                     "port": port,
-                    "running": states[0].get("num_running_reqs"),
-                    "waiting": states[0].get("num_waiting_reqs"),
+                    "running": sum(rank["num_running_reqs"] for rank in ranks),
+                    "waiting": sum(rank["num_waiting_reqs"] for rank in ranks),
                 }
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError):
             out.append({"port": port, "running": None, "waiting": None})
     return out
 
