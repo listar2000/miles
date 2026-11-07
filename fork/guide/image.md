@@ -4,7 +4,8 @@ For the people who provide GPUs and launch training from outside this repository
 the node commands. You start containers; you never need a checkout of this repo. The contract is
 [RFC 0005](../rfcs/0005-provider-agnostic-image.md), and `miles_ext/node/contract.py` owns its names.
 
-**State:** early. Modal is the only place these roles have run, and it calls them in process. See
+**State:** early. Modal is the only place these roles have run: `modal_app` calls them in process, and one outside launcher ran them as
+subprocesses. See
 [What has not run](#what-has-not-run). Please report what breaks as a GitHub issue on listar2000/miles, with the
 command, the node's log and `/results/<run_id>/exit.json`.
 
@@ -37,7 +38,9 @@ Recipes that exist are in `miles_ext/recipes/configs/`, and `fork/guide/recipes.
 `/models`, `/results` and the others are plain mounts: NFS, a provider volume, or a bucket through a CSI driver. To
 use GCS with no mount, see "GCS" below. If your
 mount needs a flush after writing, write an adapter with `live`, `commit`, `refresh` and `remove`
-(`miles_ext/node/storage.py`) and set `MILES_STORAGE` to its dotted path. Weights can be fetched with
+(`miles_ext/node/storage.py`) and set `MILES_STORAGE` to its dotted path. With `MILES_STORAGE=modal-volume`, name every
+volume you mount in `MILES_MODAL_VOLUMES`, `/models` included: a node fails on a mount it asks for and cannot find. That
+adapter is not live, so also set `MILES_STATE` to `http` or `modal-dict`. Weights can be fetched with
 `python -m miles_ext.node prepare-weights --hf-repo R --revision C --path <inputs.model_dir>`, and likewise for
 `inputs.draft_checkpoint` when the manifest names one.
 
@@ -61,6 +64,7 @@ Credentials, first match wins:
 | --- | --- |
 | Anywhere, secret as an env var (Modal) | `MILES_GCS_CREDENTIALS`: the JSON of a service account key |
 | Anywhere, secret as a file | `GOOGLE_APPLICATION_CREDENTIALS`: the path to that key |
+| Anywhere, no key (the org may forbid keys) | `GOOGLE_APPLICATION_CREDENTIALS`: the path to an `external_account` config for workload identity federation, and `GOOGLE_CLOUD_PROJECT`, or the client asks Resource Manager for it |
 | GKE or GCE | Nothing: Workload Identity or the VM's service account |
 
 The identity needs `roles/storage.objectUser` on the bucket, which covers uploads, downloads, listing, deletes and
@@ -120,10 +124,13 @@ and markers but Megatron's checks fail there), `prepare-weights`, `convert-fsdp`
 ## What has not run
 
 - Any of these commands on a GPU node outside Modal, and any provider but Modal.
-- Split on real engines through the rollout role, including a trainer relaunch (over real tunnels with fake engines only).
-- Elastic join and leave on real engines, and the load numbers in `pool%3A<run_id>.json`.
-- Storage other than Modal volumes on GPUs: `posix` and `file` state are unit-tested only.
+- A trainer relaunch through the node commands on real engines (over real tunnels with fake engines only).
+- Rollout nodes joining or leaving on real engines during a run.
+- Checkpoints on GCS, and `posix` and `file` state on GPUs: unit-tested only.
 
 What has: one-node and two-node save and resume through `modal_app`, which calls the same trainer role. In the image on a
 CPU container with Modal's env stripped, `spec` and `manifest` ran, and `trainer` went through its inputs, Ray and an
-exit record until Miles needed a GPU.
+exit record until Miles needed a GPU. A 100-step LoRA run trained from a launcher outside this repository,
+with the node commands as subprocesses on Modal: two 2-GPU rollout nodes and a 4-GPU trainer, weights through GCS with
+workload identity federation, checkpoints on a Modal volume. A shorter run from the same launcher pushed its state with
+`MILES_STATE=http`.

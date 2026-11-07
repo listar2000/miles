@@ -7,7 +7,7 @@ cases that do, and where the code goes.
 ## Where your code runs
 
 The trainer, the rollout workers and the agent functions run inside the fork's
-image. Code reaches the image in one way only: as a commit of this repo
+image. Under `modal_app`, code reaches the image in one way only: as a commit of this repo
 (`MILES_FORK_COMMIT`, which fetches the commit from `stack.FORK_REPO`). So:
 
 - **Data and task sets** stay in your own project. They are inputs, not code.
@@ -19,7 +19,8 @@ image. Code reaches the image in one way only: as a commit of this repo
 - **Code for one experiment** (its data filters, configs, one-off scripts and
   write-up) lives in `experiments/<folder>/`, not in `miles_ext/`; see
   [experiments/README.md](../../experiments/README.md).
-- Loading a package from outside this repo is not supported yet. If you need it,
+- `modal_app` cannot load a package from outside this repo yet. A launcher of your own
+  can add a grader's module to the image on `PYTHONPATH`, which the trainer keeps. If you need it,
   open an issue ([help.md](help.md)).
 
 ## By kind

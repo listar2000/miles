@@ -127,8 +127,12 @@ key in run state, and decide when to scale from it. The image never asks for nod
 Nodes write run state (heartbeat, exit, pool load, and the lease you set) through `MILES_STATE`. With `file`, it sits
 under `/results/<run_id>/state/`. With `http`, nodes push it to your endpoint with a token, as W&B does.
 Each node's log goes to `/results/<run_id>/logs/`. Metrics go to W&B with the key you inject. The run monitor is
-outside this repository, as [`miles-viewer`](https://github.com/listar2000/miles-viewer). Cost is yours: only the
-launcher knows what it rented.
+outside this repository, as [`miles-viewer`](https://github.com/listar2000/miles-viewer). It shows run state from pushes
+or live storage, and per-step training numbers from a launch log named by the run's manifest (`log_path`), so give it a
+file that follows the nodes' output from the start. Cost is yours: only the launcher knows what it rented.
+
+Whatever watches the nodes must outlive them. On Modal, a plain function can be preempted and restarted with the same
+input, so a driver function there needs `nonpreemptible=True`, and must not tear the run down when it is interrupted.
 
 ## The reference launcher
 
