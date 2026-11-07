@@ -20,6 +20,7 @@ algorithms, harnesses, rewards or data:
 | [running.md](fork/guide/running.md) | logs, outputs, W&B, stop and resume, first checks on failure |
 | [limits.md](fork/guide/limits.md) | what is known not to work yet |
 | [image.md](fork/guide/image.md) | running the image without Modal: the node commands and the caller's side |
+| [launcher.md](fork/guide/launcher.md) | building a launcher: what the image does, what the launcher does, and a run's life |
 | [help.md](fork/guide/help.md) | the responsibility boundary, issues and PRs |
 
 Agents: [.claude/skills/miles-use](.claude/skills/miles-use/SKILL.md).
