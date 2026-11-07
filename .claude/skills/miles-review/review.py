@@ -198,14 +198,15 @@ def prepare(args, work):
                 "-R",
                 REPO_SLUG,
                 "--json",
-                "number,title,body,headRefOid,headRefName,isDraft,url",
+                "number,title,body,headRefOid,headRefName,baseRefName,isDraft,url",
             ]
         ).stdout
     )
     if args.body:
         meta["body"] = args.body.read_text()
     with repo_lock(args.repo):
-        sh(["git", "fetch", "-q", "--tags", "origin", "main"], cwd=args.repo)
+        target = meta["baseRefName"]  # the branch the PR merges into; a PR is diffed against it, not always main
+        sh(["git", "fetch", "-q", "--tags", "origin", "main", target], cwd=args.repo)
         if args.head:
             sh(["git", "update-ref", f"refs/review/pr{args.pr}", args.head], cwd=args.repo)
         else:
@@ -222,12 +223,13 @@ def prepare(args, work):
                 "-q",
                 str(args.repo),
                 "refs/remotes/origin/main:refs/remotes/origin/main",
+                f"refs/remotes/origin/{target}:refs/remotes/origin/{target}",
                 f"refs/review/pr{args.pr}:refs/review/pr{args.pr}",
             ],
             cwd=tree,
         )
         sh(["git", "checkout", "-q", head], cwd=tree)
-        base_ref = "origin/main"
+        base_ref = f"origin/{target}"
         if stacked := re.match(r"\s*Stacked on #(\d+)", meta["body"] or ""):
             n = stacked.group(1)
             sh(["git", "fetch", "-q", "origin", f"+pull/{n}/head:refs/review/pr{n}"], cwd=args.repo)
