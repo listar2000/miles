@@ -145,4 +145,4 @@ behaviour, not its code.
   them until it does.
 - Node sizes are fixed per recipe: `gpus_per_node` in the manifest is 8 unless the recipe sets a smaller split
   (ext-068: a one-node trainer on part of a node, `cluster.engine.gpus` for rollout nodes). A pool of differently sized
-  rollout nodes is not supported yet.
+  rollout nodes is untested: the manifest gives one size for all of them.
