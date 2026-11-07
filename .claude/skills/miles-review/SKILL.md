@@ -334,8 +334,8 @@ modal and pyyaml, and a full (not partial or shallow) clone.
 2. It starts the agent read-only, with no shell, and hands it everything in
    one prompt: this file, the rules it points to, the bundle, and every changed
    file in full (only the diff when that would be too long). The agent judges;
-   it runs nothing. A PR whose body starts "Stacked on #N." is diffed against
-   #N's head.
+   it runs nothing. A PR is diffed against the branch it merges into; one whose
+   body starts "Stacked on #N." is diffed against #N's head.
 3. It checks the answer against the rules below; on a break it reruns the agent
    once with the breaks listed, and a second break is printed at the top of the
    report.
