@@ -100,7 +100,7 @@ def test_split_engine_lines_tell_engines_apart(monkeypatch, capsys):
 
 def test_an_elastic_recipe_uses_the_provider_and_refuses_gpu_delta(monkeypatch):
     monkeypatch.setenv("MILES_DATA", "/data")
-    recipe = R.load(CONFIGS / "qwen35-9b-split-elastic.yaml")
+    recipe = R.load(CONFIGS / "qwen3-8b-split-elastic.yaml")
     argv = R.miles_args(recipe, "run1", resume=False)
     assert argv[argv.index("--custom-inference-engine-provider-path") + 1] == R.SPLIT_ENGINE_PROVIDER
     assert "--rollout-external-engine-addrs" not in argv

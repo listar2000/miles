@@ -1,0 +1,49 @@
+# LoRA RL on hard math: Qwen3-8B, two 2-GPU rollout nodes and a 4-GPU trainer. Elastic is what allows more than one
+# rollout node; nothing here adds or removes one during a run. Prompts: rows of zhuzilin/dapo-math-17k as
+# {"prompt": <its prompt>, "metadata": {"task": "miles_ext.tasks.dapo_math.grade", "label": <its label>}}, shuffled.
+name: qwen3-8b-split-elastic
+model:
+  preset: qwen3-8b
+  backend: megatron
+cluster:
+  gpu: H200
+  nodes: 1
+  train_gpus: 4
+  cpu: 32
+  memory_gib: 192
+  placement: split
+  timeout_hours: 4
+  engine:
+    gpus: 2
+    cpu: 16
+    memory_gib: 96
+    elastic: true
+    idle_minutes: 10
+    timeout_hours: 4
+parallel:
+  tp: 2
+rollout:
+  gpus_per_engine: 1
+lora:
+  rank: 16
+  alpha: 32
+taskset:
+  prompts: $MILES_DATA/prompts/dapo-math-17k.jsonl
+  harness: single-turn
+algorithm:
+  mode: fully_async
+  num_rollout: 100
+  rollout_batch_size: 16
+  n_samples: 8
+  max_response_len: 4096
+  max_seq_len: 8192
+  lr: 1.0e-5
+checkpoint:
+  save_interval: 20
+  keep: 1
+  save_optimizer: true
+tracking:
+  wandb_project: miles-e2e
+  wandb_entity: mobiuslab
+extra_args:
+  - --check-lora-weight-equal

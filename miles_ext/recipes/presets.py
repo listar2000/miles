@@ -87,7 +87,9 @@ PRESETS: dict[str, Preset] = {
         reasoning_parser="qwen3",
         chat_template_kwargs={"enable_thinking": False},
         megatron_model_type="qwen3-8B",
-        shapes=(("H200", 1, "fsdp"),),
+        # Megatron pads to a multiple of 128 x TP: at TP 2, 151936 becomes 152064, and the HF embedding cannot scatter into it
+        megatron_args="--make-vocab-size-divisible-by 1",
+        shapes=(("H200", 1, "fsdp"), ("H200", 1, "megatron")),
     ),
     # SFT only so far (miles_ext/sft): Megatron on one H200:8 node; thinking always on (the 2507 template)
     "qwen3-30b-a3b-thinking-2507": Preset(

@@ -66,7 +66,7 @@ def test_the_manifest_names_a_draft_checkpoint_only_when_the_run_uses_one(monkey
     assert draft["hf_repo"] == "incoai/GLM-5.3-Flash-DFlash2" and draft["path"].startswith("/models/")
     recipe["rollout"]["speculative"] = False
     assert contract.manifest(recipe, "r1")["inputs"]["draft_checkpoint"] is None
-    single = _recipe("qwen35-9b-split-elastic", monkeypatch)
+    single = _recipe("qwen3-8b-split-elastic", monkeypatch)
     assert contract.manifest(single, "r1")["inputs"]["draft_checkpoint"] is None
 
 
@@ -105,9 +105,9 @@ def test_a_node_names_what_its_caller_forgot(tmp_path, monkeypatch):
 def test_the_spec_command_gives_a_spec_the_roles_read(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("MILES_DATA", str(tmp_path))
     (tmp_path / "prompts").mkdir()
-    (tmp_path / "prompts" / "stak32.jsonl").write_text("")
+    (tmp_path / "prompts" / "dapo-math-17k.jsonl").write_text("")
     node_main.main(
-        ["spec", "--recipe", str(CONFIGS / "qwen35-9b-split-elastic.yaml"), "--run-id", "r1", "--num-rollout", "2"]
+        ["spec", "--recipe", str(CONFIGS / "qwen3-8b-split-elastic.yaml"), "--run-id", "r1", "--num-rollout", "2"]
     )
     path = tmp_path / "spec.json"
     path.write_text(capsys.readouterr().out)
@@ -116,9 +116,9 @@ def test_the_spec_command_gives_a_spec_the_roles_read(tmp_path, monkeypatch, cap
 
 
 def test_the_manifest_says_where_inputs_go(monkeypatch):
-    inputs = contract.manifest(_recipe("qwen35-9b-split-elastic", monkeypatch), "r1")["inputs"]
+    inputs = contract.manifest(_recipe("qwen3-8b-split-elastic", monkeypatch), "r1")["inputs"]
     assert inputs["prompts"] == "/inputs/prompts.jsonl" and inputs["tasks"] is None
-    assert inputs["model_dir"] == "/models/Qwen3.5-9B" and inputs["fallback"] == "/results/r1/inputs"
+    assert inputs["model_dir"] == "/models/Qwen3-8B" and inputs["fallback"] == "/results/r1/inputs"
     swegym = contract.manifest(_recipe("qwen35-9b-swegym8-sail", monkeypatch), "r1")["inputs"]
     assert swegym["tasks"] == "/inputs/tasks"
     volume = contract.manifest(_recipe("dsv41-flash-lora-split", monkeypatch), "r1")["inputs"]
@@ -130,7 +130,7 @@ def test_a_modal_sandbox_off_modal_needs_a_token(monkeypatch):
     assert recipe["sandbox"]["provider"] == "modal"
     assert "MODAL_TOKEN_ID" in contract.manifest(recipe, "r1")["secrets"]
     assert "MODAL_TOKEN_ID" not in contract.required_secrets(recipe)
-    single_turn = _recipe("qwen35-9b-split-elastic", monkeypatch)
+    single_turn = _recipe("qwen3-8b-split-elastic", monkeypatch)
     assert "MODAL_TOKEN_ID" not in contract.manifest(single_turn, "r1")["secrets"]
 
 
